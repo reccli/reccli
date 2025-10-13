@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>reccli - Start Your Free Trial</title>
+    <script src="https://js.stripe.com/v3/"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
+        }
+        
+        .checkout-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 480px;
+            width: 90%;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .rec-dot {
+            width: 12px;
+            height: 12px;
+            background: #ff4757;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .trial-badge {
+            background: #f0f9ff;
+            color: #0369a1;
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: inline-block;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .price {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .price-period {
+            color: #666;
+            margin-bottom: 20px;
+        }
+        
+        .features {
+            margin: 30px 0;
+        }
+        
+        .feature {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        
+        .check {
+            width: 24px;
+            height: 24px;
+            background: #10b981;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        
+        .check::after {
+            content: "✓";
+            color: white;
+            font-weight: bold;
+        }
+        
+        #checkout-form {
+            margin-top: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        #card-element {
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            background: white;
+        }
+        
+        #card-errors {
+            color: #ef4444;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .submit-button {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .submit-button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .submit-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .terms {
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            margin-top: 20px;
+            line-height: 1.6;
+        }
+        
+        .terms a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        
+        .guarantee {
+            background: #fef3c7;
+            border: 1px solid #fbbf24;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+            font-size: 14px;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .success {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+        
+        .success-icon {
+            font-size: 48px;
+            color: #10b981;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="checkout-container">
+        <div class="header">
+            <div class="logo">
+                <div class="rec-dot"></div>
+                reccli
+            </div>
+            <p>Never lose terminal context again</p>
+        </div>
+        
+        <div class="content">
+            <div class="trial-badge">7-DAY FREE TRIAL</div>
+            
+            <h1>Start Recording Your CLI Sessions</h1>
+            
+            <div class="price">$5</div>
+            <div class="price-period">per month after trial</div>
+            
+            <div class="features">
+                <div class="feature">
+                    <div class="check"></div>
+                    <span>Unlimited recordings</span>
+                </div>
+                <div class="feature">
+                    <div class="check"></div>
+                    <span>One-click start/stop button</span>
+                </div>
+                <div class="feature">
+                    <div class="check"></div>
+                    <span>Perfect playback</span>
+                </div>
+                <div class="feature">
+                    <div class="check"></div>
+                    <span>Share recordings (coming soon)</span>
+                </div>
+                <div class="feature">
+                    <div class="check"></div>
+                    <span>Cloud backup (coming soon)</span>
+                </div>
+            </div>
+            
+            <div class="guarantee">
+                🛡️ <strong>Cancel anytime</strong> - No questions asked. Cancel in one click from your dashboard.
+            </div>
+            
+            <form id="checkout-form">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required placeholder="dev@example.com">
+                </div>
+                
+                <div class="form-group">
+                    <label for="card-element">Credit or debit card</label>
+                    <div id="card-element"></div>
+                    <div id="card-errors" role="alert"></div>
+                </div>
+                
+                <button type="submit" class="submit-button">
+                    Start Free Trial
+                </button>
+                
+                <div class="terms">
+                    Your card will be charged $5/month starting in 7 days.<br>
+                    Cancel anytime before then to avoid charges.<br>
+                    By continuing, you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
+                </div>
+            </form>
+            
+            <div class="loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 20px;">Processing...</p>
+            </div>
+            
+            <div class="success">
+                <div class="success-icon">✅</div>
+                <h2>Welcome to reccli!</h2>
+                <p style="margin-top: 10px;">Check your email for your license key and installation instructions.</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Initialize Stripe
+        const stripe = Stripe('pk_live_YOUR_PUBLISHABLE_KEY'); // Replace with your key
+        const elements = stripe.elements();
+        
+        // Create card element
+        const style = {
+            base: {
+                fontSize: '16px',
+                color: '#32325d',
+                '::placeholder': {
+                    color: '#aab7c4'
+                }
+            }
+        };
+        
+        const cardElement = elements.create('card', {style: style});
+        cardElement.mount('#card-element');
+        
+        // Handle card errors
+        cardElement.on('change', function(event) {
+            const displayError = document.getElementById('card-errors');
+            if (event.error) {
+                displayError.textContent = event.error.message;
+            } else {
+                displayError.textContent = '';
+            }
+        });
+        
+        // Handle form submission
+        const form = document.getElementById('checkout-form');
+        const submitButton = form.querySelector('.submit-button');
+        const loadingDiv = document.querySelector('.loading');
+        const successDiv = document.querySelector('.success');
+        
+        form.addEventListener('submit', async function(event) {
+            event.preventDefault();
+            
+            // Show loading state
+            submitButton.disabled = true;
+            form.style.display = 'none';
+            loadingDiv.style.display = 'block';
+            
+            // Get email
+            const email = document.getElementById('email').value;
+            
+            // Create payment method
+            const {error, paymentMethod} = await stripe.createPaymentMethod({
+                type: 'card',
+                card: cardElement,
+                billing_details: {
+                    email: email
+                }
+            });
+            
+            if (error) {
+                // Show error
+                document.getElementById('card-errors').textContent = error.message;
+                submitButton.disabled = false;
+                form.style.display = 'block';
+                loadingDiv.style.display = 'none';
+            } else {
+                // Send to backend
+                try {
+                    const response = await fetch('/api/create-subscription', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            email: email,
+                            payment_method: paymentMethod.id,
+                            device_id: getDeviceId()
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        // Show success
+                        loadingDiv.style.display = 'none';
+                        successDiv.style.display = 'block';
+                        
+                        // Store license locally
+                        localStorage.setItem('reccli_license', result.license_key);
+                        
+                        // Send event to parent if in iframe
+                        if (window.parent !== window) {
+                            window.parent.postMessage({
+                                type: 'checkout_complete',
+                                license_key: result.license_key
+                            }, '*');
+                        }
+                    } else {
+                        throw new Error(result.error || 'Subscription creation failed');
+                    }
+                } catch (err) {
+                    // Show error
+                    document.getElementById('card-errors').textContent = err.message;
+                    submitButton.disabled = false;
+                    form.style.display = 'block';
+                    loadingDiv.style.display = 'none';
+                }
+            }
+        });
+        
+        // Generate device ID
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('reccli_device_id');
+            if (!deviceId) {
+                deviceId = 'dev_' + Math.random().toString(36).substring(2, 15);
+                localStorage.setItem('reccli_device_id', deviceId);
+            }
+            return deviceId;
+        }
+    </script>
+</body>
+</html>

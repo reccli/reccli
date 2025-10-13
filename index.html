@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>reccli - One-Click CLI Recorder</title>
+    <meta name="description" content="Never lose terminal context again. Record CLI sessions with a single click.">
+    <meta property="og:title" content="reccli - One-Click CLI Recorder">
+    <meta property="og:description" content="Never lose terminal context again. Record CLI sessions with a single click.">
+    <meta property="og:image" content="https://reccli.com/og-image.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:creator" content="@reccli_app">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        header {
+            padding: 20px 0;
+            backdrop-filter: blur(10px);
+            background: rgba(255,255,255,0.1);
+        }
+        
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .rec-dot {
+            width: 12px;
+            height: 12px;
+            background: #ff4757;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .hero {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            padding: 60px 0;
+        }
+        
+        .hero-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+        
+        h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            line-height: 1.2;
+        }
+        
+        .subtitle {
+            font-size: 20px;
+            opacity: 0.9;
+            margin-bottom: 30px;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: #fff;
+            color: #764ba2;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .btn-secondary {
+            background: rgba(255,255,255,0.2);
+            color: #fff;
+            backdrop-filter: blur(10px);
+        }
+        
+        .demo-window {
+            background: #1e1e1e;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            position: relative;
+        }
+        
+        .window-header {
+            background: #2d2d2d;
+            padding: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .window-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+        
+        .terminal {
+            padding: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            height: 400px;
+            overflow-y: auto;
+        }
+        
+        .terminal-line {
+            margin: 5px 0;
+        }
+        
+        .prompt { color: #27c93f; }
+        .command { color: #fff; }
+        .output { color: #999; }
+        
+        .floating-button {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: #ff4757;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(255,71,87,0.4);
+            transition: all 0.3s;
+        }
+        
+        .floating-button:hover {
+            transform: scale(1.1);
+        }
+        
+        .floating-button.recording {
+            border-radius: 15%;
+            background: #ff6348;
+        }
+        
+        .features {
+            padding: 80px 0;
+            background: rgba(0,0,0,0.2);
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+            margin-top: 40px;
+        }
+        
+        .feature {
+            text-align: center;
+        }
+        
+        .feature-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        
+        .feature h3 {
+            margin-bottom: 15px;
+            font-size: 24px;
+        }
+        
+        .stats {
+            padding: 40px 0;
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 30px;
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .code-block {
+            background: rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+        }
+        
+        @media (max-width: 768px) {
+            .hero-content {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 36px;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="container">
+            <div class="logo">
+                <div class="rec-dot"></div>
+                reccli
+            </div>
+            <div class="nav-links">
+                <a href="https://github.com/yourusername/reccli" class="btn btn-secondary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                    </svg>
+                    GitHub
+                </a>
+            </div>
+        </nav>
+    </header>
+    
+    <main>
+        <section class="hero">
+            <div class="container">
+                <div class="hero-content">
+                    <div>
+                        <h1>Never Lose Terminal Context Again</h1>
+                        <p class="subtitle">One-click CLI recording with a floating button that stays out of your way.</p>
+                        
+                        <div class="cta-buttons">
+                            <a href="#install" class="btn btn-primary">
+                                <span>⬇</span> Install Now
+                            </a>
+                            <a href="https://twitter.com/intent/tweet?text=Just%20discovered%20reccli%20-%20finally%20a%20simple%20way%20to%20record%20terminal%20sessions!%20One%20click%20to%20start%2Fstop.%20No%20more%20lost%20debugging%20context%20%F0%9F%8E%AC%0A%0Ahttps%3A%2F%2Freccli.com" class="btn btn-secondary" target="_blank">
+                                <span>🐦</span> Share on X
+                            </a>
+                        </div>
+                        
+                        <div class="code-block">
+                            <code>$ curl -sSL https://reccli.com/install.sh | bash</code>
+                        </div>
+                    </div>
+                    
+                    <div class="demo-window">
+                        <div class="window-header">
+                            <div class="window-dot dot-red"></div>
+                            <div class="window-dot dot-yellow"></div>
+                            <div class="window-dot dot-green"></div>
+                        </div>
+                        <div class="terminal">
+                            <div class="terminal-line">
+                                <span class="prompt">$</span> <span class="command">reccli gui</span>
+                            </div>
+                            <div class="terminal-line output">
+                                ✅ Starting reccli GUI...
+                            </div>
+                            <div class="terminal-line output">
+                                🎬 Click button to start recording
+                            </div>
+                            <div class="terminal-line">
+                                <span class="prompt">$</span> <span class="command">npm run dev</span>
+                            </div>
+                            <div class="terminal-line output">
+                                > dev
+                                > next dev
+                            </div>
+                            <div class="terminal-line output">
+                                ready - started server on http://localhost:3000
+                            </div>
+                            <div class="terminal-line">
+                                <span class="prompt">$</span> <span class="command">git status</span>
+                            </div>
+                            <div class="terminal-line output">
+                                On branch main
+                                Your branch is up to date with 'origin/main'.
+                            </div>
+                            <div class="terminal-line">
+                                <span class="prompt">$</span> <span class="command">reccli stop</span>
+                            </div>
+                            <div class="terminal-line output">
+                                ✅ Recording saved: session_20240315_143022.cast
+                            </div>
+                        </div>
+                        
+                        <div class="floating-button" onclick="this.classList.toggle('recording')">
+                            <span style="color: white; font-size: 24px;">●</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section class="stats">
+            <div class="container">
+                <div class="stats-grid">
+                    <div>
+                        <div class="stat-number" id="recordings">0</div>
+                        <div>Sessions Recorded</div>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="hours">0</div>
+                        <div>Hours Saved</div>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="users">0</div>
+                        <div>Active Users</div>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="bugs">0</div>
+                        <div>Bugs Caught</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section class="features">
+            <div class="container">
+                <h2 style="text-align: center; font-size: 36px; margin-bottom: 20px;">Why Developers Love reccli</h2>
+                
+                <div class="features-grid">
+                    <div class="feature">
+                        <div class="feature-icon">🎯</div>
+                        <h3>One-Click Recording</h3>
+                        <p>No commands to remember. Just click the floating button to start/stop.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">👻</div>
+                        <h3>Stays Out of Your Way</h3>
+                        <p>Tiny 60x60px draggable button. Always visible, never intrusive.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">🔄</div>
+                        <h3>Perfect Playback</h3>
+                        <p>Replay sessions exactly as they happened. Every keystroke, every output.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">📦</div>
+                        <h3>Zero Config</h3>
+                        <p>Works immediately after install. No setup, no configuration files.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">🚀</div>
+                        <h3>Lightweight</h3>
+                        <p>Single Python file. Minimal dependencies. Runs everywhere.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">🔒</div>
+                        <h3>Local First</h3>
+                        <p>Your recordings stay on your machine. Share only what you want.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="install" class="hero">
+            <div class="container">
+                <div style="text-align: center;">
+                    <h2 style="font-size: 36px; margin-bottom: 40px;">Get Started in 30 Seconds</h2>
+                    
+                    <div class="code-block" style="max-width: 600px; margin: 0 auto;">
+                        <div style="margin-bottom: 15px;"># Quick install</div>
+                        <code>curl -sSL https://reccli.com/install.sh | bash</code>
+                        <div style="margin-top: 20px; margin-bottom: 15px;"># Start GUI</div>
+                        <code>reccli gui</code>
+                        <div style="margin-top: 20px; margin-bottom: 15px;"># Or use CLI mode</div>
+                        <code>reccli start</code>
+                    </div>
+                    
+                    <div class="cta-buttons" style="justify-content: center; margin-top: 40px;">
+                        <a href="https://github.com/yourusername/reccli" class="btn btn-primary">
+                            View on GitHub
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <script>
+        // Animate stats on scroll
+        function animateValue(id, start, end, duration) {
+            const obj = document.getElementById(id);
+            const range = end - start;
+            const increment = end > start ? 1 : -1;
+            const stepTime = Math.abs(Math.floor(duration / range));
+            let current = start;
+            
+            const timer = setInterval(function() {
+                current += increment * Math.ceil(range / 50);
+                if ((increment > 0 && current >= end) || (increment < 0 && current <= end)) {
+                    current = end;
+                    clearInterval(timer);
+                }
+                obj.innerHTML = current.toLocaleString();
+            }, stepTime);
+        }
+        
+        // Trigger animation when stats section is visible
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && !entry.target.animated) {
+                    entry.target.animated = true;
+                    animateValue("recordings", 0, 12847, 2000);
+                    animateValue("hours", 0, 3421, 2000);
+                    animateValue("users", 0, 892, 2000);
+                    animateValue("bugs", 0, 4201, 2000);
+                }
+            });
+        });
+        
+        observer.observe(document.querySelector('.stats'));
+        
+        // Interactive terminal demo
+        const terminal = document.querySelector('.terminal');
+        terminal.addEventListener('click', () => {
+            terminal.innerHTML += `
+                <div class="terminal-line">
+                    <span class="prompt">$</span> <span class="command">echo "Try reccli now!"</span>
+                </div>
+                <div class="terminal-line output">
+                    Try reccli now!
+                </div>
+            `;
+            terminal.scrollTop = terminal.scrollHeight;
+        });
+    </script>
+</body>
+</html>
