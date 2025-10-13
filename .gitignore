@@ -37,3 +37,15 @@ Thumbs.db
 # Env files
 .env
 .env.local
+
+# Next.js
+web/.next/
+web/out/
+web/node_modules/
+web/build/
+web/.vercel/
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
