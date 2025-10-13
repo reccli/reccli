@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>reccli - Never Lose Terminal Context Again</title>
-    <meta name="description" content="One-click terminal recording. Because the best debugging session is the one you actually recorded.">
-    <meta property="og:title" content="reccli - One-Click Terminal Recording">
-    <meta property="og:description" content="Stop losing debugging gold. A floating record button for your terminal. $5/mo.">
+    <title>reccli - One-Click CLI Recorder</title>
+    <meta name="description" content="Never lose terminal context again. Record CLI sessions with a single click.">
+    <meta property="og:title" content="reccli - One-Click CLI Recorder">
+    <meta property="og:description" content="Never lose terminal context again. Record CLI sessions with a single click.">
     <meta property="og:image" content="https://reccli.com/og-image.png">
-    <meta property="og:url" content="https://reccli.com">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:creator" content="@reccli_app">
 
@@ -24,20 +23,16 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: #fff;
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: 0 40px;
         }
 
         header {
-            padding: 20px 0;
-            backdrop-filter: blur(10px);
-            background: rgba(255,255,255,0.1);
+            padding: 30px 0;
         }
 
         nav {
@@ -47,164 +42,203 @@
         }
 
         .logo {
-            font-size: 24px;
-            font-weight: bold;
+            font-size: 32px;
+            font-weight: 700;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
+            letter-spacing: -0.5px;
         }
 
         .rec-dot {
-            width: 12px;
-            height: 12px;
-            background: #ff4757;
+            width: 16px;
+            height: 16px;
+            background: #ff5757;
             border-radius: 50%;
-            animation: pulse 2s infinite;
         }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+        .btn-github {
+            background: rgba(255,255,255,0.2);
+            backdrop-filter: blur(10px);
+            padding: 12px 24px;
+            border-radius: 12px;
+            text-decoration: none;
+            color: #fff;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.3s;
+            font-size: 16px;
+        }
+
+        .btn-github:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
         }
 
         .hero {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            padding: 60px 0;
+            padding: 60px 0 100px;
         }
 
         .hero-content {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 60px;
+            gap: 80px;
             align-items: center;
         }
 
-        h1 {
-            font-size: 48px;
-            margin-bottom: 20px;
-            line-height: 1.2;
+        .hero-left h1 {
+            font-size: 72px;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 30px;
+            letter-spacing: -2px;
         }
 
-        .subtitle {
-            font-size: 20px;
-            opacity: 0.9;
-            margin-bottom: 30px;
+        .hero-subtitle {
+            font-size: 24px;
+            line-height: 1.5;
+            opacity: 0.95;
+            margin-bottom: 40px;
+            font-weight: 400;
         }
 
         .cta-buttons {
             display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 40px;
         }
 
         .btn {
-            padding: 15px 30px;
-            border-radius: 8px;
+            padding: 16px 32px;
+            border-radius: 12px;
             text-decoration: none;
             font-weight: 600;
+            font-size: 18px;
             transition: all 0.3s;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
         }
 
         .btn-primary {
-            background: #fff;
-            color: #764ba2;
+            background: rgba(255,255,255,0.95);
+            color: #6366f1;
         }
 
         .btn-primary:hover {
+            background: #fff;
             transform: translateY(-2px);
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }
 
         .btn-secondary {
-            background: rgba(255,255,255,0.2);
-            color: #fff;
+            background: rgba(255,255,255,0.15);
             backdrop-filter: blur(10px);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
         }
 
-        .demo-window {
-            background: #1e1e1e;
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.25);
+        }
+
+        .code-block {
+            background: rgba(0,0,0,0.3);
+            backdrop-filter: blur(10px);
+            padding: 20px 24px;
             border-radius: 12px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 16px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .terminal-window {
+            background: #1a1a1a;
+            border-radius: 16px;
             overflow: hidden;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 30px 80px rgba(0,0,0,0.4);
             position: relative;
         }
 
         .window-header {
             background: #2d2d2d;
-            padding: 12px;
+            padding: 16px;
             display: flex;
-            gap: 8px;
+            gap: 10px;
             align-items: center;
         }
 
         .window-dot {
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
         }
 
-        .dot-red { background: #ff5f56; }
-        .dot-yellow { background: #ffbd2e; }
-        .dot-green { background: #27c93f; }
+        .dot-red { background: #ff5f57; }
+        .dot-yellow { background: #febc2e; }
+        .dot-green { background: #28c840; }
 
         .terminal {
-            padding: 20px;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            line-height: 1.6;
-            height: 400px;
-            overflow-y: auto;
+            padding: 24px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 15px;
+            line-height: 1.8;
+            min-height: 500px;
+            color: #d4d4d4;
         }
 
         .terminal-line {
-            margin: 5px 0;
+            margin: 8px 0;
         }
 
-        .prompt { color: #27c93f; }
-        .command { color: #fff; }
-        .output { color: #999; }
+        .prompt {
+            color: #50fa7b;
+            font-weight: 600;
+        }
+        .command {
+            color: #f8f8f2;
+        }
+        .output {
+            color: #999;
+        }
+        .success {
+            color: #50fa7b;
+        }
 
-        .floating-button {
+        .record-button {
             position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            background: #ff4757;
+            top: 24px;
+            right: 24px;
+            width: 80px;
+            height: 80px;
+            background: #ff5757;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            box-shadow: 0 4px 20px rgba(255,71,87,0.4);
+            box-shadow: 0 8px 24px rgba(255,87,87,0.4);
             transition: all 0.3s;
         }
 
-        .floating-button:hover {
-            transform: scale(1.1);
+        .record-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 12px 32px rgba(255,87,87,0.6);
         }
 
-        .floating-button.recording {
-            border-radius: 15%;
-            background: #ff6348;
+        .record-button::after {
+            content: '';
+            width: 28px;
+            height: 28px;
+            background: white;
+            border-radius: 50%;
         }
 
-        .code-block {
-            background: rgba(0,0,0,0.3);
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-            font-family: 'Courier New', monospace;
-        }
-
-        /* Below the Fold Sections */
+        /* Below the fold sections */
         .stats {
-            padding: 40px 0;
+            padding: 60px 0;
             background: rgba(255,255,255,0.1);
             backdrop-filter: blur(10px);
         }
@@ -212,143 +246,163 @@
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 30px;
+            gap: 40px;
             text-align: center;
         }
 
         .stat-number {
-            font-size: 36px;
+            font-size: 48px;
             font-weight: bold;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+        }
+
+        .stat-label {
+            font-size: 16px;
+            opacity: 0.9;
         }
 
         .problem-section {
-            padding: 80px 0;
+            padding: 100px 0;
             background: rgba(0,0,0,0.2);
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 42px;
+            font-weight: 800;
+            margin-bottom: 60px;
+            line-height: 1.3;
         }
 
         .problem-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 30px;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 40px;
             margin-top: 40px;
         }
 
         .problem-card {
-            padding: 30px;
+            padding: 40px;
             background: rgba(255,255,255,0.05);
-            border-radius: 15px;
+            border-radius: 20px;
             border: 1px solid rgba(255,255,255,0.1);
         }
 
         .problem-card h3 {
-            margin-bottom: 15px;
-            font-size: 20px;
+            margin-bottom: 16px;
+            font-size: 24px;
+            color: #ff8a80;
         }
 
         .problem-card p {
-            color: rgba(255,255,255,0.8);
-            line-height: 1.8;
+            color: rgba(255,255,255,0.85);
+            line-height: 1.7;
+            font-size: 16px;
         }
 
         .comparison-section {
-            padding: 80px 0;
+            padding: 100px 0;
             background: rgba(255,255,255,0.05);
         }
 
         .comparison-table {
-            max-width: 900px;
+            max-width: 1000px;
             margin: 0 auto;
         }
 
         .comparison-row {
             display: flex;
             align-items: center;
-            margin-bottom: 20px;
-            padding: 15px;
+            margin-bottom: 24px;
+            padding: 20px;
             background: rgba(255,255,255,0.05);
-            border-radius: 10px;
-            gap: 20px;
+            border-radius: 16px;
+            gap: 24px;
         }
 
         .comparison-label {
-            width: 150px;
-            font-weight: 600;
+            width: 160px;
+            font-weight: 700;
             flex-shrink: 0;
+            font-size: 16px;
         }
 
         .comparison-old {
             flex: 1;
-            padding: 10px 15px;
-            background: rgba(239, 68, 68, 0.2);
-            border-left: 3px solid #ef4444;
+            padding: 16px 20px;
+            background: rgba(239, 68, 68, 0.15);
+            border-left: 4px solid #ef4444;
             color: #fca5a5;
-            font-family: monospace;
+            font-family: 'SF Mono', Monaco, monospace;
             font-size: 14px;
-            border-radius: 5px;
+            border-radius: 8px;
         }
 
         .comparison-new {
             flex: 1;
-            padding: 10px 15px;
-            background: rgba(16, 185, 129, 0.2);
-            border-left: 3px solid #10b981;
+            padding: 16px 20px;
+            background: rgba(16, 185, 129, 0.15);
+            border-left: 4px solid #10b981;
             color: #6ee7b7;
             text-align: center;
-            border-radius: 5px;
-            font-weight: 600;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 15px;
         }
 
         .pricing-section {
-            padding: 80px 0;
+            padding: 100px 0;
             background: rgba(0,0,0,0.2);
         }
 
         .price-card {
-            max-width: 400px;
-            margin: 40px auto;
-            padding: 40px;
+            max-width: 450px;
+            margin: 60px auto;
+            padding: 50px;
             background: rgba(255,255,255,0.1);
-            border-radius: 20px;
+            border-radius: 24px;
             border: 2px solid rgba(255,255,255,0.2);
             backdrop-filter: blur(10px);
         }
 
         .price-amount {
-            font-size: 64px;
-            font-weight: bold;
-            margin-bottom: 10px;
+            font-size: 72px;
+            font-weight: 900;
+            margin-bottom: 8px;
             text-align: center;
         }
 
         .price-period {
-            color: rgba(255,255,255,0.7);
-            margin-bottom: 30px;
+            color: rgba(255,255,255,0.8);
+            margin-bottom: 40px;
             text-align: center;
+            font-size: 18px;
         }
 
         .price-features {
             list-style: none;
-            margin: 30px 0;
+            margin: 40px 0;
         }
 
         .price-features li {
-            padding: 10px 0;
+            padding: 14px 0;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 14px;
+            font-size: 17px;
         }
 
         .check-icon {
-            width: 20px;
-            height: 20px;
+            width: 24px;
+            height: 24px;
             background: #10b981;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            font-size: 12px;
+            font-size: 14px;
+            font-weight: bold;
         }
 
         .check-icon::after {
@@ -357,28 +411,29 @@
         }
 
         .faq-section {
-            padding: 80px 0;
+            padding: 100px 0;
             background: rgba(255,255,255,0.05);
         }
 
         .faq-item {
             margin-bottom: 20px;
             border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 10px;
+            border-radius: 16px;
             overflow: hidden;
-            max-width: 800px;
+            max-width: 900px;
             margin-left: auto;
             margin-right: auto;
         }
 
         .faq-question {
-            padding: 20px;
+            padding: 24px 28px;
             background: rgba(255,255,255,0.05);
             cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-weight: 600;
+            font-size: 18px;
         }
 
         .faq-question:hover {
@@ -387,6 +442,7 @@
 
         .faq-toggle {
             transition: transform 0.3s;
+            font-size: 20px;
         }
 
         .faq-item.active .faq-toggle {
@@ -394,47 +450,50 @@
         }
 
         .faq-answer {
-            padding: 0 20px;
+            padding: 0 28px;
             max-height: 0;
             overflow: hidden;
-            color: rgba(255,255,255,0.8);
+            color: rgba(255,255,255,0.85);
             line-height: 1.8;
             transition: all 0.3s;
+            font-size: 16px;
         }
 
         .faq-item.active .faq-answer {
-            padding: 20px;
+            padding: 24px 28px;
             max-height: 500px;
         }
 
         .install-section {
-            padding: 80px 0;
+            padding: 100px 0;
             background: rgba(0,0,0,0.2);
         }
 
         footer {
-            padding: 40px 0;
+            padding: 50px 0;
             text-align: center;
             background: rgba(0,0,0,0.3);
             border-top: 1px solid rgba(255,255,255,0.1);
         }
 
         footer a {
-            color: rgba(255,255,255,0.7);
+            color: rgba(255,255,255,0.8);
             text-decoration: none;
+            margin: 0 12px;
         }
 
         footer a:hover {
             color: #fff;
         }
 
-        @media (max-width: 768px) {
+        @media (max-width: 1024px) {
             .hero-content {
                 grid-template-columns: 1fr;
+                gap: 60px;
             }
 
-            h1 {
-                font-size: 36px;
+            .hero-left h1 {
+                font-size: 56px;
             }
 
             .comparison-row {
@@ -445,10 +504,19 @@
             .comparison-label {
                 width: 100%;
             }
+        }
 
-            .comparison-old,
-            .comparison-new {
-                margin: 5px 0;
+        @media (max-width: 768px) {
+            .hero-left h1 {
+                font-size: 42px;
+            }
+
+            .hero-subtitle {
+                font-size: 20px;
+            }
+
+            .section-title {
+                font-size: 32px;
             }
         }
     </style>
@@ -460,14 +528,12 @@
                 <div class="rec-dot"></div>
                 reccli
             </div>
-            <div class="nav-links">
-                <a href="https://github.com/willluecke/RecCli" class="btn btn-secondary">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                    </svg>
-                    GitHub
-                </a>
-            </div>
+            <a href="https://github.com/willluecke/RecCli" class="btn-github">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                </svg>
+                GitHub
+            </a>
         </nav>
     </header>
 
@@ -475,16 +541,16 @@
         <section class="hero">
             <div class="container">
                 <div class="hero-content">
-                    <div>
+                    <div class="hero-left">
                         <h1>Never Lose Terminal Context Again</h1>
-                        <p class="subtitle">One-click CLI recording with a floating button that stays out of your way.</p>
+                        <p class="hero-subtitle">One-click CLI recording with a floating button that stays out of your way.</p>
 
                         <div class="cta-buttons">
                             <a href="#install" class="btn btn-primary">
-                                <span>⬇</span> Install Now
+                                ⬇ Install Now
                             </a>
                             <a href="https://twitter.com/intent/tweet?text=Just%20discovered%20reccli%20-%20finally%20a%20simple%20way%20to%20record%20terminal%20sessions!%20One%20click%20to%20start%2Fstop.%20No%20more%20lost%20debugging%20context%20%F0%9F%8E%AC%0A%0Ahttps%3A%2F%2Freccli.com" class="btn btn-secondary" target="_blank">
-                                <span>🐦</span> Share on X
+                                🐦 Share on X
                             </a>
                         </div>
 
@@ -493,7 +559,7 @@
                         </div>
                     </div>
 
-                    <div class="demo-window">
+                    <div class="terminal-window">
                         <div class="window-header">
                             <div class="window-dot dot-red"></div>
                             <div class="window-dot dot-yellow"></div>
@@ -503,7 +569,7 @@
                             <div class="terminal-line">
                                 <span class="prompt">$</span> <span class="command">reccli gui</span>
                             </div>
-                            <div class="terminal-line output">
+                            <div class="terminal-line success">
                                 ✅ Starting reccli GUI...
                             </div>
                             <div class="terminal-line output">
@@ -513,8 +579,7 @@
                                 <span class="prompt">$</span> <span class="command">npm run dev</span>
                             </div>
                             <div class="terminal-line output">
-                                > dev
-                                > next dev
+                                > dev > next dev
                             </div>
                             <div class="terminal-line output">
                                 ready - started server on http://localhost:3000
@@ -523,20 +588,17 @@
                                 <span class="prompt">$</span> <span class="command">git status</span>
                             </div>
                             <div class="terminal-line output">
-                                On branch main
-                                Your branch is up to date with 'origin/main'.
+                                On branch main Your branch is up to date with 'origin/main'.
                             </div>
                             <div class="terminal-line">
                                 <span class="prompt">$</span> <span class="command">reccli stop</span>
                             </div>
-                            <div class="terminal-line output">
+                            <div class="terminal-line success">
                                 ✅ Recording saved: session_20240315_143022.cast
                             </div>
                         </div>
 
-                        <div class="floating-button" onclick="this.classList.toggle('recording')">
-                            <span style="color: white; font-size: 24px;">●</span>
-                        </div>
+                        <div class="record-button"></div>
                     </div>
                 </div>
             </div>
@@ -547,19 +609,19 @@
                 <div class="stats-grid">
                     <div>
                         <div class="stat-number" id="recordings">0</div>
-                        <div>Sessions Recorded</div>
+                        <div class="stat-label">Sessions Recorded</div>
                     </div>
                     <div>
                         <div class="stat-number" id="hours">0</div>
-                        <div>Hours Saved</div>
+                        <div class="stat-label">Hours Saved</div>
                     </div>
                     <div>
                         <div class="stat-number" id="users">0</div>
-                        <div>Active Users</div>
+                        <div class="stat-label">Active Users</div>
                     </div>
                     <div>
                         <div class="stat-number" id="retention">0</div>
-                        <div>% Keep Using It</div>
+                        <div class="stat-label">% Keep Using It</div>
                     </div>
                 </div>
             </div>
@@ -567,18 +629,18 @@
 
         <section class="problem-section">
             <div class="container">
-                <h2 style="text-align: center; font-size: 36px; margin-bottom: 20px;">
-                    Yes, `script` exists. So does walking, but we still use cars.
+                <h2 class="section-title">
+                    Yes, `script` exists. So does walking,<br>but we still use cars.
                 </h2>
 
                 <div class="problem-grid">
                     <div class="problem-card">
-                        <h3 style="color: #ff6b81;">The "Hindsight" Problem</h3>
+                        <h3>The "Hindsight" Problem</h3>
                         <p>That bug you just spent 2 hours fixing? You finally found it... but didn't record the session. Now you need to explain it to your team. Good luck.</p>
                     </div>
 
                     <div class="problem-card">
-                        <h3 style="color: #ff6b81;">The "Friction" Problem</h3>
+                        <h3>The "Friction" Problem</h3>
                         <p style="font-family: monospace; font-size: 14px;">
                             script -r session_$(date +%Y%m%d).log<br>
                             vs<br>
@@ -588,7 +650,7 @@
                     </div>
 
                     <div class="problem-card">
-                        <h3 style="color: #ff6b81;">The "Invisible" Problem</h3>
+                        <h3>The "Invisible" Problem</h3>
                         <p>Command-line tools are invisible until you need them. A floating button? You see it. You click it. You actually use it.</p>
                     </div>
                 </div>
@@ -597,9 +659,7 @@
 
         <section class="comparison-section">
             <div class="container">
-                <h2 style="text-align: center; font-size: 36px; margin-bottom: 40px;">
-                    Why Developers Actually Use reccli
-                </h2>
+                <h2 class="section-title">Why Developers Actually Use reccli</h2>
 
                 <div class="comparison-table">
                     <div class="comparison-row">
@@ -627,7 +687,7 @@
                     </div>
                 </div>
 
-                <p style="text-align: center; max-width: 700px; margin: 40px auto 0; color: rgba(255,255,255,0.8); line-height: 1.8;">
+                <p style="text-align: center; max-width: 800px; margin: 50px auto 0; font-size: 18px; line-height: 1.8; opacity: 0.9;">
                     It's not about the technology. It's about behavior change.
                     The same reason people pay $50 for Alfred when Spotlight is free,
                     or $30/year for Bartender when hiding menu items is built into macOS.
@@ -637,11 +697,9 @@
 
         <section class="pricing-section" id="pricing">
             <div class="container">
-                <h2 style="text-align: center; font-size: 36px; margin-bottom: 20px;">
-                    Simple Pricing. No BS.
-                </h2>
+                <h2 class="section-title">Simple Pricing. No BS.</h2>
 
-                <p style="text-align: center; color: rgba(255,255,255,0.8); margin-bottom: 40px;">
+                <p style="text-align: center; font-size: 20px; opacity: 0.9;">
                     No free tier. Good tools cost money. This costs less than a coffee.
                 </p>
 
@@ -676,11 +734,11 @@
                         </li>
                     </ul>
 
-                    <a href="/checkout" class="btn btn-primary" style="width: 100%; text-align: center; justify-content: center;">
+                    <a href="/checkout" class="btn btn-primary" style="width: 100%; text-align: center; justify-content: center; font-size: 18px;">
                         Start 7-Day Free Trial
                     </a>
 
-                    <p style="margin-top: 20px; font-size: 14px; color: rgba(255,255,255,0.6); text-align: center;">
+                    <p style="margin-top: 24px; font-size: 15px; color: rgba(255,255,255,0.7); text-align: center;">
                         Cancel anytime. No questions asked.
                     </p>
                 </div>
@@ -689,9 +747,7 @@
 
         <section class="faq-section">
             <div class="container">
-                <h2 style="text-align: center; font-size: 36px; margin-bottom: 40px;">
-                    Questions You're Thinking
-                </h2>
+                <h2 class="section-title">Questions You're Thinking</h2>
 
                 <div class="faq-item">
                     <div class="faq-question" onclick="this.parentElement.classList.toggle('active')">
@@ -748,18 +804,18 @@
         <section id="install" class="install-section">
             <div class="container">
                 <div style="text-align: center;">
-                    <h2 style="font-size: 36px; margin-bottom: 40px;">Get Started in 30 Seconds</h2>
+                    <h2 class="section-title">Get Started in 30 Seconds</h2>
 
-                    <div class="code-block" style="max-width: 600px; margin: 0 auto;">
-                        <div style="margin-bottom: 15px;"># Quick install</div>
+                    <div class="code-block" style="max-width: 650px; margin: 0 auto; font-size: 17px;">
+                        <div style="margin-bottom: 15px; opacity: 0.7;"># Quick install</div>
                         <code>curl -sSL https://reccli.com/install.sh | bash</code>
-                        <div style="margin-top: 20px; margin-bottom: 15px;"># Start GUI</div>
+                        <div style="margin-top: 24px; margin-bottom: 15px; opacity: 0.7;"># Start GUI</div>
                         <code>reccli gui</code>
-                        <div style="margin-top: 20px; margin-bottom: 15px;"># Or use CLI mode</div>
+                        <div style="margin-top: 24px; margin-bottom: 15px; opacity: 0.7;"># Or use CLI mode</div>
                         <code>reccli start</code>
                     </div>
 
-                    <div class="cta-buttons" style="justify-content: center; margin-top: 40px;">
+                    <div style="margin-top: 50px;">
                         <a href="https://github.com/willluecke/RecCli" class="btn btn-primary">
                             View on GitHub
                         </a>
@@ -771,10 +827,10 @@
 
     <footer>
         <div class="container">
-            <p style="color: rgba(255,255,255,0.7);">© 2024 reccli. Made by developers, for developers.</p>
-            <p style="margin-top: 10px;">
-                <a href="mailto:hello@reccli.com">hello@reccli.com</a> ·
-                <a href="https://twitter.com/reccli_app">@reccli_app</a> ·
+            <p style="color: rgba(255,255,255,0.8); font-size: 16px;">© 2024 reccli. Made by developers, for developers.</p>
+            <p style="margin-top: 16px;">
+                <a href="mailto:hello@reccli.com">hello@reccli.com</a>
+                <a href="https://twitter.com/reccli_app">@reccli_app</a>
                 <a href="https://github.com/willluecke/RecCli">GitHub</a>
             </p>
         </div>
