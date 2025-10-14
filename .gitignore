@@ -20,6 +20,9 @@ recordings/
 .reccli/
 license.key
 
+# Instructions (local documentation)
+instructions/
+
 # IDE
 .vscode/
 .idea/
