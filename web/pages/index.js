@@ -82,10 +82,8 @@ export default function Home() {
               <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
               <span className="text-2xl font-bold">reccli</span>
             </div>
-            <Link href="/checkout">
-              <a className="px-6 py-2 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:scale-105 transition-transform">
-                Start Free Trial
-              </a>
+            <Link href="/checkout" className="px-6 py-2 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-semibold hover:scale-105 transition-transform">
+              Start Free Trial
             </Link>
           </nav>
         </header>
@@ -120,10 +118,8 @@ export default function Home() {
             </div>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link href="/checkout">
-                <a className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-semibold text-lg hover:scale-105 transition-transform">
-                  Start 7-Day Free Trial
-                </a>
+              <Link href="/checkout" className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-semibold text-lg hover:scale-105 transition-transform">
+                Start 7-Day Free Trial
               </Link>
               <a 
                 href="#how" 
@@ -234,10 +230,8 @@ export default function Home() {
                 ))}
               </ul>
               
-              <Link href="/checkout">
-                <a className="block w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-semibold text-lg hover:scale-105 transition-transform">
-                  Start 7-Day Free Trial
-                </a>
+              <Link href="/checkout" className="block w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-semibold text-lg hover:scale-105 transition-transform">
+                Start 7-Day Free Trial
               </Link>
               
               <p className="text-sm text-gray-500 mt-6">
