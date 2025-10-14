@@ -1,19 +1,32 @@
-// pages/index.js
+// pages/index.tsx
 import Head from 'next/head'
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import type { NextPage } from 'next'
 
-export default function Home() {
-  const [stats, setStats] = useState({
+interface Stats {
+  recordings: number
+  hours: number
+  users: number
+  retention: number
+}
+
+interface FAQ {
+  q: string
+  a: string
+}
+
+const RecCliLandingPage: NextPage = () => {
+  const [stats, setStats] = useState<Stats>({
     recordings: 0,
     hours: 0,
     users: 0,
     retention: 0
   })
-  
-  const [copied, setCopied] = useState(false)
-  const [faqOpen, setFaqOpen] = useState({})
-  
+
+  const [copied, setCopied] = useState<boolean>(false)
+  const [faqOpen, setFaqOpen] = useState<Record<number, boolean>>({})
+
   useEffect(() => {
     // Animate stats on mount
     const timer = setTimeout(() => {
@@ -24,21 +37,21 @@ export default function Home() {
         retention: 98
       })
     }, 500)
-    
+
     return () => clearTimeout(timer)
   }, [])
-  
-  const copyInstall = () => {
+
+  const copyInstall = (): void => {
     navigator.clipboard.writeText('curl -sSL https://reccli.com/install.sh | bash')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
-  
-  const toggleFaq = (index) => {
+
+  const toggleFaq = (index: number): void => {
     setFaqOpen(prev => ({ ...prev, [index]: !prev[index] }))
   }
-  
-  const faqs = [
+
+  const faqs: FAQ[] = [
     {
       q: "Why not just use the script command?",
       a: "Same reason you don't use Print Screen for screenshots. Sure, it works, but CleanShot X is a $30M business because reducing friction changes behavior. You'll never remember to type 'script' before that debugging session. You will click a red button that's always visible."
@@ -279,3 +292,5 @@ export default function Home() {
     </>
   )
 }
+
+export default RecCliLandingPage
