@@ -75,8 +75,9 @@ export default async function handler(
     });
   } catch (error) {
     console.error('Stripe error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
     res.status(500).json({
-      error: error.message
+      error: errorMessage
     });
   }
 }

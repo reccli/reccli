@@ -29,13 +29,18 @@ export default async function handler(
   const buf = await buffer(req);
   const sig = req.headers['stripe-signature'];
 
+  if (!sig) {
+    return res.status(400).send('No stripe signature found');
+  }
+
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(buf, sig as string, webhookSecret);
   } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    console.error('Webhook signature verification failed:', errorMessage);
+    return res.status(400).send(`Webhook Error: ${errorMessage}`);
   }
 
   // Handle the event
@@ -50,7 +55,7 @@ export default async function handler(
       console.log('New subscription:', {
         customer: session.customer,
         subscription: session.subscription,
-        device_id: session.metadata.device_id,
+        device_id: session.metadata?.device_id || null,
         license_key: licenseKey
       });
 
