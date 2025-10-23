@@ -220,11 +220,7 @@ class ReccliGUI:
         self.config = ReccliConfig()
         self.recorder = CLIRecorder()
         self.update_timer = None
-        
-        # Check license on startup
-        if not self.config.is_licensed():
-            self.show_trial_dialog()
-        
+
         # Create GUI
         self.root = tk.Tk()
         self.root.title("reccli")
@@ -275,6 +271,10 @@ class ReccliGUI:
         self.recording = False
         self.start_pos = None
         self.duration = 0
+
+        # Check license after GUI is ready
+        if not self.config.is_licensed():
+            self.root.after(500, self.show_trial_dialog)
     
     def position_window(self):
         """Position window in top-right corner"""

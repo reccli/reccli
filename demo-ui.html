@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RecCli UI Demo</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .demo-container {
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 3rem;
+            opacity: 0.9;
+        }
+
+        /* Floating button */
+        .floating-button {
+            position: fixed;
+            top: 30px;
+            right: 100px;
+            width: 70px;
+            height: 70px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .floating-button:hover {
+            transform: scale(1.1);
+        }
+
+        .floating-button.recording {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        /* Record button (green circle with red dot) */
+        .record-btn {
+            width: 70px;
+            height: 70px;
+            background: #27ae60;
+            border-radius: 50%;
+            border: 3px solid #2ecc71;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .record-btn .inner-dot {
+            width: 20px;
+            height: 20px;
+            background: #e74c3c;
+            border-radius: 50%;
+        }
+
+        /* Stop button (red square with white square) */
+        .stop-btn {
+            width: 70px;
+            height: 70px;
+            background: #ff4757;
+            border-radius: 10px;
+            border: 3px solid #ff6348;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .stop-btn .inner-square {
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 3px;
+        }
+
+        .timer {
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 3px 8px;
+            border-radius: 10px;
+        }
+
+        /* Notification */
+        .notification {
+            position: fixed;
+            top: 110px;
+            right: 20px;
+            background: #27ae60;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease;
+            z-index: 999;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        /* Demo controls */
+        .controls {
+            margin-top: 4rem;
+        }
+
+        .demo-btn {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 10px;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+        }
+
+        .demo-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+
+        /* Recording list */
+        .recordings {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 30px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            backdrop-filter: blur(10px);
+        }
+
+        .recording-item {
+            background: rgba(255,255,255,0.1);
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .recording-item .filename {
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+
+        .recording-item .duration {
+            color: #2ecc71;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h1>🎬 RecCli UI Demo</h1>
+        <p>One-click terminal recording with floating button</p>
+
+        <div class="controls">
+            <button class="demo-btn" onclick="toggleRecording()">
+                <span id="btn-text">Start Recording</span>
+            </button>
+            <button class="demo-btn" onclick="showExport()">Export Demo</button>
+        </div>
+
+        <div class="recordings">
+            <h3 style="margin-top: 0;">📁 Recent Recordings</h3>
+            <div class="recording-item">
+                <span class="filename">session_20251014_143022.cast</span>
+                <span class="duration">2:34</span>
+            </div>
+            <div class="recording-item">
+                <span class="filename">debug_session.cast</span>
+                <span class="duration">5:12</span>
+            </div>
+            <div class="recording-item">
+                <span class="filename">deployment_log.cast</span>
+                <span class="duration">1:45</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating button -->
+    <div class="floating-button" id="floatingBtn" onclick="toggleRecording()">
+        <div class="record-btn" id="recordBtn">
+            <div class="inner-dot"></div>
+        </div>
+        <div class="stop-btn hidden" id="stopBtn">
+            <div class="inner-square"></div>
+            <div class="timer" id="timer">00:00</div>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div class="notification hidden" id="notification">
+        <span id="notif-text">Recording started</span>
+    </div>
+
+    <script>
+        let recording = false;
+        let startTime = 0;
+        let timerInterval = null;
+
+        function toggleRecording() {
+            recording = !recording;
+            const recordBtn = document.getElementById('recordBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const floatingBtn = document.getElementById('floatingBtn');
+            const btnText = document.getElementById('btn-text');
+
+            if (recording) {
+                // Start recording
+                recordBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+                floatingBtn.classList.add('recording');
+                btnText.textContent = 'Stop Recording';
+                showNotification('🔴 Recording started');
+
+                // Start timer
+                startTime = Date.now();
+                timerInterval = setInterval(updateTimer, 1000);
+            } else {
+                // Stop recording
+                recordBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+                floatingBtn.classList.remove('recording');
+                btnText.textContent = 'Start Recording';
+                showNotification('✅ Saved: session_' + Date.now() + '.cast');
+
+                // Stop timer
+                clearInterval(timerInterval);
+                document.getElementById('timer').textContent = '00:00';
+            }
+        }
+
+        function updateTimer() {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const mins = Math.floor(elapsed / 60);
+            const secs = elapsed % 60;
+            document.getElementById('timer').textContent =
+                `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function showNotification(text) {
+            const notification = document.getElementById('notification');
+            const notifText = document.getElementById('notif-text');
+
+            notifText.textContent = text;
+            notification.classList.remove('hidden');
+
+            setTimeout(() => {
+                notification.classList.add('hidden');
+            }, 3000);
+        }
+
+        function showExport() {
+            const formats = ['asciinema (.cast)', 'Markdown (.md)', 'HTML (.html)'];
+            const format = formats[Math.floor(Math.random() * formats.length)];
+            showNotification(`📦 Exported to ${format}`);
+        }
+    </script>
+</body>
+</html>
