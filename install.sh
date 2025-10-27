@@ -67,11 +67,11 @@ install_dependencies() {
 
 # Create installation directory
 INSTALL_DIR="$HOME/.local/bin"
-CLIREC_DIR="$HOME/.clirec"
+RECCLI_DIR="$HOME/.reccli"
 
 echo -e "${YELLOW}Creating directories...${NC}"
 mkdir -p "$INSTALL_DIR"
-mkdir -p "$CLIREC_DIR"
+mkdir -p "$RECCLI_DIR"
 
 # Check for Python 3
 if ! command_exists python3; then
@@ -87,20 +87,20 @@ if ! python3 -c "import tkinter" 2>/dev/null; then
 fi
 
 # Download or copy the main script
-SCRIPT_URL="https://raw.githubusercontent.com/yourusername/clirec/main/clirec.py"
-SCRIPT_PATH="$CLIREC_DIR/clirec.py"
+SCRIPT_URL="https://raw.githubusercontent.com/willluecke/RecCli/main/reccli.py"
+SCRIPT_PATH="$RECCLI_DIR/reccli.py"
 
-if [ -f "clirec.py" ]; then
-    echo -e "${GREEN}Using local clirec.py${NC}"
-    cp clirec.py "$SCRIPT_PATH"
+if [ -f "reccli.py" ]; then
+    echo -e "${GREEN}Using local reccli.py${NC}"
+    cp reccli.py "$SCRIPT_PATH"
 else
-    echo -e "${YELLOW}Downloading clirec.py...${NC}"
+    echo -e "${YELLOW}Downloading reccli.py...${NC}"
     if command_exists curl; then
-        curl -sSL "$SCRIPT_URL" -o "$SCRIPT_PATH" || cp clirec.py "$SCRIPT_PATH" 2>/dev/null
+        curl -sSL "$SCRIPT_URL" -o "$SCRIPT_PATH" || cp reccli.py "$SCRIPT_PATH" 2>/dev/null
     elif command_exists wget; then
-        wget -q "$SCRIPT_URL" -O "$SCRIPT_PATH" || cp clirec.py "$SCRIPT_PATH" 2>/dev/null
+        wget -q "$SCRIPT_URL" -O "$SCRIPT_PATH" || cp reccli.py "$SCRIPT_PATH" 2>/dev/null
     else
-        echo -e "${RED}Could not download. Please copy clirec.py to $SCRIPT_PATH${NC}"
+        echo -e "${RED}Could not download. Please copy reccli.py to $SCRIPT_PATH${NC}"
         exit 1
     fi
 fi
@@ -109,14 +109,13 @@ fi
 chmod +x "$SCRIPT_PATH"
 
 # Create launcher script
-LAUNCHER_PATH="$INSTALL_DIR/clirec"
+LAUNCHER_PATH="$INSTALL_DIR/reccli"
 cat > "$LAUNCHER_PATH" << 'EOF'
 #!/usr/bin/env python3
 import sys
 import os
-sys.path.insert(0, os.path.expanduser("~/.clirec"))
-from clirec import cli_mode
-cli_mode()
+sys.path.insert(0, os.path.expanduser("~/.reccli"))
+exec(open(os.path.expanduser("~/.reccli/reccli.py")).read())
 EOF
 
 chmod +x "$LAUNCHER_PATH"
@@ -125,18 +124,18 @@ chmod +x "$LAUNCHER_PATH"
 if [[ "$OS" == "Linux" ]]; then
     DESKTOP_DIR="$HOME/.local/share/applications"
     mkdir -p "$DESKTOP_DIR"
-    
-    cat > "$DESKTOP_DIR/clirec.desktop" << EOF
+
+    cat > "$DESKTOP_DIR/reccli.desktop" << EOF
 [Desktop Entry]
-Name=CLI Recorder
-Comment=Record terminal sessions with ease
+Name=RecCli
+Comment=One-click terminal recording
 Exec=$LAUNCHER_PATH gui
 Icon=utilities-terminal
 Type=Application
 Categories=Development;System;
 Terminal=false
 EOF
-    
+
     echo -e "${GREEN}Desktop entry created${NC}"
 fi
 
@@ -163,22 +162,15 @@ fi
 
 # Create aliases (optional)
 echo -e "${YELLOW}Creating helpful aliases...${NC}"
-ALIASES_FILE="$HOME/.clirec_aliases"
+ALIASES_FILE="$HOME/.reccli_aliases"
 cat > "$ALIASES_FILE" << 'EOF'
-# CLI Recorder aliases
-alias rec='clirec start'
-alias recstop='clirec stop'
-alias reclist='clirec list'
-alias recgui='clirec gui &'
+# RecCli aliases
+alias rec='reccli gui &'
+alias recstop='pkill -f reccli'
+alias recstats='reccli status'
 
-# Function to quickly start and name a recording
-record() {
-    if [ -z "$1" ]; then
-        clirec start
-    else
-        clirec start --name "$1"
-    fi
-}
+# Quick launch
+alias reccli-start='reccli gui &'
 EOF
 
 echo -e "${GREEN}Aliases created in $ALIASES_FILE${NC}"
@@ -197,21 +189,18 @@ fi
 
 # Print usage
 echo ""
-echo -e "${GREEN}🎉 CLI Recorder installed successfully!${NC}"
+echo -e "${GREEN}🎉 RecCli installed successfully!${NC}"
 echo ""
 echo "Usage:"
-echo "  clirec gui          # Start GUI mode (floating button)"
-echo "  clirec start        # Start recording in current terminal"
-echo "  clirec stop         # Stop current recording"
-echo "  clirec list         # List all recordings"
-echo "  clirec play <file>  # Play back a recording"
+echo "  reccli gui          # Start GUI mode (floating button)"
+echo "  reccli status       # Show recording stats"
 echo ""
 echo "GUI Mode:"
 echo "  - Click the button to start/stop recording"
 echo "  - Right-click for menu options"
 echo "  - Drag to move the button"
 echo ""
-echo "Recordings are saved to: $CLIREC_DIR"
+echo "Recordings are saved to: ~/.reccli/recordings"
 echo ""
 echo -e "${YELLOW}Optional: Install asciinema for better recording format:${NC}"
 echo "  pip install asciinema"

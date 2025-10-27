@@ -17,17 +17,25 @@ Every developer has lost that perfect debugging session. The one where everythin
 - 💾 **Auto-save with timestamps** - Never lose a session
 - 🎥 **Multiple formats** - asciinema or script
 - 🚀 **Zero config** - Works immediately after install
+- 🆓 **100% Free & Open Source** - MIT Licensed
 
 ## Quick Start
 
 ```bash
 # Install
+git clone https://github.com/willluecke/RecCli.git
+cd RecCli
 ./install.sh
 
 # Run
 reccli gui
 
 # Start recording with one click!
+```
+
+Or install directly:
+```bash
+curl -sSL https://raw.githubusercontent.com/willluecke/RecCli/main/install.sh | bash
 ```
 
 ## Features
@@ -41,27 +49,20 @@ reccli gui
 
 ### Smart Recording
 - Captures everything: input, output, colors, timing
-- Supports both asciinema (.cast) and script (.script) formats
-- Organized by timestamp: `recording_2025-10-13_14-30-45.cast`
-- Playback with `reccli play <filename>`
+- Supports both asciinema (.cast) and script (.log) formats
+- Organized by timestamp: `session_20251027_143045.cast`
+- All recordings stored locally in `~/.reccli/recordings`
 
 ### CLI Mode
 ```bash
 # GUI mode (default)
 reccli gui
 
-# Start/stop from terminal
-reccli start
-reccli stop
+# View stats
+reccli status
 
-# List recordings
-reccli list
-
-# Play a recording
-reccli play recording_2025-10-13_14-30-45.cast
-
-# Share stats
-reccli stats
+# Check version
+reccli --version
 ```
 
 ## Installation
@@ -76,7 +77,13 @@ cd RecCli
 ### Manual
 ```bash
 # Install dependencies
-pip3 install tkinter asciinema
+pip3 install asciinema  # Optional but recommended
+
+# Ubuntu/Debian
+sudo apt-get install python3 python3-tk
+
+# macOS
+brew install python-tk
 
 # Make executable
 chmod +x reccli.py
@@ -85,17 +92,16 @@ chmod +x reccli.py
 python3 reccli.py gui
 ```
 
-## Pricing
+## Requirements
 
-**$5/month** - Simple, honest pricing for a tool that just works.
+- Python 3.6+
+- tkinter (for GUI)
+- asciinema or script command (for recording)
 
-- ✅ 7-day free trial (card required)
-- ✅ Unlimited recordings
-- ✅ All features unlocked
-- ✅ Cancel anytime
-- ✅ No free tier (because good tools cost money)
-
-[Start your free trial →](https://reccli.com)
+**Recommended:** Install asciinema for best recording quality
+```bash
+pip install asciinema
+```
 
 ## Use Cases
 
@@ -111,50 +117,58 @@ Better than screenshots. Better than screen recordings. Just the terminal, perfe
 ### AI Coding Sessions
 Recording Claude Code, Cursor, or Copilot sessions? RecCli captures everything without losing context.
 
+### Pair Programming
+Share your screen recording with remote teammates. Perfect for async code reviews.
+
 ## FAQ
 
-**Q: Why no free tier?**
-A: We learned from real founder experience - free tiers kill early conversions and create support burden. $5/mo is fair for a tool that saves you hours.
+**Q: Why not just use the script command?**
+A: Same reason you don't use Print Screen for screenshots. Sure, it works, but reducing friction changes behavior. You'll never remember to type 'script' before that debugging session. You will click a red button that's always visible.
 
-**Q: What happens after the trial?**
-A: You'll be charged $5/mo automatically. Cancel anytime with one click. We'll remind you on Day 6.
+**Q: What about asciinema?**
+A: asciinema is great! We actually use it under the hood. But it's still command-line based. RecCli is about the UI/UX layer - the floating button that makes you actually USE recording instead of forgetting about it.
 
-**Q: Is my data private?**
-A: Yes. Recordings are stored locally on your machine. We never see your terminal output.
-
-**Q: What formats are supported?**
-A: asciinema (.cast) and script (.script). Both are standard, open formats.
+**Q: Where are recordings stored?**
+A: Locally on your machine in `~/.reccli/recordings/`. Your data, your control.
 
 **Q: Can I use this with tmux/screen?**
 A: Yes! RecCli works with any terminal setup.
+
+**Q: Is this really free?**
+A: Yes! MIT licensed. Use it, fork it, modify it. We believe great dev tools should be free.
+
+## Contributing
+
+Contributions are welcome! Feel free to:
+- Report bugs
+- Suggest features
+- Submit pull requests
+- Improve documentation
+
+## Roadmap
+
+- [ ] Cloud sync for recordings (optional)
+- [ ] Team sharing features
+- [ ] AI-powered session analysis
+- [ ] VS Code extension
+- [ ] Terminal session search
+- [ ] Playback in browser
+- [ ] Windows support
 
 ## Tech Stack
 
 - **Frontend**: Python + Tkinter (cross-platform GUI)
 - **Recording**: asciinema / script command
-- **Backend**: Stripe for payments, simple license validation
-- **Hosting**: Vercel (landing page), Supabase (auth)
-
-## Roadmap
-
-- [ ] Cloud sync for recordings
-- [ ] Team sharing features
-- [ ] AI-powered session analysis
-- [ ] VS Code extension
-- [ ] Terminal session search
-
-## Contributing
-
-This is a commercial product, but we welcome bug reports and feature suggestions!
-
-Open an issue on GitHub or email: hello@reccli.com
+- **Storage**: Local filesystem
 
 ## License
 
-Proprietary - See LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Built with love by solo developers, for developers.**
+**Built with love by developers, for developers.**
 
-[reccli.com](https://reccli.com) | [@reccli](https://x.com/reccli) | [hello@reccli.com](mailto:hello@reccli.com)
+[GitHub](https://github.com/willluecke/RecCli) | [Issues](https://github.com/willluecke/RecCli/issues)
+
+**Like this project? Give it a ⭐ on GitHub!**
