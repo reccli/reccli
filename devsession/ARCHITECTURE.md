@@ -14,13 +14,22 @@
 ### UI: 2 Buttons Only
 
 ```
-┌─────────────────┐
-│  ●  REC  ⚙️     │  ← Floating overlay
-└─────────────────┘
+Ready to Record:
+┌─────────────┐
+│  ●  ⚙️      │  ← Green circle with red dot center
+└─────────────┘
 
-● = Record/Stop toggle
-⚙️ = Settings gear
+Recording:
+┌─────────────┐
+│  ■  ⚙️      │  ← Red square (stop icon)
+└─────────────┘
 ```
+
+**2 buttons total:**
+- **Left button:** Dynamic toggle (● → ■ → ●)
+  - Click when green circle = Start recording
+  - Click when red square = Stop recording
+- **Right button:** Settings gear (⚙️)
 
 **Click-based only** - No commands (35% adoption drop if command-based)
 
