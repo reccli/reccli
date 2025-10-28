@@ -15,20 +15,20 @@
 
 ```
 Ready to Record:
-┌─────────────┐
-│  ●  ⚙️      │  ← Green circle with red dot center
-└─────────────┘
+┌─────────────────┐
+│  ● REC   ⚙️     │  ← Green circle with red dot + "REC" text
+└─────────────────┘
 
 Recording:
-┌─────────────┐
-│  ■  ⚙️      │  ← Red square (stop icon)
-└─────────────┘
+┌─────────────────┐
+│  ■ STOP  ⚙️     │  ← Red square + "STOP" text
+└─────────────────┘
 ```
 
 **2 buttons total:**
-- **Left button:** Dynamic toggle (● → ■ → ●)
-  - Click when green circle = Start recording
-  - Click when red square = Stop recording
+- **Left button:** Dynamic toggle (● REC → ■ STOP → ● REC)
+  - Click when showing "REC" = Start recording
+  - Click when showing "STOP" = Stop recording & show export dialog
 - **Right button:** Settings gear (⚙️)
 
 **Click-based only** - No commands (35% adoption drop if command-based)
