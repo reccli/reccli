@@ -422,7 +422,13 @@ Key technical decisions made during the session.
       "decision": "Use Stripe Connect instead of manual splits",
       "reasoning": "Eliminates manual reconciliation and reduces errors",
       "impact": "high",
-      "references": ["msg_045", "msg_046", "msg_047"]
+      "references": ["msg_045", "msg_046", "msg_047"],
+      "message_range": {
+        "start": "msg_042",
+        "end": "msg_050",
+        "start_index": 42,
+        "end_index": 50
+      }
     }
   ]
 }
@@ -435,7 +441,8 @@ Key technical decisions made during the session.
 | `decision` | string | What was decided |
 | `reasoning` | string | Why this decision was made |
 | `impact` | enum | `"low"`, `"medium"`, `"high"` |
-| `references` | array[string] | Message IDs with full context |
+| `references` | array[string] | Message IDs with full context (key messages) |
+| `message_range` | object | **Chronological range** in full conversation where this was discussed |
 
 #### Summary.code_changes
 
@@ -452,7 +459,13 @@ Code modifications made during the session.
       "type": "feature",
       "lines_added": 45,
       "lines_removed": 12,
-      "references": ["msg_089", "msg_090", "msg_091"]
+      "references": ["msg_089", "msg_090", "msg_091"],
+      "message_range": {
+        "start": "msg_085",
+        "end": "msg_095",
+        "start_index": 85,
+        "end_index": 95
+      }
     }
   ]
 }
@@ -467,7 +480,8 @@ Code modifications made during the session.
 | `type` | enum | `"feature"`, `"bugfix"`, `"refactor"`, `"test"`, `"docs"` |
 | `lines_added` | number | Lines of code added |
 | `lines_removed` | number | Lines of code removed |
-| `references` | array[string] | Message IDs with full context |
+| `references` | array[string] | Message IDs with full context (key messages) |
+| `message_range` | object | **Chronological range** in full conversation where this was implemented |
 
 #### Summary.problems_solved
 
@@ -481,7 +495,13 @@ Issues resolved during the session.
       "timestamp": "2024-10-27T15:47:22Z",
       "problem": "Webhook signature verification failing",
       "solution": "Use req.rawBody instead of req.body for signature check",
-      "references": ["msg_134", "msg_135", "msg_136", "msg_137"]
+      "references": ["msg_134", "msg_135", "msg_136", "msg_137"],
+      "message_range": {
+        "start": "msg_130",
+        "end": "msg_142",
+        "start_index": 130,
+        "end_index": 142
+      }
     }
   ]
 }
@@ -499,7 +519,13 @@ Unresolved problems or future work.
       "created_at": "2024-10-27T16:30:15Z",
       "issue": "Need error handling for failed Stripe transfers",
       "severity": "high",
-      "references": ["msg_201"]
+      "references": ["msg_201"],
+      "message_range": {
+        "start": "msg_198",
+        "end": "msg_205",
+        "start_index": 198,
+        "end_index": 205
+      }
     }
   ]
 }
@@ -517,7 +543,13 @@ Planned next actions.
       "priority": 1,
       "action": "Test end-to-end order flow with test mode",
       "estimated_time": "30 minutes",
-      "references": ["msg_215"]
+      "references": ["msg_215"],
+      "message_range": {
+        "start": "msg_212",
+        "end": "msg_218",
+        "start_index": 212,
+        "end_index": 218
+      }
     }
   ]
 }
@@ -532,6 +564,7 @@ Full message history with complete context **and vector embeddings** for semanti
   "conversation": [
     {
       "id": "msg_001",
+      "index": 1,
       "timestamp": "2024-10-27T14:30:45Z",
       "role": "user",
       "content": "Let's build the Stripe integration",
@@ -544,6 +577,7 @@ Full message history with complete context **and vector embeddings** for semanti
     },
     {
       "id": "msg_002",
+      "index": 2,
       "timestamp": "2024-10-27T14:30:52Z",
       "role": "assistant",
       "content": "I'll help you set up Stripe Connect...",
@@ -555,6 +589,7 @@ Full message history with complete context **and vector embeddings** for semanti
     },
     {
       "id": "msg_003",
+      "index": 3,
       "timestamp": "2024-10-27T14:31:15Z",
       "role": "tool",
       "tool_name": "write_file",
@@ -572,7 +607,8 @@ Full message history with complete context **and vector embeddings** for semanti
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | Yes | Unique message identifier |
+| `id` | string | Yes | Unique message identifier (e.g., `msg_001`) |
+| `index` | number | Yes | **Sequential position** in conversation (1-based) for chronological range queries |
 | `timestamp` | string | Yes | ISO 8601 timestamp |
 | `role` | enum | Yes | `"user"`, `"assistant"`, `"system"`, `"tool"` |
 | `content` | string | Yes | Message content |
@@ -635,6 +671,274 @@ def load_context(devsession, current_query):
         "relevant": relevant_messages  # ~1000 tokens
     }
 ```
+
+### Chronological Indexing
+
+**Why chronology matters:**
+
+Summaries are naturally **chronological** - they tell the story of what happened in order. When the AI needs deeper context about a specific summary item, it should be able to jump to that **chronological location** in the full conversation and read the surrounding messages.
+
+**Key principle:** Every summary item links back to its chronological position via `message_range`.
+
+#### Chronological Linking Structure
+
+```json
+{
+  "summary": {
+    "decisions": [
+      {
+        "id": "dec_001",
+        "decision": "Use Stripe Connect instead of manual splits",
+        "references": ["msg_045", "msg_046", "msg_047"],  // Key messages
+        "message_range": {
+          "start": "msg_042",    // First message in this discussion
+          "end": "msg_050",      // Last message in this discussion
+          "start_index": 42,     // Array index for fast range query
+          "end_index": 50        // Array index for fast range query
+        }
+      }
+    ],
+    "code_changes": [
+      {
+        "id": "code_001",
+        "description": "Added Stripe Connect transfer logic",
+        "references": ["msg_089", "msg_090", "msg_091"],
+        "message_range": {
+          "start": "msg_085",
+          "end": "msg_095",
+          "start_index": 85,
+          "end_index": 95
+        }
+      }
+    ]
+  },
+  "conversation": [
+    {"id": "msg_001", "index": 1, "content": "...", "timestamp": "..."},
+    {"id": "msg_002", "index": 2, "content": "...", "timestamp": "..."},
+    // ...
+    {"id": "msg_042", "index": 42, "content": "Should we use Stripe Connect?", "timestamp": "..."},
+    {"id": "msg_043", "index": 43, "content": "Let's evaluate the options...", "timestamp": "..."},
+    {"id": "msg_045", "index": 45, "content": "I recommend Stripe Connect because...", "timestamp": "..."},
+    {"id": "msg_046", "index": 46, "content": "That makes sense, let's do it", "timestamp": "..."},
+    {"id": "msg_050", "index": 50, "content": "Great, moving on to implementation", "timestamp": "..."}
+    // ...
+  ]
+}
+```
+
+**How it works:**
+1. **Summary item** (dec_001) says "We decided to use Stripe Connect"
+2. **references** points to key messages that made the decision ([45, 46, 47])
+3. **message_range** shows the full chronological span of the discussion (messages 42-50)
+4. **AI can expand** by reading messages[42:50] to get complete context
+
+#### Chronological Search Algorithms
+
+##### 1. Expand Summary Item (by ID)
+
+```python
+def expand_summary_item(devsession, summary_item_id):
+    """
+    Given a summary item ID, load the full chronological context
+    """
+    # Find summary item
+    summary_item = find_summary_item(devsession.summary, summary_item_id)
+
+    # Get chronological range
+    start_idx = summary_item.message_range.start_index
+    end_idx = summary_item.message_range.end_index
+
+    # Extract messages in chronological order
+    messages = devsession.conversation[start_idx-1:end_idx]  # 1-based to 0-based
+
+    return {
+        "summary": summary_item,
+        "full_context": messages,
+        "chronological_position": f"Messages {start_idx}-{end_idx} of {len(devsession.conversation)}"
+    }
+```
+
+**Example usage:**
+```python
+# AI reads summary: "Decision dec_001: Use Stripe Connect"
+# AI needs more context, asks for expansion
+context = expand_summary_item(session, "dec_001")
+
+# Returns:
+# - summary: The decision summary
+# - full_context: All 9 messages (42-50) in chronological order
+# - position: "Messages 42-50 of 187"
+```
+
+##### 2. Keyword Search with Chronological Position
+
+```python
+def search_with_chronology(devsession, keyword):
+    """
+    Search for keyword and return results with chronological context
+    """
+    results = []
+
+    for msg in devsession.conversation:
+        if keyword.lower() in msg.content.lower():
+            # Find which summary item(s) this message belongs to
+            summary_items = find_summary_items_for_message(
+                devsession.summary,
+                msg.index
+            )
+
+            results.append({
+                "message": msg,
+                "index": msg.index,
+                "timestamp": msg.timestamp,
+                "summary_context": summary_items,  # What was happening here?
+                "chronological_position": f"{msg.index}/{len(devsession.conversation)}"
+            })
+
+    return results
+```
+
+**Example usage:**
+```python
+# Search for "webhook"
+results = search_with_chronology(session, "webhook")
+
+# Returns:
+# [
+#   {
+#     "message": {"id": "msg_134", "content": "The webhook signature is failing..."},
+#     "index": 134,
+#     "summary_context": ["prob_001: Webhook signature verification failing"],
+#     "chronological_position": "134/187"
+#   },
+#   ...
+# ]
+```
+
+##### 3. Time-Based Range Query
+
+```python
+def query_time_range(devsession, start_time, end_time):
+    """
+    Get all messages and summary items in a time range
+    """
+    # Filter messages by timestamp
+    messages = [
+        msg for msg in devsession.conversation
+        if start_time <= parse_iso(msg.timestamp) <= end_time
+    ]
+
+    # Find summary items that overlap this range
+    summary_items = []
+    for item in all_summary_items(devsession.summary):
+        item_time = parse_iso(item.timestamp)
+        if start_time <= item_time <= end_time:
+            summary_items.append(item)
+
+    return {
+        "messages": messages,
+        "summary_items": summary_items,
+        "message_indices": [msg.index for msg in messages]
+    }
+```
+
+**Example usage:**
+```python
+# "What happened between 3pm and 4pm?"
+results = query_time_range(
+    session,
+    "2024-10-27T15:00:00Z",
+    "2024-10-27T16:00:00Z"
+)
+
+# Returns:
+# - messages: All messages in that hour
+# - summary_items: Decisions, code changes, problems in that hour
+# - message_indices: [85, 86, 87, ..., 142]
+```
+
+##### 4. Hybrid Vector + Chronological Search
+
+```python
+def hybrid_search(devsession, query, summary_item_id=None):
+    """
+    Combine vector similarity with chronological context
+    """
+    # If summary item specified, focus search in that chronological range
+    if summary_item_id:
+        summary_item = find_summary_item(devsession.summary, summary_item_id)
+        start_idx = summary_item.message_range.start_index
+        end_idx = summary_item.message_range.end_index
+        search_space = devsession.conversation[start_idx-1:end_idx]
+    else:
+        search_space = devsession.conversation
+
+    # Vector search within chronological range
+    query_embedding = embed(query)
+    results = vector_search(search_space, query_embedding, top_k=10)
+
+    # Sort by chronological order (preserve timeline)
+    results_chronological = sorted(results, key=lambda m: m.index)
+
+    return results_chronological
+```
+
+**Example usage:**
+```python
+# "Show me where we discussed webhook signatures"
+# AI first finds summary item: prob_001 (messages 130-142)
+# Then does vector search within that range
+results = hybrid_search(session, "webhook signature", "prob_001")
+
+# Returns messages 130-142, ranked by relevance, sorted chronologically
+```
+
+#### Benefits of Chronological Indexing
+
+**✅ Natural narrative flow**
+- Summaries are chronological stories
+- Reading full context preserves timeline
+- Easier to understand what happened and why
+
+**✅ Fast range queries**
+- `message_range.start_index` and `end_index` enable O(1) array slicing
+- No need to scan entire conversation
+- Efficient expansion of summary items
+
+**✅ Context preservation**
+- Each summary item knows its chronological position
+- AI can "rewind" to that point in the conversation
+- Understand what led up to a decision or problem
+
+**✅ Keyword search with context**
+- Find "webhook" → also know *when* in the session and *what* was happening
+- Results include summary context for immediate understanding
+
+**✅ Multi-layer linking**
+- Layer 1 (project overview) → links to session IDs
+- Layer 2 (summary) → links to message ranges
+- Layer 3 (full conversation) → indexed chronologically
+- All three layers connected via chronology
+
+#### Implementation Guidelines
+
+**When generating summaries:**
+1. Process conversation chronologically
+2. For each summary item, record:
+   - `references`: Key messages (most important)
+   - `message_range`: Full span of discussion (complete context)
+3. Use `index` field for fast array access
+
+**When loading context:**
+1. **Start with summary** (chronologically organized)
+2. **Expand specific items** using `message_range`
+3. **Combine with vector search** for semantic relevance
+4. **Preserve chronological order** in results
+
+**Storage optimization:**
+- `index` is redundant (can derive from array position) but included for clarity
+- `message_range` uses both ID and index for flexibility
+- Most tools will use `start_index`/`end_index` for performance
 
 ### Artifacts Object
 

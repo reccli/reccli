@@ -34,7 +34,13 @@ Output a JSON object with this structure:
       "reasoning": "Why this approach was chosen",
       "impact": "low" | "medium" | "high",
       "alternatives_considered": ["other options that were discussed"],
-      "references": ["msg_123", "msg_124"]  // Message IDs where this was discussed
+      "references": ["msg_045", "msg_046", "msg_047"],  // Key messages where decision was made
+      "message_range": {
+        "start": "msg_042",       // First message in this discussion
+        "end": "msg_050",         // Last message in this discussion
+        "start_index": 42,        // Numeric index for fast array access
+        "end_index": 50
+      }
     }
   ],
   "code_changes": [
@@ -44,21 +50,39 @@ Output a JSON object with this structure:
       "type": "feature" | "bugfix" | "refactor" | "test" | "docs",
       "lines_added": 45,
       "lines_removed": 12,
-      "references": ["msg_089", "msg_090"]
+      "references": ["msg_089", "msg_090"],  // Key messages where code was written
+      "message_range": {
+        "start": "msg_085",
+        "end": "msg_095",
+        "start_index": 85,
+        "end_index": 95
+      }
     }
   ],
   "problems_solved": [
     {
       "problem": "Clear description of the issue",
       "solution": "How it was resolved",
-      "references": ["msg_134", "msg_135"]
+      "references": ["msg_134", "msg_135"],  // Key messages with solution
+      "message_range": {
+        "start": "msg_130",
+        "end": "msg_142",
+        "start_index": 130,
+        "end_index": 142
+      }
     }
   ],
   "open_issues": [
     {
       "issue": "What needs attention",
       "severity": "low" | "medium" | "high",
-      "references": ["msg_201"]
+      "references": ["msg_201"],  // Key messages identifying the issue
+      "message_range": {
+        "start": "msg_198",
+        "end": "msg_205",
+        "start_index": 198,
+        "end_index": 205
+      }
     }
   ],
   "next_steps": [
@@ -66,7 +90,13 @@ Output a JSON object with this structure:
       "action": "What should be done next",
       "priority": 1-5,
       "estimated_time": "30 minutes" | "2 hours" | etc,
-      "references": ["msg_215"]
+      "references": ["msg_215"],  // Key messages discussing next steps
+      "message_range": {
+        "start": "msg_212",
+        "end": "msg_218",
+        "start_index": 212,
+        "end_index": 218
+      }
     }
   ]
 }
@@ -74,7 +104,11 @@ Output a JSON object with this structure:
 Rules:
 - Be concise but complete
 - Capture WHY decisions were made, not just WHAT
-- Include message references so full context can be retrieved later
+- Include TWO types of references:
+  * `references`: Key messages (most important, usually 2-5 messages)
+  * `message_range`: Full chronological span of the discussion (usually broader)
+- The message_range should capture the complete context from when the topic started to when it ended
+- Message indices are 1-based (first message is index 1, not 0)
 - Classify impact/severity/priority accurately
 - If nothing significant in a category, use empty array []
 - Focus on technical content, not conversational pleasantries
@@ -85,12 +119,25 @@ Rules:
 ```
 Summarize this development session:
 
-[Full conversation with message IDs]
-msg_001 (user): Let's implement the export dialog
-msg_002 (assistant): I'll help you implement that...
+[Full conversation with message IDs and indices]
+msg_001 (index: 1, user): Let's implement the export dialog
+msg_002 (index: 2, assistant): I'll help you implement that...
+msg_003 (index: 3, tool): Created file: export_dialog.py
+...
+msg_042 (index: 42, user): Should we use a modal or a sidebar?
+msg_043 (index: 43, assistant): Let me think about the UX trade-offs...
+msg_045 (index: 45, assistant): I recommend a modal because...
+msg_046 (index: 46, user): That makes sense, let's go with modal
+msg_047 (index: 47, tool): Updated export_dialog.py
+msg_050 (index: 50, user): Great, moving on to file format selection
+...
 [... rest of conversation ...]
 
-Generate the summary JSON.
+Generate the summary JSON with message_range for each item.
+
+Remember:
+- `references` = key messages (e.g., [45, 46, 47] where decision was made)
+- `message_range` = full discussion span (e.g., 42-50 for the entire modal discussion)
 ```
 
 ## 2. Project Overview Initialization (Smart Scan)
