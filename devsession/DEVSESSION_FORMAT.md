@@ -6,10 +6,11 @@
 
 ## Overview
 
-The `.devsession` format is an open standard for storing AI-assisted development sessions with **dual-layer intelligent context management**. It enables:
+The `.devsession` format is an open standard for storing AI-assisted development sessions with **three-layer intelligent context management**. It enables:
 
-- **Dual-layer architecture** - Lightweight summary + full context with vectors
+- **Three-layer architecture** - Project overview + session summary + full context with vectors
 - **Lossless preservation** of full conversation history
+- **Automatic project documentation** that evolves with each session
 - **Intelligent summarization** for efficient context loading
 - **Vector embeddings** for semantic search and precise retrieval
 - **Multi-session synthesis** for compound context
@@ -31,31 +32,42 @@ Chosen for:
 
 ## File Structure
 
-`.devsession` files are JSON documents with a **dual-layer architecture**:
+`.devsession` files are JSON documents with a **three-layer architecture**:
 
 ```json
 {
   "format": "devsession",
   "version": "1.0.0",
   "metadata": { },
-  "summary": { },           // Layer 1: Always loaded (lightweight)
-  "conversation": [ ],      // Layer 2: Full context with embeddings
+  "project_overview": { },  // Layer 1: Project-level context (macro)
+  "summary": { },           // Layer 2: Session summary (this session)
+  "conversation": [ ],      // Layer 3: Full context with embeddings (micro)
   "vector_index": { },      // Vector search index
   "artifacts": { }
 }
 ```
 
-## Dual-Layer Architecture
+## Three-Layer Architecture
 
-### Layer 1: Summary (Always Loaded)
+### Layer 1: Project Overview (Macro Context)
+- High-level project information (~300-500 tokens)
+- "What is this project?" - Purpose, architecture, tech stack
+- Key project-level decisions across all sessions
+- Session history and evolution over time
+- Updated incrementally with each session
+- **Provides macro perspective** - keeps LLM grounded in project goals
+
+### Layer 2: Session Summary (This Session)
 - Compact representation (~500-1000 tokens)
-- Current goals, decisions, key changes
+- "What happened today?" - Current session's work
+- Decisions, code changes, problems solved
 - Always provided to LLM as base context
-- Updated/appended during compaction
+- Generated at session end or during compaction
 
-### Layer 2: Full Context (On-Demand via Vector Search)
+### Layer 3: Full Context (Micro Details)
 - Complete conversation with embeddings
-- Semantic search enabled
+- "How did we do it?" - Every message, every detail
+- Semantic search enabled via vector embeddings
 - Only loaded when LLM needs specific details
 - Small radius retrieval around current problem
 
@@ -68,8 +80,9 @@ Chosen for:
 | `format` | string | Yes | Must be `"devsession"` |
 | `version` | string | Yes | Semantic version (e.g., `"1.0.0"`) |
 | `metadata` | object | Yes | Session metadata |
-| `summary` | object | No | AI-generated summary layer (Layer 1) |
-| `conversation` | array | Yes | Full message history with embeddings (Layer 2) |
+| `project_overview` | object | No | Project-level context (Layer 1) - automatically maintained |
+| `summary` | object | No | AI-generated session summary (Layer 2) |
+| `conversation` | array | Yes | Full message history with embeddings (Layer 3) |
 | `vector_index` | object | No | Vector search index metadata |
 | `artifacts` | object | No | Additional files/resources |
 
@@ -115,7 +128,267 @@ Chosen for:
 | `tags` | array[string] | No | Searchable tags |
 | `related_sessions` | array[string] | No | Links to other sessions |
 
-### Summary Object
+### Project Overview Object (Layer 1)
+
+The project overview provides **macro-level context** that persists and evolves across all sessions. This is **automatically maintained** - the AI updates it incrementally with each session.
+
+**Key Benefits:**
+- 🎯 **Grounding** - Keeps AI focused on project goals, not just current task
+- 📚 **Automatic Documentation** - Project documentation that writes itself
+- 🔄 **Evolution Tracking** - See how project architecture and decisions evolved
+- 🚀 **Onboarding** - New contributors (or you after 3 months) get instant context
+
+```json
+{
+  "project_overview": {
+    "last_updated": "session-003",
+    "updated_at": "2024-10-27T18:30:00Z",
+    "project": {
+      "name": "RecCli",
+      "description": "CLI terminal recorder with AI-powered session management using .devsession format",
+      "purpose": "Enable developers to record, summarize, and intelligently continue terminal sessions",
+      "repository": "https://github.com/willluecke/RecCli",
+      "license": "MIT",
+      "status": "active_development"
+    },
+    "tech_stack": {
+      "languages": ["Python"],
+      "frameworks": ["tkinter"],
+      "key_dependencies": ["asciinema", "anthropic"],
+      "embedding_model": "text-embedding-3-small",
+      "llm_model": "claude-sonnet-4.5"
+    },
+    "architecture": {
+      "overview": "Two-component system: RecCli (recording UI) + .devsession (intelligent format)",
+      "components": [
+        {
+          "name": "RecCli",
+          "purpose": "Terminal recording with 2-button UI (REC/STOP + Settings)",
+          "tech": "Python, tkinter, asciinema"
+        },
+        {
+          "name": ".devsession Format",
+          "purpose": "Three-layer context: project overview + session summary + full conversation with vectors",
+          "tech": "JSON, vector embeddings, semantic search"
+        }
+      ],
+      "key_patterns": [
+        "Dual-layer UI (simple recorder + intelligent export)",
+        "Preemptive compaction (190K threshold before Claude Code's 200K limit)",
+        "Vector search for context retrieval (cosine similarity)",
+        "Incremental embedding generation (build as you go)"
+      ]
+    },
+    "key_decisions": [
+      {
+        "id": "decision_001",
+        "date": "2024-10-27",
+        "session": "session-001",
+        "decision": "Make RecCli open source (MIT license)",
+        "reasoning": "Build developer credibility, monetize other projects instead",
+        "impact": "high",
+        "alternatives_considered": ["Freemium model", "One-time purchase"],
+        "current_status": "implemented"
+      },
+      {
+        "id": "decision_002",
+        "date": "2024-10-27",
+        "session": "session-002",
+        "decision": "Use three-layer .devsession format (project + summary + conversation)",
+        "reasoning": "Better than compaction algorithms, maintains all context with semantic search",
+        "impact": "high",
+        "alternatives_considered": ["Simple markdown logs", "Use Claude Code's built-in compaction"],
+        "current_status": "implemented"
+      },
+      {
+        "id": "decision_003",
+        "date": "2024-10-27",
+        "session": "session-003",
+        "decision": "Preemptive compaction at 190K tokens (before Claude Code's 200K limit)",
+        "reasoning": "Maintain control over compaction strategy, preserve .devsession format",
+        "impact": "high",
+        "alternatives_considered": ["Let Claude Code handle compaction", "Manual save prompts"],
+        "current_status": "designed"
+      }
+    ],
+    "project_phases": {
+      "current_phase": "Architecture & Documentation",
+      "completed_phases": [
+        {
+          "phase": "Open Source Conversion",
+          "completed": "2024-10-27",
+          "sessions": ["session-001"],
+          "summary": "Removed payment infrastructure, added MIT license, updated README"
+        },
+        {
+          "phase": "Format Design",
+          "completed": "2024-10-27",
+          "sessions": ["session-002"],
+          "summary": "Designed .devsession format with dual-layer architecture and vector embeddings"
+        }
+      ],
+      "next_milestones": [
+        {
+          "milestone": "MVP - Export Dialog",
+          "target": "Q4 2024",
+          "description": "Add export dialog to RecCli with .devsession format support",
+          "priority": "high"
+        },
+        {
+          "milestone": "Vector Embeddings",
+          "target": "Q1 2025",
+          "description": "Generate embeddings during recording for semantic search",
+          "priority": "medium"
+        },
+        {
+          "milestone": "Smart Context Loading",
+          "target": "Q2 2025",
+          "description": "Implement vector search and intelligent context loading",
+          "priority": "medium"
+        }
+      ]
+    },
+    "sessions": [
+      {
+        "id": "session-001",
+        "date": "2024-10-27",
+        "duration_hours": 1.5,
+        "focus": "Open source conversion",
+        "key_outcomes": ["Removed payment code", "Added MIT license", "Updated documentation"]
+      },
+      {
+        "id": "session-002",
+        "date": "2024-10-27",
+        "duration_hours": 2.0,
+        "focus": ".devsession format design",
+        "key_outcomes": ["Designed three-layer architecture", "Created format specification", "Built example files"]
+      },
+      {
+        "id": "session-003",
+        "date": "2024-10-27",
+        "duration_hours": 1.5,
+        "focus": "Context loading & compaction strategy",
+        "key_outcomes": ["Defined implicit goal approach", "Designed preemptive compaction", "Updated documentation"]
+      }
+    ],
+    "statistics": {
+      "total_sessions": 3,
+      "total_duration_hours": 5.0,
+      "files_created": 12,
+      "files_modified": 8,
+      "lines_of_code": 2400,
+      "documentation_pages": 6
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `last_updated` | string | Session ID that last updated this overview |
+| `updated_at` | string | Timestamp of last update |
+| `project` | object | Basic project information |
+| `tech_stack` | object | Technologies, frameworks, dependencies |
+| `architecture` | object | System design, components, patterns |
+| `key_decisions` | array | Project-level decisions across all sessions |
+| `project_phases` | object | Current phase, completed work, next milestones |
+| `sessions` | array | History of all sessions with key outcomes |
+| `statistics` | object | Aggregate statistics across all sessions |
+
+#### How Project Overview Updates:
+
+```python
+def update_project_overview(previous_session, current_session):
+    """
+    Automatically update project overview based on current session
+    Called at the end of each session
+    """
+    overview = previous_session.project_overview.copy()
+
+    # Add current session to history
+    overview['sessions'].append({
+        'id': current_session.id,
+        'date': current_session.date,
+        'duration_hours': current_session.duration / 3600,
+        'focus': infer_session_focus(current_session.summary),
+        'key_outcomes': extract_key_outcomes(current_session.summary)
+    })
+
+    # Extract project-level decisions (AI classifies importance)
+    for decision in current_session.summary.decisions:
+        if is_project_level(decision):  # High impact, affects architecture
+            overview['key_decisions'].append({
+                'id': f"decision_{len(overview['key_decisions']) + 1:03d}",
+                'date': current_session.date,
+                'session': current_session.id,
+                'decision': decision.decision,
+                'reasoning': decision.reasoning,
+                'impact': decision.impact,
+                'alternatives_considered': decision.get('alternatives', []),
+                'current_status': 'implemented'
+            })
+
+    # Update tech stack if new technologies added
+    new_tech = extract_new_technologies(current_session)
+    if new_tech:
+        overview['tech_stack']['key_dependencies'].extend(new_tech)
+
+    # Update architecture if structural changes made
+    architecture_changes = extract_architecture_changes(current_session)
+    if architecture_changes:
+        overview['architecture']['key_patterns'].extend(architecture_changes)
+
+    # Update project phase based on work done
+    current_phase = infer_current_phase(
+        overview['sessions'],
+        current_session.summary.next_steps
+    )
+    if current_phase != overview['project_phases']['current_phase']:
+        # Phase completed, move to next
+        overview['project_phases']['completed_phases'].append({
+            'phase': overview['project_phases']['current_phase'],
+            'completed': current_session.date,
+            'sessions': get_sessions_in_phase(overview['sessions']),
+            'summary': summarize_phase_work(overview['sessions'])
+        })
+        overview['project_phases']['current_phase'] = current_phase
+
+    # Update statistics
+    overview['statistics']['total_sessions'] += 1
+    overview['statistics']['total_duration_hours'] += current_session.duration / 3600
+    overview['statistics']['files_modified'] += count_files_modified(current_session)
+
+    # Update metadata
+    overview['last_updated'] = current_session.id
+    overview['updated_at'] = current_session.created_at
+
+    return overview
+```
+
+#### Benefits of Automatic Project Overview:
+
+**📚 Self-Writing Documentation**
+- No manual README updates needed
+- Architecture documentation stays current
+- Tech stack tracked automatically
+- Decision log maintained
+
+**🎯 Macro Perspective**
+- LLM understands project purpose, not just current task
+- Keeps work aligned with project goals
+- Prevents scope creep
+
+**🔄 Evolution Tracking**
+- See how architecture evolved
+- Understand why decisions were made
+- Track project phases over time
+
+**🚀 Onboarding**
+- Return after 3 months? Full context instantly
+- New team member? Complete project understanding
+- Handoff? Zero knowledge loss
+
+### Summary Object (Layer 2)
 
 The summary is AI-generated and provides efficient context for loading.
 
@@ -249,7 +522,7 @@ Planned next actions.
 }
 ```
 
-### Conversation Array (Layer 2)
+### Conversation Array (Layer 3)
 
 Full message history with complete context **and vector embeddings** for semantic search.
 

@@ -4,8 +4,13 @@
 
 ### Core Principle
 **RecCli = Simple recording layer (UI)**
-**+ .devsession = Intelligent dual-layer format (data)**
+**+ .devsession = Intelligent three-layer format (data)**
 **+ Vector embeddings = Smart context retrieval (intelligence)**
+
+**Three-Layer Context:**
+- **Layer 1:** Project Overview (macro - what is this project?)
+- **Layer 2:** Session Summary (this session - what happened today?)
+- **Layer 3:** Full Conversation (micro - how did we do it?)
 
 ---
 
@@ -93,29 +98,73 @@ Recording:
 
 ---
 
-## .devsession: The Dual-Layer Format
+## .devsession: The Three-Layer Format
 
-### Layer 1: Summary (Always Loaded)
+### Layer 1: Project Overview (Macro Context)
 
-**Lightweight, always in context:**
+**Self-writing documentation - updated each session:**
+```json
+{
+  "project_overview": {
+    "project": {
+      "name": "RecCli",
+      "description": "CLI terminal recorder with AI-powered session management",
+      "purpose": "Enable developers to record, summarize, and continue sessions intelligently"
+    },
+    "architecture": {
+      "overview": "RecCli (recording UI) + .devsession (intelligent format)",
+      "components": [
+        {"name": "RecCli", "purpose": "2-button UI for terminal recording"},
+        {"name": ".devsession", "purpose": "Three-layer context management"}
+      ]
+    },
+    "key_decisions": [
+      {
+        "decision": "Open source (MIT license)",
+        "reasoning": "Build credibility, monetize other projects",
+        "session": "session-001"
+      },
+      {
+        "decision": "Three-layer format with preemptive compaction",
+        "reasoning": "Better than compaction algorithms, maintain full control",
+        "session": "session-002"
+      }
+    ],
+    "project_phases": {
+      "current_phase": "Architecture & Documentation",
+      "next_milestone": "MVP - Export Dialog"
+    },
+    "sessions": [
+      {"id": "session-001", "focus": "Open source conversion"},
+      {"id": "session-002", "focus": ".devsession format design"},
+      {"id": "session-003", "focus": "Context loading strategy"}
+    ]
+  }
+}
+```
+
+**Project overview is compact (~300-500 tokens)** - Provides macro context always
+
+### Layer 2: Session Summary (This Session)
+
+**What happened today - generated at session end:**
 ```json
 {
   "summary": {
-    "current_goal": "Build Stripe webhook integration",
+    "session_goal": "Build Stripe webhook integration",
     "decisions": [
       {
         "id": "dec_001",
         "decision": "Use req.rawBody for signature verification",
         "reasoning": "Body-parser modifies req.body",
-        "vector_id": "vec_dec_001"
+        "references": ["msg_045", "msg_046"]
       }
     ],
     "code_changes": [
       {
         "id": "code_001",
         "files": ["api/webhooks.js"],
-        "description": "Added signature verification",
-        "vector_id": "vec_code_001"
+        "description": "Added signature verification"
       }
     ],
     "problems_solved": [...],
@@ -125,9 +174,9 @@ Recording:
 }
 ```
 
-**Summary is compact (500-1000 tokens)** - Always loaded into LLM context
+**Summary is compact (500-1000 tokens)** - Current session context
 
-### Layer 2: Full Context with Vectors
+### Layer 3: Full Context with Vectors
 
 **Full conversation + vector embeddings:**
 ```json
@@ -178,62 +227,88 @@ Recording:
 ### When Loading a .devsession:
 
 ```python
-def load_devsession_context(session_file, current_problem):
+def load_devsession_context(session_file, recent_messages):
     """
-    Load dual-layer context for LLM
+    Load three-layer context for LLM
     """
-    # 1. Always load summary layer (cheap)
+    session = load_devsession(session_file)
+
+    # 1. Always load project overview (macro context)
+    project_overview = session.project_overview  # ~300 tokens
+
+    # 2. Always load session summary (this session context)
     summary = session.summary  # ~500 tokens
 
-    # 2. Vector search around current problem
-    problem_embedding = embed(current_problem)
+    # 3. Vector search using recent messages as implicit goal
+    query_embedding = embed_messages(recent_messages)
     similar_messages = vector_search(
-        query=problem_embedding,
+        query=query_embedding,
         top_k=10,  # Small radius
         session=session.conversation
     )
 
-    # 3. Get immediate context (recent messages)
-    recent_context = session.conversation[-20:]  # Last 20 messages
+    # 4. Include recent context (continuity)
+    recent_context = recent_messages  # ~500 tokens
 
-    # 4. Combine into LLM context
+    # 5. Combine into LLM context
     context = {
-        "summary": summary,  # Full summary
-        "relevant_history": similar_messages,  # Vector matches
-        "recent": recent_context  # Immediate context
+        "project_overview": project_overview,  # Macro: What is this project?
+        "summary": summary,  # This session: What happened today?
+        "relevant_history": similar_messages,  # Micro: Related earlier work
+        "recent": recent_context  # Current: What we're doing now
     }
 
-    return context  # Total: ~2000 tokens instead of 50,000
+    return context  # Total: ~2000 tokens instead of 50,000+
 ```
 
 ### Example Usage:
 
+**Scenario: Return to project after 3 months**
+
 ```
-User: "The webhook is failing again with a 400 error"
+User: "Continue working on RecCli"
 
 LLM receives:
-1. Summary layer (500 tokens):
-   - Current goal: Webhook integration
-   - Decision: Use req.rawBody
-   - Problem solved: Signature verification
+1. Project Overview layer (~300 tokens):
+   - Name: RecCli - CLI terminal recorder with AI session management
+   - Architecture: RecCli (UI) + .devsession (format)
+   - Key decisions:
+     * Open source (MIT) - build credibility
+     * Three-layer format - better than compaction
+     * Preemptive compaction at 190K tokens
+   - Current phase: Architecture & Documentation
+   - Next milestone: MVP - Export Dialog
+   - 3 sessions completed
 
-2. Vector search results (10 messages, ~1000 tokens):
-   - msg_167: "Webhook signature verification failing"
-   - msg_168: "Body-parser is consuming req.body"
-   - msg_169: "Use req.rawBody for verification"
-   - msg_178: "Created middleware/rawBody.js"
-   - (6 more related messages)
+2. Session Summary layer (~500 tokens):
+   - Last session goal: Define compaction strategy
+   - Decisions: Preemptive compaction, implicit goal from recent messages
+   - Code changes: Updated CONTEXT_LOADING.md, ARCHITECTURE.md
+   - Open issues: None
+   - Next steps: Implement export dialog
 
-3. Recent context (20 messages, ~500 tokens):
-   - Last 20 messages from current session
+3. Vector search results (~700 tokens):
+   (Based on recent conversation about export dialog)
+   - msg_045: "Export dialog shows format options"
+   - msg_067: ".devsession format with three layers"
+   - msg_089: "Generate embeddings on export"
+
+4. Recent context (~500 tokens):
+   - Last 20 messages discussing next steps
 
 Total context: ~2000 tokens
-Full session: 50,000 tokens saved in vector index
+Full project history: 50,000+ tokens saved with embeddings
 
-LLM: "I see we already solved this signature issue.
-      The solution was to use req.rawBody. Let me check
-      if you're applying it correctly..."
+LLM: "RecCli is your open-source CLI recorder with .devsession format.
+      You've completed the architecture design phase across 3 sessions.
+      Next milestone is implementing the MVP export dialog. The design
+      is complete - you need to add the UI to reccli.py with format
+      selection (.txt, .md, .devsession) and optional embedding generation.
+
+      Should we start implementing the export dialog now?"
 ```
+
+**Key Benefit:** LLM has full context from macro (project goals) to micro (implementation details) in just ~2000 tokens.
 
 ---
 
@@ -688,40 +763,49 @@ def load_context(session_file, current_query):
 - Zero friction = high adoption
 
 ### ✅ Intelligent
-- Summary layer = always in context
-- Vector search = precise retrieval
-- Dual-layer = best of both worlds
+- Three-layer context = macro + micro perspective
+- Project overview = keeps work aligned with goals
+- Session summary = current work context
+- Vector search = precise retrieval from full history
+- Automatic documentation = project docs write themselves
 
 ### ✅ Scalable
 - Incremental embedding (build as you go)
-- Small summary (500 tokens)
+- Small context layers (300 + 500 + 1000 tokens)
 - Large history (50K+ tokens) searchable
+- Cross-session intelligence (project evolution tracked)
 
 ### ✅ Better Than Alternatives
-- **vs Raw recording**: Has structure
-- **vs Compaction**: Nothing lost
-- **vs Big context windows**: More focused, cheaper
+- **vs Raw recording**: Has structure + intelligence
+- **vs Compaction**: Nothing lost, everything searchable
+- **vs Big context windows**: More focused, cheaper, macro awareness
+- **vs Manual docs**: Documentation updates itself
 
 ---
 
 ## Cost Analysis
 
 ### Storage:
-- Summary: ~2 KB
+- Project overview: ~2 KB (updated each session)
+- Session summary: ~2 KB
 - Full conversation: ~500 KB
 - Embeddings (1536-dim × 200 messages): ~1.2 MB
 **Total per session: ~1.7 MB** (acceptable)
 
 ### API Costs (per session):
 - Embedding generation: 50K tokens × $0.0001 = **$0.005**
-- Summary generation: 1 call × $0.001 = **$0.001**
-**Total per session: ~$0.006** (negligible)
+- Session summary generation: 1 call × $0.001 = **$0.001**
+- Project overview update: 1 call × $0.0005 = **$0.0005**
+**Total per session: ~$0.0065** (negligible)
 
 ### Context Loading:
-- Summary: 500 tokens (always)
-- Vector results: 1000 tokens (on demand)
-- Recent context: 500 tokens
+- Project overview: 300 tokens (always - macro context)
+- Session summary: 500 tokens (always - this session)
+- Vector results: 700 tokens (on demand - relevant history)
+- Recent context: 500 tokens (continuity)
 **Total: ~2000 tokens vs 50,000 raw** (96% reduction)
+
+**Key advantage:** Macro + micro perspective in same token budget
 
 ---
 
