@@ -2,15 +2,42 @@
 
 ## The Core Problem
 
-When loading a `.devsession` file to continue work, what context should the LLM receive?
+When **compacting a long session** (approaching 180K+ tokens), what context should remain?
 
 **Constraints:**
-- Can't load full 50K token conversation (too expensive, too noisy)
+- Can't keep full 180K tokens (at limit)
 - Summary alone might miss critical details
-- Need to be relevant to current problem
-- Must be better than raw context or compaction
+- Need relevance to what user is currently working on
+- Must maintain conversation continuity
 
-**Goal:** Load ~2000 tokens that give LLM the RIGHT context to continue effectively.
+**Goal:** Compact 180K tokens → 2K tokens with the RIGHT context to continue seamlessly.
+
+---
+
+## The Strategy: Implicit Goal from Recent Messages
+
+**Key Insight:** The user's "current goal" is implicit in their recent messages. Use those as the vector search query.
+
+### The Flow:
+
+```
+BEFORE COMPACTION (180K tokens):
+├─ [Messages 1-180]: Historical conversation
+└─ [Messages 181-200]: Current work ← This IS the goal
+
+COMPACTION PROCESS:
+1. Extract recent messages (last 20)
+2. Embed them as query vector
+3. Search earlier messages for semantic similarity
+4. Generate summary of full session
+
+AFTER COMPACTION (2K tokens):
+├─ Summary (500 tokens): What happened overall
+├─ Recent messages (500 tokens): What we're doing RIGHT NOW
+└─ Vector matches (1000 tokens): Related earlier context
+```
+
+**No explicit goal needed - recent work defines relevance automatically.**
 
 ---
 
@@ -51,36 +78,38 @@ When loading a `.devsession` file to continue work, what context should the LLM 
 ## Implementation: The Algorithm
 
 ```python
-def load_context_for_continuation(
-    devsession_file,
-    current_goal,
+def compact_session_intelligently(
+    session,
+    num_recent_messages=20,
     max_tokens=2000
 ):
     """
-    Load optimal context for continuing a dev session
+    Compact a session by extracting relevant context using recent messages as query
 
     Args:
-        devsession_file: Path to .devsession file
-        current_goal: User's current problem/objective
+        session: Loaded .devsession session object
+        num_recent_messages: Number of recent messages to use as implicit goal
         max_tokens: Maximum context to load (default 2000)
 
     Returns:
-        Structured context for LLM
+        Compacted context for LLM continuation
     """
 
-    session = load_devsession(devsession_file)
     context = {}
 
     # LAYER 1: Always load summary
     context['summary'] = session.summary
     tokens_used = count_tokens(session.summary)
 
-    # LAYER 2: Vector search around current goal
-    goal_embedding = embed(current_goal)
+    # LAYER 2: Vector search using recent messages as implicit goal
+    recent_for_query = session.conversation[-num_recent_messages:]
+    goal_embedding = embed_messages(recent_for_query)
 
-    # Search conversation for semantic similarity
+    # Search earlier conversation for semantic similarity
+    # (exclude the recent messages we used as query)
+    earlier_messages = session.conversation[:-num_recent_messages]
     similar_messages = vector_search(
-        vectors=session.conversation,
+        vectors=earlier_messages,
         query=goal_embedding,
         top_k=15,
         threshold=0.7  # Cosine similarity threshold
@@ -96,14 +125,9 @@ def load_context_for_continuation(
     tokens_used += count_tokens(similar_messages[:10])
 
     # LAYER 3: Recent context (conversational continuity)
-    recent_messages = session.conversation[-20:]
-
-    # Remove duplicates if already in relevant_history
-    recent_messages = [m for m in recent_messages
-                      if m.id not in [r.id for r in similar_messages]]
-
-    context['recent_context'] = recent_messages
-    tokens_used += count_tokens(recent_messages)
+    # Use the same recent messages that defined our query
+    context['recent_context'] = recent_for_query
+    tokens_used += count_tokens(recent_for_query)
 
     # LAYER 4: Linked context (follow references)
     # If summary references specific decisions/problems,
@@ -180,23 +204,25 @@ def get_linked_messages(session, summary, max_messages=5):
 
 ## Example: How It Works in Practice
 
-### Scenario: User Returns After 3 Days
+### Scenario: Session Hitting Context Limit During Active Debugging
 
-**Session Summary:**
+**Session State (180K tokens):**
 - Built Stripe webhook integration (2 hours, 187 messages)
 - Key decision: Use req.rawBody for signature verification
 - Problem solved: Body-parser was consuming request
 - Open issue: Need error handling for failed transfers
 
-**User's Current Goal (Day 4):**
+**Recent Messages (messages 168-187) show:**
 ```
-"The webhook is failing again with a 400 error.
- Not sure if it's the same signature issue."
+msg_168: "The webhook is failing again with a 400 error"
+msg_169: "Let me check the signature verification"
+msg_170: "It looks like the same issue from before"
+msg_171-187: [debugging conversation continues...]
 ```
 
-### Context Loading Process:
+### Compaction Process:
 
-**Step 1: Load Summary (500 tokens)**
+**Step 1: Generate Summary (500 tokens)**
 ```
 Summary loaded:
 - Goal was: Build Stripe webhook integration
@@ -205,86 +231,77 @@ Summary loaded:
 - Open: Error handling needed
 ```
 
-**Step 2: Vector Search (1000 tokens)**
+**Step 2: Extract Recent Messages as Query (implicit goal)**
 ```
-Query: "webhook failing 400 error signature issue"
-Embedding: [0.234, -0.567, ...]
+Messages 168-187 (last 20 messages):
+"webhook failing 400 error signature issue..."
+"debugging continues..."
+
+Embed these together → Query vector: [0.234, -0.567, ...]
+```
+
+**Step 3: Vector Search Earlier Messages (1000 tokens)**
+```
+Search messages 1-167 for semantic similarity to recent work
 
 Top matches (by similarity + importance):
-1. msg_167: "Webhook signature verification failing with 400" (0.92)
-2. msg_168: "Body-parser is consuming req.body" (0.89)
-3. msg_169: "Need to use req.rawBody" (0.87)
-4. msg_178: "Created middleware/rawBody.js" (0.85)
+1. msg_45: "Initial webhook signature verification setup" (0.91)
+2. msg_67: "Body-parser is consuming req.body" (0.89)
+3. msg_68: "Need to use req.rawBody" (0.87)
+4. msg_78: "Created middleware/rawBody.js" (0.85)
 5. msg_134: "Webhook authentication setup" (0.78)
-... (10 total messages)
-```
-
-**Step 3: Recent Context (400 tokens)**
-```
-Last 20 messages from session:
-- Final testing discussion
-- "Next step: test end-to-end flow"
-- "Should add error handling"
+... (10 total messages from earlier in session)
 ```
 
 **Step 4: Linked Context (from summary references)**
 ```
-Summary references msg_167-180 for problem_solved.
-Load those as thread: [msg_167, msg_168, msg_169, msg_178, msg_179, msg_180]
+Summary references msg_45-78 for the original problem.
+Load those as thread for full context.
 ```
 
-### What LLM Receives:
+### Compacted Context (2K tokens):
 
 ```
-CONTEXT FOR CONTINUATION:
+COMPACTED CONTEXT FOR CONTINUATION:
 
-=== SUMMARY (Day 3) ===
+=== SUMMARY ===
 Goal: Built Stripe webhook integration
-Decision: Use req.rawBody for signature verification (reasoning: body-parser modifies req.body)
-Problem Solved: Signature verification (msg_167-180)
-Open: Error handling for failed transfers
+Decision: Use req.rawBody for signature verification
+  Reasoning: body-parser modifies req.body causing signature failures
+Problem Solved: Initial signature verification (msg_45-78)
+Open Issues: Need error handling for failed transfers
 
-=== RELEVANT HISTORY (Vector Matches) ===
-msg_167: "The webhook signature verification is failing with a 400 error"
-msg_168: "This is because body-parser consumes req.body. Need raw body."
-msg_169: "Solution: Use req.rawBody for stripe.webhooks.constructEvent()"
-msg_178: [code] Created middleware/rawBody.js
-[+ 6 more related messages]
+=== RELEVANT EARLIER HISTORY (Vector Matches) ===
+msg_45: "Setting up Stripe webhook signature verification"
+msg_67: "Body-parser consumes req.body before we can verify signature"
+msg_68: "Solution: Use req.rawBody for stripe.webhooks.constructEvent()"
+msg_78: [code] Created middleware/rawBody.js to preserve original body
+[+ 6 more related messages from earlier work]
 
-=== RECENT CONTEXT (Last session end) ===
-msg_205: "Great! Webhook is working now."
-msg_210: "Next steps: test end-to-end flow and add error handling"
-msg_215: "Should we test it now?"
+=== RECENT WORK (Messages 168-187) ===
+msg_168: "The webhook is failing again with a 400 error"
+msg_169: "Let me check the signature verification"
+msg_170: "It looks like the same issue from before"
+msg_171: "Checking if rawBody middleware is properly applied..."
+[... 17 more recent messages showing current debugging]
 
-=== CURRENT PROBLEM ===
-User: "The webhook is failing again with a 400 error.
-      Not sure if it's the same signature issue."
+=== NOW CONTINUE ===
+Session compacted: 180K → 2K tokens
+LLM has context of original solution + current debugging
 ```
 
-**Total: ~2000 tokens**
+**Total: ~2000 tokens (from 180K)**
 
-### LLM Response:
+### What Happened:
 
-```
-I see we already solved a signature verification issue on Day 3.
-Let me check if you're using the rawBody middleware correctly.
+The LLM seamlessly continues working with:
+- **Summary**: High-level overview of what was accomplished
+- **Relevant earlier work**: Vector search found the original signature fix (msg_45-78)
+- **Recent context**: Current debugging attempt (msg_168-187)
 
-From the previous session (msg_178), we created middleware/rawBody.js
-that preserves the original request body.
+The recent messages implicitly defined the goal ("webhook failing, signature issue") without explicitly asking the user. The vector search automatically found related earlier work.
 
-The solution was:
-- Use req.rawBody instead of req.body
-- Apply this before body-parser runs
-
-Can you check:
-1. Is the rawBody middleware being used?
-2. Is it applied to the /webhooks route?
-3. What does the error message say specifically?
-
-[Has full context from vector search to help debug]
-```
-
-**LLM has exactly what it needs. No more, no less.**
+**Result:** Conversation continues naturally, LLM has exactly the context it needs to help debug, no interruption to ask "what are you working on?"
 
 ---
 
@@ -411,11 +428,15 @@ results = {
 ### Phase 1: Simple Strategy (MVP)
 ```python
 # Just summary + vector search + recent
-def load_context_simple(session, goal):
+def compact_simple(session, num_recent=20):
+    recent = session.conversation[-num_recent:]
+    query_embedding = embed_messages(recent)
+    earlier = session.conversation[:-num_recent]
+
     return {
         'summary': session.summary,
-        'relevant': vector_search(session, goal, top_k=10),
-        'recent': session.conversation[-15:]
+        'relevant': vector_search(earlier, query_embedding, top_k=10),
+        'recent': recent
     }
 ```
 **Ship this first. Test if it works.**
@@ -435,25 +456,26 @@ linked = get_linked_messages(session, summary)
 
 ### Phase 4: Dynamic Strategy Selection
 ```python
-# Auto-select strategy based on goal type
-strategy = classify_goal(goal)  # debugging, new_feature, etc.
-context = load_with_strategy(session, goal, strategy)
+# Auto-select strategy based on recent message patterns
+strategy = classify_recent_work(session.conversation[-20:])
+context = compact_with_strategy(session, strategy)
 ```
 
 ---
 
 ## Key Insight: Goal Relevance
 
-**You're right** - relevance to user's **current goal** is the primary factor.
+**The Key Insight:** Recent messages implicitly contain the current goal. No need to ask.
 
-The algorithm should:
-1. ✅ Embed the current goal/problem
-2. ✅ Find messages similar to that goal
-3. ✅ Boost important message types
-4. ✅ Include recent context for continuity
-5. ✅ Allow expansion via summary links
+The algorithm:
+1. ✅ Extract recent messages (what user is working on NOW)
+2. ✅ Embed those as the query vector (implicit goal)
+3. ✅ Find earlier messages similar to that work
+4. ✅ Boost important message types (decisions, code, problems)
+5. ✅ Include summary for high-level overview
+6. ✅ Keep recent messages for continuity
 
-**This gives focused, relevant context instead of everything or nothing.**
+**This gives focused, relevant context with zero friction.**
 
 ---
 
