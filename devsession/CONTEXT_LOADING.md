@@ -479,6 +479,262 @@ The algorithm:
 
 ---
 
+## Conditional Project Overview Loading
+
+### The Token Budget Problem
+
+With three-layer architecture, we need to manage token budget carefully:
+
+```
+Token budget: 2000 tokens
+
+Option A - Always load project overview:
+- Project overview: 300 tokens
+- Session summary: 500 tokens
+- Recent messages: 500 tokens
+= 1300 base tokens
+= Only 700 left for vector search (10 messages)
+
+Option B - Conditionally load project overview:
+- Session summary: 500 tokens
+- Recent messages: 500 tokens
+= 1000 base tokens
+= 1000 left for vector search (15 messages)
+```
+
+**Strategy:** Load project overview only when it's relevant, use saved tokens for more vector search results when deep in implementation.
+
+### When to Load Project Overview
+
+```python
+def should_load_project_overview(context):
+    """
+    Decide if project overview is relevant for current compaction
+    """
+    # ✅ Always load at session start
+    if context.is_session_start:
+        return True
+
+    # ✅ Load if user asks macro questions
+    if is_macro_query(context.recent_messages):
+        # "What is this project?"
+        # "What are we building?"
+        # "What's the architecture?"
+        return True
+
+    # ✅ Load if switching contexts
+    if is_context_switch(context.previous_work, context.current_work):
+        # Was debugging → now building new feature
+        # Was working on API → now working on UI
+        return True
+
+    # ✅ Load if project overview changed recently
+    if context.project_overview.last_updated in context.recent_sessions:
+        # New decision made in last 1-2 sessions
+        return True
+
+    # ✅ Load after long break
+    if days_since_last_session(context) > 7:
+        # Haven't worked on project in over a week
+        return True
+
+    # ❌ Skip if deep in implementation details
+    if is_deep_implementation_work(context.recent_messages):
+        # Debugging specific function
+        # Fixing typo
+        # Adjusting CSS
+        return False
+
+    # ❌ Skip for incremental work
+    if is_continuing_same_task(context):
+        # Mid-feature, same work as last 20 messages
+        return False
+
+    # Default: load it (safer to have macro context)
+    return True
+```
+
+### Implementation
+
+```python
+def compact_with_conditional_overview(session, recent_messages):
+    """
+    Smart compaction with conditional project overview
+    """
+    context = {
+        'recent': recent_messages,  # ~500 tokens (always)
+        'summary': session.summary  # ~500 tokens (always)
+    }
+
+    tokens_used = 1000
+
+    # Conditionally load project overview
+    if should_load_project_overview(session):
+        context['project_overview'] = session.project_overview
+        tokens_used += 300
+        vector_budget = 700  # Fewer vector results
+    else:
+        vector_budget = 1000  # More vector results
+
+    # Vector search with dynamic budget
+    query_embedding = embed_messages(recent_messages)
+
+    # Calculate top_k based on available budget
+    # Assume ~70 tokens per message
+    top_k = vector_budget // 70  # ~10-15 messages
+
+    context['relevant'] = vector_search(
+        session.conversation,
+        query_embedding,
+        top_k=top_k
+    )
+
+    return context  # ~2000 tokens total
+```
+
+### Examples
+
+#### Example 1: Session Start (Load Project Overview)
+
+```python
+Context:
+- is_session_start = True
+- User: "Continue working on RecCli"
+
+Decision: LOAD project overview
+- Project overview: 300 tokens ✓
+- Session summary: 500 tokens ✓
+- Recent messages: 500 tokens ✓
+- Vector search: 700 tokens (10 messages)
+Total: 2000 tokens
+
+Why: Session start needs macro context - what is this project,
+     where are we in development, what's the next milestone.
+```
+
+#### Example 2: Deep Implementation (Skip Project Overview)
+
+```python
+Context:
+- is_session_start = False
+- is_deep_implementation = True
+- Recent messages: All about debugging webhook signature issue
+
+Decision: SKIP project overview
+- Session summary: 500 tokens ✓
+- Recent messages: 500 tokens ✓
+- Vector search: 1000 tokens (15 messages)
+Total: 2000 tokens
+
+Why: Deep in debugging specific issue. Don't need to know "what is
+     RecCli" right now. Use extra 300 tokens for MORE debugging
+     context from vector search.
+```
+
+#### Example 3: Context Switch (Load Project Overview)
+
+```python
+Context:
+- is_session_start = False
+- is_context_switch = True
+- Previous work: Debugging webhooks
+- Current work: "Let's implement the export dialog"
+
+Decision: LOAD project overview
+- Project overview: 300 tokens ✓
+- Session summary: 500 tokens ✓
+- Recent messages: 500 tokens ✓
+- Vector search: 700 tokens (10 messages)
+Total: 2000 tokens
+
+Why: Switching from debugging to new feature. Need to re-ground
+     in project architecture and goals.
+```
+
+#### Example 4: Macro Question (Load Project Overview)
+
+```python
+Context:
+- Recent message: "What's our overall architecture again?"
+
+Decision: LOAD project overview
+- Project overview: 300 tokens ✓ (has architecture section!)
+- Session summary: 500 tokens ✓
+- Recent messages: 500 tokens ✓
+- Vector search: 700 tokens
+Total: 2000 tokens
+
+Why: User explicitly asking for macro context. Project overview
+     contains architecture details.
+```
+
+### Detection Heuristics
+
+```python
+def is_macro_query(recent_messages):
+    """Detect if user is asking project-level questions"""
+    macro_keywords = [
+        'project', 'architecture', 'what is', 'overview',
+        'purpose', 'goals', 'decisions', 'tech stack',
+        'how does', 'explain the', 'big picture'
+    ]
+
+    recent_text = ' '.join([m.content for m in recent_messages[-3:]])
+    return any(keyword in recent_text.lower() for keyword in macro_keywords)
+
+
+def is_context_switch(previous_work, current_work):
+    """Detect if switching between different areas of work"""
+    # Compare embeddings of work descriptions
+    prev_embedding = embed(previous_work.description)
+    curr_embedding = embed(current_work.description)
+
+    similarity = cosine_similarity(prev_embedding, curr_embedding)
+
+    # Low similarity = different contexts
+    return similarity < 0.7
+
+
+def is_deep_implementation_work(recent_messages):
+    """Detect if deep in implementation details"""
+    implementation_patterns = [
+        'debug', 'error', 'fix', 'bug', 'typo',
+        'line \\d+', 'function \\w+\\(',
+        'variable', 'import', 'syntax'
+    ]
+
+    recent_text = ' '.join([m.content for m in recent_messages[-10:]])
+
+    # Count implementation patterns
+    matches = sum(1 for pattern in implementation_patterns
+                  if re.search(pattern, recent_text, re.I))
+
+    # If 5+ implementation patterns in last 10 messages
+    return matches >= 5
+```
+
+### Benefits
+
+**✅ Optimized Token Usage**
+- Use 300 tokens for macro context when it matters
+- Use 300 tokens for MORE vector results when deep in work
+
+**✅ Context-Aware**
+- Session start? Get grounded in project
+- Deep in debugging? Get more debugging context
+- Switching features? Re-orient with project overview
+
+**✅ Flexible**
+- Default to loading (safer)
+- Skip when clearly not needed
+- User can override if needed
+
+**✅ Best of Both Worlds**
+- Macro perspective when needed
+- Maximum micro detail when deep in work
+
+---
+
 ## Next: Prove It Works
 
 Once implemented, we can benchmark:
