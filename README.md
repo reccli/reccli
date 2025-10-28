@@ -147,13 +147,26 @@ Contributions are welcome! Feel free to:
 
 ## Roadmap
 
-- [ ] Cloud sync for recordings (optional)
-- [ ] Team sharing features
-- [ ] AI-powered session analysis
-- [ ] VS Code extension
-- [ ] Terminal session search
+### Near-term
 - [ ] Playback in browser
 - [ ] Windows support
+- [ ] Session search and filtering
+
+### Future: .devsession Format
+RecCli is developing an open standard for AI coding sessions:
+- **`.devsession` files** - Structured format for storing AI coding sessions
+- **Smart summarization** - AI-generated context summaries for efficient loading
+- **Multi-session synthesis** - Load context from multiple sessions
+- **Section expansion** - Expand specific parts of conversation on demand
+
+This will enable better context management for AI coding tools (Claude Code, Cursor, etc.)
+
+[Read the format specification →](devsession/DEVSESSION_FORMAT.md)
+
+### Long-term
+- [ ] Cloud sync for recordings (optional)
+- [ ] Team sharing features
+- [ ] VS Code extension
 
 ## Tech Stack
 

@@ -16,6 +16,10 @@ recordings/
 *.cast
 *.script
 
+# DevSession files (may contain sensitive code/conversations)
+*.devsession
+!devsession/examples/*.devsession
+
 # Config
 .reccli/
 license.key
