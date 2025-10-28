@@ -6,10 +6,12 @@
 
 ## Overview
 
-The `.devsession` format is an open standard for storing AI-assisted development sessions with intelligent summarization. It enables:
+The `.devsession` format is an open standard for storing AI-assisted development sessions with **dual-layer intelligent context management**. It enables:
 
+- **Dual-layer architecture** - Lightweight summary + full context with vectors
 - **Lossless preservation** of full conversation history
 - **Intelligent summarization** for efficient context loading
+- **Vector embeddings** for semantic search and precise retrieval
 - **Multi-session synthesis** for compound context
 - **Tool-agnostic design** works with any AI coding assistant
 
@@ -29,18 +31,33 @@ Chosen for:
 
 ## File Structure
 
-`.devsession` files are JSON documents with the following structure:
+`.devsession` files are JSON documents with a **dual-layer architecture**:
 
 ```json
 {
   "format": "devsession",
   "version": "1.0.0",
   "metadata": { },
-  "summary": { },
-  "conversation": [ ],
+  "summary": { },           // Layer 1: Always loaded (lightweight)
+  "conversation": [ ],      // Layer 2: Full context with embeddings
+  "vector_index": { },      // Vector search index
   "artifacts": { }
 }
 ```
+
+## Dual-Layer Architecture
+
+### Layer 1: Summary (Always Loaded)
+- Compact representation (~500-1000 tokens)
+- Current goals, decisions, key changes
+- Always provided to LLM as base context
+- Updated/appended during compaction
+
+### Layer 2: Full Context (On-Demand via Vector Search)
+- Complete conversation with embeddings
+- Semantic search enabled
+- Only loaded when LLM needs specific details
+- Small radius retrieval around current problem
 
 ## Schema Definition
 
@@ -51,8 +68,9 @@ Chosen for:
 | `format` | string | Yes | Must be `"devsession"` |
 | `version` | string | Yes | Semantic version (e.g., `"1.0.0"`) |
 | `metadata` | object | Yes | Session metadata |
-| `summary` | object | No | AI-generated summary layer |
-| `conversation` | array | Yes | Full message history |
+| `summary` | object | No | AI-generated summary layer (Layer 1) |
+| `conversation` | array | Yes | Full message history with embeddings (Layer 2) |
+| `vector_index` | object | No | Vector search index metadata |
 | `artifacts` | object | No | Additional files/resources |
 
 ### Metadata Object
@@ -231,9 +249,9 @@ Planned next actions.
 }
 ```
 
-### Conversation Array
+### Conversation Array (Layer 2)
 
-Full message history with complete context.
+Full message history with complete context **and vector embeddings** for semantic search.
 
 ```json
 {
@@ -243,9 +261,11 @@ Full message history with complete context.
       "timestamp": "2024-10-27T14:30:45Z",
       "role": "user",
       "content": "Let's build the Stripe integration",
+      "embedding": [0.123, -0.456, 0.789, ...],  // 1536-dim vector
       "metadata": {
         "terminal_visible": true,
-        "files_open": ["api/orders.js"]
+        "files_open": ["api/orders.js"],
+        "tokens": 8
       }
     },
     {
@@ -253,6 +273,7 @@ Full message history with complete context.
       "timestamp": "2024-10-27T14:30:52Z",
       "role": "assistant",
       "content": "I'll help you set up Stripe Connect...",
+      "embedding": [0.234, -0.567, 0.890, ...],  // 1536-dim vector
       "metadata": {
         "model": "claude-sonnet-4.5",
         "tokens": 234
@@ -264,9 +285,11 @@ Full message history with complete context.
       "role": "tool",
       "tool_name": "write_file",
       "content": "Created file: api/stripe.js",
+      "embedding": [0.345, -0.678, 0.901, ...],  // 1536-dim vector
       "metadata": {
         "file_path": "api/stripe.js",
-        "operation": "create"
+        "operation": "create",
+        "tokens": 12
       }
     }
   ]
@@ -279,8 +302,65 @@ Full message history with complete context.
 | `timestamp` | string | Yes | ISO 8601 timestamp |
 | `role` | enum | Yes | `"user"`, `"assistant"`, `"system"`, `"tool"` |
 | `content` | string | Yes | Message content |
+| `embedding` | array[number] | No | Vector embedding (typically 1536-dim) for semantic search |
 | `tool_name` | string | Conditional | Required if `role` is `"tool"` |
 | `metadata` | object | No | Additional context |
+
+### Vector Index Object
+
+Metadata for vector search capabilities. Enables semantic retrieval of relevant messages.
+
+```json
+{
+  "vector_index": {
+    "embedding_model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "total_vectors": 187,
+    "distance_metric": "cosine",
+    "index_metadata": {
+      "created_at": "2024-10-27T16:45:12Z",
+      "build_time_seconds": 12.4,
+      "index_type": "flat"
+    },
+    "segments": {
+      "decisions": ["msg_045", "msg_046", "msg_167"],
+      "code_changes": ["msg_063", "msg_098", "msg_178"],
+      "problems": ["msg_167", "msg_122"],
+      "debugging": ["msg_168", "msg_169", "msg_170"]
+    }
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `embedding_model` | string | Yes | Model used for generating embeddings |
+| `dimensions` | number | Yes | Vector dimensionality (typically 1536) |
+| `total_vectors` | number | Yes | Number of embedded messages |
+| `distance_metric` | enum | No | `"cosine"`, `"euclidean"`, `"dot_product"` (default: cosine) |
+| `index_metadata` | object | No | Build information |
+| `segments` | object | No | Categorized message IDs for faster filtering |
+
+**Usage for Context Loading:**
+```python
+# Load summary + vector search around current problem
+def load_context(devsession, current_query):
+    # Always load summary (Layer 1)
+    summary = devsession.summary
+
+    # Vector search for relevant history (Layer 2)
+    query_embedding = embed(current_query)
+    relevant_messages = vector_search(
+        devsession.conversation,
+        query_embedding,
+        top_k=10  # Small radius
+    )
+
+    return {
+        "summary": summary,  # ~500 tokens
+        "relevant": relevant_messages  # ~1000 tokens
+    }
+```
 
 ### Artifacts Object
 
