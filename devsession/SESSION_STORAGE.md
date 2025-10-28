@@ -278,88 +278,384 @@ def continue_from_session(session_file, project_dir):
 
 ## Updating .devproject: When and How
 
-### Update Triggers
+### Update Trigger: Export Only
 
 **.devproject should be updated at:**
 
-1. **Session End** (always)
+1. **Session Export** (when user clicks STOP)
    - Session completes normally
-   - User stops recording
-
-2. **Compaction** (at 190K tokens)
-   - Major work has been done
-   - Project likely evolved
-   - Need fresh context for continuation
-
-3. **Manual Save** (optional)
-   - User clicks "Save Project State"
-   - Checkpoint important decisions
+   - User explicitly ends recording
+   - Export dialog appears
+   - Single, clean save point
 
 **NOT on:**
+- Compaction (internal optimization only)
 - Every message (too frequent)
 - Every N minutes (not event-driven)
+- Auto-save checkpoints (recovery only)
 
-### Update on Compaction
+**Why only on export:**
+✅ Simple mental model ("I stop, everything saves")
+✅ One session = one update
+✅ Clean, predictable
+✅ Export is the explicit commit moment
+
+### The Update Challenge: What's Project-Level?
+
+**The Problem:**
+
+```
+Session summary contains:
+- Implemented export dialog (project-level? Maybe - new feature)
+- Fixed typo in README (session-level - trivial change)
+- Decided to use sentence-transformers (project-level! - architectural decision)
+- Debugged webhook signature issue (session-level - bug fix)
+- Changed CSS color (session-level - minor tweak)
+```
+
+**How does AI know what's project-level vs session-level?**
+
+### Intelligent Update System
 
 ```python
-def on_compaction_triggered(session, project_dir):
+def update_devproject_on_export(session, project_dir):
     """
-    Compaction at 190K tokens - update .devproject with progress so far
+    Intelligently update .devproject from session summary
+    Uses AI to classify and verify changes
     """
-    print("🔄 Compacting session...")
+    # 1. Load current .devproject
+    current_devproject = load_devproject(project_dir / '.devproject')
 
-    # 1. Generate session summary (what happened so far)
-    session_summary = generate_session_summary(session.conversation)
+    # 2. Extract session summary
+    session_summary = session.summary
 
-    # 2. Update .devproject with progress
-    devproject = load_devproject(project_dir / '.devproject')
-    updated_devproject = update_project_overview(
-        devproject,
-        session_summary,
-        session.metadata
+    # 3. AI classification: What's project-level?
+    proposed_updates = classify_project_level_changes(
+        current_devproject,
+        session_summary
     )
 
-    # 3. Save updated .devproject
-    save_devproject(updated_devproject, project_dir / '.devproject')
-    print("  ✓ Updated .devproject with session progress")
+    # 4. Show verification UI to user
+    if proposed_updates:
+        user_response = show_devproject_update_dialog(
+            current_devproject,
+            proposed_updates
+        )
 
-    # 4. Compact conversation
-    compacted_context = compact_intelligently(session)
-
-    # 5. Continue with fresh context
-    return compacted_context
+        if user_response.approved:
+            # Apply approved changes
+            updated_devproject = apply_updates(
+                current_devproject,
+                user_response.approved_changes
+            )
+            save_devproject(updated_devproject, project_dir / '.devproject')
+        elif user_response.manual_edit:
+            # User wants to steer the update
+            manual_prompt = user_response.manual_prompt
+            updated_devproject = generate_with_steering(
+                current_devproject,
+                session_summary,
+                manual_prompt
+            )
+            save_devproject(updated_devproject, project_dir / '.devproject')
+    else:
+        # No project-level changes detected
+        print("✓ No project-level changes to update")
 ```
 
-### Why Update on Compaction?
+### AI Classification Prompt
 
-**Scenario:**
+```python
+def classify_project_level_changes(devproject, session_summary):
+    """
+    Use AI to identify project-level changes from session
+    """
+    prompt = f"""
+You are analyzing a development session to identify PROJECT-LEVEL changes
+that should update the project overview.
+
+Current Project Overview:
+{json.dumps(devproject, indent=2)}
+
+Session Summary:
+- Goal: {session_summary.overview}
+- Decisions: {json.dumps(session_summary.decisions, indent=2)}
+- Code Changes: {json.dumps(session_summary.code_changes, indent=2)}
+- Problems Solved: {json.dumps(session_summary.problems_solved, indent=2)}
+
+Classify which items are PROJECT-LEVEL (should update .devproject):
+
+PROJECT-LEVEL items are:
+✓ Architectural decisions (tech stack, design patterns)
+✓ New major features/components
+✓ Technology additions (new dependencies, frameworks)
+✓ Significant architecture changes
+✓ Project phase transitions (alpha → beta, etc.)
+✓ Milestone completions
+
+SESSION-LEVEL items are (do NOT include):
+✗ Bug fixes
+✗ Minor code refactors
+✗ Typo corrections
+✗ Small UI tweaks
+✗ Debugging specific issues
+✗ Routine maintenance
+
+Output JSON:
+{{
+  "project_level_decisions": [
+    {{
+      "item": "Decision: Use sentence-transformers for embeddings",
+      "reasoning": "Architectural decision affecting embedding strategy",
+      "action": "add_to_key_decisions",
+      "impact": "high"
+    }}
+  ],
+  "tech_stack_additions": [
+    {{
+      "item": "sentence-transformers",
+      "category": "key_dependencies",
+      "reasoning": "New core dependency for embedding generation"
+    }}
+  ],
+  "milestone_completions": [
+    {{
+      "milestone": "MVP - Export Dialog",
+      "reasoning": "Export dialog was completed this session",
+      "next_milestone": "Vector Embeddings"
+    }}
+  ],
+  "phase_transitions": [],
+  "session_level_items": [
+    "Fixed typo in README",
+    "Debugged webhook signature",
+    "Changed button color"
+  ]
+}}
+
+Be conservative - when in doubt, classify as session-level.
+"""
+
+    response = claude_api.generate(prompt)
+    return json.loads(response)
 ```
-Session starts: 10 AM
-- .devproject: "Phase: Architecture, Next: Export Dialog"
 
-Work for 3 hours (180K tokens):
-- Implemented export dialog
-- Added embedding generation
-- Fixed 5 bugs
-- Made decision: "Use sentence-transformers for embeddings"
+### Verification UI: Diff View with Accept/Reject
 
-Compaction at 190K (1 PM):
-- Update .devproject:
-  * New decision logged
-  * Phase changed to "Implementation"
-  * Export dialog marked as complete
-  * Next milestone updated
-
-Continue working (2 PM):
-- If you load context, .devproject is current
-- If you start new session tomorrow, .devproject is current
-- If teammate opens project, they see latest state
+```
+┌────────────────────────────────────────────────────────────┐
+│  Update Project Overview                                   │
+├────────────────────────────────────────────────────────────┤
+│  Session completed! Review proposed changes to .devproject:│
+│                                                            │
+│  ✅ KEY DECISIONS (1 addition)                            │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  + decision_004:                                   │   │
+│  │    "Use sentence-transformers for embeddings"     │   │
+│  │    Reasoning: Faster than API calls, runs locally │   │
+│  │    Impact: high                                    │   │
+│  │                                             [✓][✗] │   │
+│  └────────────────────────────────────────────────────┘   │
+│                                                            │
+│  ✅ TECH STACK (1 addition)                               │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  + key_dependencies:                               │   │
+│  │    - sentence-transformers                         │   │
+│  │                                             [✓][✗] │   │
+│  └────────────────────────────────────────────────────┘   │
+│                                                            │
+│  ✅ MILESTONES (1 update)                                 │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  - Next: "MVP - Export Dialog"                     │   │
+│  │  + Next: "Vector Embeddings"                       │   │
+│  │    (Export dialog completed)                       │   │
+│  │                                             [✓][✗] │   │
+│  └────────────────────────────────────────────────────┘   │
+│                                                            │
+│  ℹ️  Session-level items (not included):                  │
+│  • Fixed typo in README                                   │
+│  • Debugged webhook signature                             │
+│  • Changed button color                                   │
+│                                                            │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  ✏️  Manual Steering (optional):                   │   │
+│  │  [Also update the architecture section to...     ] │   │
+│  │                                                    │   │
+│  │  [Generate]                                        │   │
+│  └────────────────────────────────────────────────────┘   │
+│                                                            │
+│  [ Accept All ]  [ Accept Selected ]  [ Skip Update ]     │
+└────────────────────────────────────────────────────────────┘
 ```
 
-**Without updating on compaction:**
-- .devproject stays stale until session ends
-- Multi-hour sessions lose context
-- Continuation sees outdated project state
+### UI Behavior
+
+**Green indicators (additions):**
+```
++ decision_004: "Use sentence-transformers"
++ key_dependencies: "sentence-transformers"
+```
+
+**Red indicators (removals):**
+```
+- Next: "MVP - Export Dialog"  (completed)
+```
+
+**Yellow indicators (changes):**
+```
+~ current_phase: "Architecture" → "Implementation"
+```
+
+**Individual Accept/Reject:**
+- Each proposed change has [✓] [✗] buttons
+- Check/uncheck to approve/reject
+- Default: All checked (trust AI classification)
+
+**Manual Steering:**
+- Text box for verbal instructions
+- Example: "Also update the architecture section to mention the new embedding pipeline"
+- Click "Generate" → AI applies additional changes based on instruction
+- Shows diff again for approval
+
+### Complete Flow
+
+```
+1. User clicks STOP
+2. RecCli generates session summary
+3. AI analyzes summary:
+   - Classifies project-level vs session-level
+   - Proposes specific .devproject updates
+4. Shows diff dialog with green/red/yellow changes
+5. User reviews:
+   Option A: Click "Accept All" (trust AI)
+   Option B: Uncheck items, click "Accept Selected"
+   Option C: Add manual steering, click "Generate", review again
+   Option D: Click "Skip Update" (keep .devproject unchanged)
+6. Approved changes applied to .devproject
+7. .devsession file saved to .devsessions/
+8. Done!
+```
+
+### Safety Features
+
+**Conservative by default:**
+- AI errs on side of classifying as session-level
+- When in doubt, don't update .devproject
+- User can always manually add later
+
+**Transparent:**
+- Show exactly what's being changed
+- Show reasoning for each classification
+- List session-level items that are NOT included
+
+**Controllable:**
+- User has final say on every change
+- Can reject individual items
+- Can add manual instructions
+- Can skip update entirely
+
+**Reversible:**
+- .devproject is in git (if tracked)
+- Can revert changes
+- Previous versions accessible
+
+### Example Scenarios
+
+#### Scenario 1: Clear Project-Level Work
+
+```
+Session: Implemented authentication system
+AI Classifies:
+✅ Project-level:
+  - New component: "Authentication System"
+  - Tech stack: "passport.js", "bcrypt"
+  - Decision: "Use JWT tokens (stateless scaling)"
+
+✗ Session-level:
+  - Fixed login button styling
+  - Debugged password validation
+
+User: Clicks "Accept All" (takes 2 seconds)
+```
+
+#### Scenario 2: Mixed Work
+
+```
+Session: Fixed bugs and added feature
+AI Classifies:
+✅ Project-level:
+  - New feature: "Export to PDF"
+  - Tech stack: "puppeteer"
+
+✗ Session-level:
+  - Fixed memory leak in webhook handler
+  - Updated dependencies (routine maintenance)
+  - Changed log format
+
+User: Reviews, accepts PDF addition, done
+```
+
+#### Scenario 3: No Project-Level Changes
+
+```
+Session: Bug fixes and refactoring
+AI Classifies:
+✗ All session-level:
+  - Fixed null pointer exception
+  - Refactored database queries
+  - Updated tests
+
+Dialog: "No project-level changes detected. Skip update?"
+User: Clicks "Yes" (no .devproject update needed)
+```
+
+#### Scenario 4: Manual Steering
+
+```
+Session: Architecture redesign
+AI Classifies:
+✅ Project-level:
+  - Decision: "Move to microservices architecture"
+  - New components: "API Gateway", "User Service", "Order Service"
+
+User reviews, then adds steering:
+"Also update the architecture overview to explain the service
+communication pattern and mention we're using message queues"
+
+Clicks "Generate" → AI applies additional changes → Shows new diff
+User: Approves → Done
+```
+
+### Implementation Priority
+
+**Phase 1: Basic Update (MVP)**
+```python
+# Simple update without verification
+# Trust AI classification, auto-apply
+update_devproject_automatically(session)
+```
+
+**Phase 2: Verification UI**
+```python
+# Show diff dialog
+# Accept all / Skip update buttons
+show_diff_dialog(proposed_changes)
+```
+
+**Phase 3: Granular Control**
+```python
+# Individual accept/reject per item
+# Show reasoning for each classification
+show_granular_dialog(proposed_changes)
+```
+
+**Phase 4: Manual Steering**
+```python
+# Text box for verbal instructions
+# Re-generate with steering
+# Show updated diff
+allow_manual_steering(session)
+```
 
 ## Complete Storage Flow
 
@@ -371,9 +667,12 @@ Continue working (2 PM):
    - Creates .devproject (if needed)
    - Creates .devsessions/ folder
    - Adds both to .gitignore
-3. Records session
-4. On stop:
+3. Records session (auto-save checkpoints every 20 messages)
+4. On stop & export:
    - Generates session summary
+   - AI classifies project-level changes
+   - Shows verification dialog
+   - User approves updates
    - Updates .devproject
    - Saves to .devsessions/session-20241027-143045-a3f2.devsession
 ```
@@ -388,28 +687,36 @@ Continue working (2 PM):
 3. Asks: "Continue from session-003 or start new?"
 4. User chooses "Continue"
 5. Loads compacted context from session-003
-6. Records continuation
-7. On stop:
+6. Records continuation (auto-save checkpoints)
+7. On stop & export:
+   - Generates session summary
+   - AI classifies changes
+   - Shows verification dialog
    - Updates .devproject
    - Saves to .devsessions/session-20241027-160230-b8c1.devsession
 ```
 
-### Mid-Session Compaction
+### Mid-Session Compaction (Internal Only)
 
 ```
 1. Session ongoing (150K tokens)
 2. User keeps working (180K tokens)
 3. Compaction triggered at 190K:
-   - Generate summary so far
-   - Update .devproject ← Key: Update now, not just at end
-   - Save checkpoint to .devsessions/session-...-checkpoint.devsession
-   - Compact context
+   - Generate interim summary (for compaction only)
+   - Save checkpoint to .devsessions/.checkpoint.devsession
+   - Compact context (summary + recent + vectors)
    - Continue recording
-4. Session ends:
-   - Update .devproject again (final state)
+   - NO .devproject update (wait for export)
+4. Session ends (export):
+   - Generate final summary (from full session)
+   - AI classifies project-level changes
+   - Shows verification dialog
+   - Update .devproject ← Single update point
    - Save final .devsession
-   - Mark checkpoint as archived
+   - Clean up checkpoint
 ```
+
+**Key:** Compaction is internal optimization, export is the explicit save point.
 
 ## Settings: User Configuration
 
