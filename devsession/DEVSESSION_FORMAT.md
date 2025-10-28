@@ -147,6 +147,7 @@ The project overview provides **macro-level context** that persists and evolves 
       "name": "RecCli",
       "description": "CLI terminal recorder with AI-powered session management using .devsession format",
       "purpose": "Enable developers to record, summarize, and intelligently continue terminal sessions",
+      "value_proposition": "Solves AI context loss by automatically building living project documentation that eliminates the need to re-explain project context",
       "repository": "https://github.com/willluecke/RecCli",
       "license": "MIT",
       "status": "active_development"

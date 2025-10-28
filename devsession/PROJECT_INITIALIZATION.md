@@ -366,10 +366,11 @@ File Structure:
 {structure}
 
 Generate a .devproject overview with:
-1. Concise description (1 sentence)
-2. Project purpose (2-3 sentences explaining why it exists)
-3. Architecture overview (high-level system design)
-4. Current development status (alpha/beta/production/maintenance)
+1. Concise description (1 sentence - what it is)
+2. Project purpose (2-3 sentences - what it does/enables)
+3. Core value proposition (1-2 sentences - what problem it solves, why it matters)
+4. Architecture overview (high-level system design)
+5. Current development status (alpha/beta/production/maintenance)
 
 Output as JSON matching the .devproject schema.
 """
@@ -400,6 +401,11 @@ Output as JSON matching the .devproject schema.
 │  [Enable developers to record, summarize │
 │   and intelligently continue terminal    │
 │   sessions                             ]  │
+│                                          │
+│  Value Proposition:                      │
+│  [Solves AI context loss by building    │
+│   living project documentation          │
+│   automatically                        ]  │
 │                                          │
 │  ☑ Scan codebase automatically           │
 │  ☑ Analyze existing documentation        │
