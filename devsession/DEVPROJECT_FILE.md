@@ -184,8 +184,11 @@ def start_recording(project_dir):
         # Load existing project overview
         project_overview = load_devproject(devproject_path)
     else:
-        # Initialize new project
+        # Initialize new project (first session)
         project_overview = initialize_new_project(project_dir)
+
+        # Auto-add .devproject to .gitignore (privacy by default)
+        auto_update_gitignore(project_dir)
 
     # 2. Create new session with current project overview
     session = create_session(project_overview)
@@ -268,27 +271,81 @@ def update_project_overview(current_overview, session_summary, session_metadata)
     return overview
 ```
 
+## Automatic .gitignore Management
+
+### Auto-Adding to .gitignore
+
+When RecCli creates a `.devproject` file for the first time, it **automatically adds it to your project's `.gitignore`**:
+
+```python
+def auto_update_gitignore(project_dir):
+    """
+    Automatically add .devproject to project's .gitignore
+    Called on first session in a project
+    """
+    gitignore_path = project_dir / '.gitignore'
+
+    # Create .gitignore if it doesn't exist
+    if not gitignore_path.exists():
+        gitignore_path.touch()
+
+    # Read current contents
+    with open(gitignore_path, 'r') as f:
+        contents = f.read()
+
+    # Check if .devproject already in .gitignore
+    if '.devproject' in contents:
+        return  # Already there
+
+    # Add .devproject to .gitignore
+    addition = """
+# DevProject file (AI-generated project overview)
+# Remove this line to track .devproject for team-wide context sharing
+.devproject
+"""
+
+    with open(gitignore_path, 'a') as f:
+        f.write(addition)
+
+    print("✓ Added .devproject to .gitignore (privacy by default)")
+```
+
+**What gets added:**
+```gitignore
+# DevProject file (AI-generated project overview)
+# Remove this line to track .devproject for team-wide context sharing
+.devproject
+```
+
+**User notification:**
+```
+┌─────────────────────────────────────────────────┐
+│  First Session Setup                            │
+├─────────────────────────────────────────────────┤
+│  ✓ Created .devproject                          │
+│  ✓ Added .devproject to .gitignore              │
+│                                                 │
+│  Your project overview will be saved to:       │
+│  ~/projects/YourProject/.devproject            │
+│                                                 │
+│  Private by default (gitignored).              │
+│  Remove from .gitignore to share with team.    │
+│                                                 │
+│  [ OK ]                                         │
+└─────────────────────────────────────────────────┘
+```
+
 ## Git Tracking
 
 ### Default: Gitignored (Private)
 
-By default, `.devproject` is gitignored for privacy:
-
-```gitignore
-# .gitignore
-
-# DevSession files (may contain sensitive context)
-*.devsession
-!devsession/examples/*.devsession
-
-# DevProject (project overview - gitignored by default for privacy)
-.devproject
-```
+By default, `.devproject` is **automatically gitignored** for privacy:
 
 **Why gitignore by default?**
 - Projects may contain sensitive information (architecture decisions, business logic)
 - Users can opt-in to tracking if they want team-wide context
 - Personal projects stay private
+- No accidental commits of project context
 
 ### Optional: Git Track for Team Sharing
 

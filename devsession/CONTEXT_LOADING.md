@@ -14,6 +14,39 @@ When **compacting a long session** (approaching 180K+ tokens), what context shou
 
 ---
 
+## Three-Layer Context Architecture
+
+The .devsession format provides three layers of context:
+
+### Layer 1: Project Overview (Macro)
+**Source:** `.devproject` file at project root
+**Size:** ~300-500 tokens
+**Contains:** Project name, purpose, architecture, key decisions, tech stack, milestones
+**Updated:** Each session end
+**Loaded:** Conditionally (see Conditional Loading section below)
+
+**Purpose:** Keeps LLM grounded in "what is this project?" - the macro perspective.
+
+### Layer 2: Session Summary (This Session)
+**Source:** `.devsession` file's summary object
+**Size:** ~500-1000 tokens
+**Contains:** Session goal, decisions made, code changes, problems solved
+**Updated:** Session end or compaction
+**Loaded:** Always
+
+**Purpose:** Answers "what happened in this session?" - the current work context.
+
+### Layer 3: Full Conversation (Micro)
+**Source:** `.devsession` file's conversation array with embeddings
+**Size:** Full session (50K+ tokens), but only subset loaded via vector search
+**Contains:** Every message with vector embeddings
+**Updated:** Real-time during session
+**Loaded:** Selectively via vector search (~700-1000 tokens worth)
+
+**Purpose:** Provides "how did we do it?" - the implementation details.
+
+---
+
 ## The Strategy: Implicit Goal from Recent Messages
 
 **Key Insight:** The user's "current goal" is implicit in their recent messages. Use those as the vector search query.
@@ -480,6 +513,25 @@ The algorithm:
 ---
 
 ## Conditional Project Overview Loading
+
+### Where Project Overview Lives
+
+The project overview is stored in a **`.devproject` file at the project root**:
+
+```
+~/projects/YourProject/
+├── .devproject              # ← Project overview (single source of truth)
+├── .gitignore               # ← Auto-updated to exclude .devproject
+├── README.md
+└── ...
+```
+
+**Lifecycle:**
+- **Session start:** RecCli reads `.devproject` and loads project overview into session
+- **Session end:** RecCli updates `.devproject` based on session summary
+- **Gitignore:** RecCli automatically adds `.devproject` to your `.gitignore` (privacy by default)
+
+See `DEVPROJECT_FILE.md` for complete specification.
 
 ### The Token Budget Problem
 
