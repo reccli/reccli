@@ -237,6 +237,257 @@ LLM: "I see we already solved this signature issue.
 
 ---
 
+## Preemptive Compaction Strategy
+
+### The Problem: Claude Code's 200K Token Limit
+
+When using RecCli with Claude Code (or any LLM with context limits):
+- Claude Code automatically compacts at ~200K tokens
+- **We can't customize that compaction** (Anthropic controls it)
+- Would lose our .devsession structure and vector search approach
+
+### The Solution: Beat Them to It
+
+**RecCli triggers compaction at 190K tokens** - before Claude Code does it automatically.
+
+```
+Token Usage Over Time:
+
+0K ────────────────────────────────── 190K ─ 200K
+                                       ↑      ↑
+                                    COMPACT  CLAUDE CODE
+                                    (ours)   (theirs - never reached)
+```
+
+### How It Works:
+
+```python
+class SessionMonitor:
+    """Monitor token usage and trigger preemptive compaction"""
+
+    def __init__(self):
+        self.token_threshold = 190_000  # Before Claude Code's 200K
+        self.current_tokens = 0
+        self.compaction_triggered = False
+
+    def on_message(self, message):
+        """Called for each message in the conversation"""
+        # Update token count
+        self.current_tokens += count_tokens(message)
+
+        # Check if we need to compact
+        if self.current_tokens >= self.token_threshold:
+            if not self.compaction_triggered:
+                self.trigger_compaction()
+                self.compaction_triggered = True
+
+    def trigger_compaction(self):
+        """Compact session using our custom strategy"""
+        print("🔄 Session approaching context limit (190K tokens)")
+        print("📦 Compacting with .devsession strategy...")
+
+        # 1. Get full conversation
+        conversation = self.get_conversation()
+
+        # 2. Generate summary with custom prompt
+        summary = generate_summary_with_custom_prompt(conversation)
+
+        # 3. Generate embeddings for vector search
+        embeddings = generate_embeddings_incrementally(conversation)
+
+        # 4. Save complete .devsession file
+        devsession_file = save_devsession(
+            summary=summary,
+            conversation=conversation,
+            embeddings=embeddings
+        )
+
+        # 5. Compact context intelligently
+        compacted_context = compact_intelligently(
+            session=devsession_file,
+            num_recent_messages=20
+        )
+
+        # 6. Load compacted context back into Claude Code
+        self.load_compacted_context(compacted_context)
+
+        print(f"✅ Compacted: 190K → 2K tokens")
+        print(f"📄 Full session saved: {devsession_file}")
+        print("💬 Continuing conversation with focused context...")
+
+
+def compact_intelligently(session, num_recent_messages=20):
+    """
+    Compact 190K tokens → 2K tokens using .devsession strategy
+    """
+    # Extract recent messages as implicit goal
+    recent = session.conversation[-num_recent_messages:]
+    query_embedding = embed_messages(recent)
+
+    # Search earlier conversation for relevant context
+    earlier = session.conversation[:-num_recent_messages]
+    relevant = vector_search(
+        vectors=earlier,
+        query=query_embedding,
+        top_k=10
+    )
+
+    # Build compacted context
+    compacted = {
+        'summary': session.summary,      # ~500 tokens
+        'relevant': relevant,            # ~1000 tokens
+        'recent': recent                 # ~500 tokens
+    }
+
+    return format_for_llm(compacted)  # ~2000 tokens total
+
+
+def load_compacted_context(compacted_context):
+    """
+    Load compacted context back into Claude Code
+
+    Options:
+    A. Auto-paste (if API access available)
+    B. Copy to clipboard + notify user
+    C. Save as "continuation prompt" file
+    """
+
+    # Option A: Direct API call (if available)
+    if has_api_access():
+        claude_code_api.send_message(
+            "Continue from this compacted context:",
+            context=compacted_context
+        )
+
+    # Option B: Copy to clipboard
+    else:
+        copy_to_clipboard(compacted_context)
+        notify_user(
+            "Context compacted! Paste into Claude Code to continue.\n"
+            "Copied to clipboard - just Cmd+V"
+        )
+```
+
+### The Flow in Practice:
+
+**User's Experience:**
+```
+1. Recording session with Claude Code
+   [Working... 50K tokens]
+   [Working... 100K tokens]
+   [Working... 150K tokens]
+   [Working... 180K tokens]
+
+2. RecCli notification appears:
+   ┌─────────────────────────────────────┐
+   │  🔄 Session Compacting              │
+   ├─────────────────────────────────────┤
+   │  Context approaching limit (190K)   │
+   │  Compacting with .devsession...     │
+   │                                     │
+   │  [Progress: ████████░░] 80%        │
+   │                                     │
+   │  ✓ Summary generated                │
+   │  ✓ Embeddings created               │
+   │  ⏳ Compacting context...           │
+   └─────────────────────────────────────┘
+
+3. Compaction complete:
+   ┌─────────────────────────────────────┐
+   │  ✅ Session Compacted               │
+   ├─────────────────────────────────────┤
+   │  190K tokens → 2K tokens            │
+   │                                     │
+   │  Full session saved:                │
+   │  ~/sessions/session_20241027.devsession │
+   │                                     │
+   │  Compacted context copied to        │
+   │  clipboard. Paste to continue.      │
+   │                                     │
+   │  [ Open Session ] [ Continue ]      │
+   └─────────────────────────────────────┘
+
+4. User pastes into Claude Code:
+   User: [Paste compacted context]
+
+   Claude Code: "I see from the summary we built Stripe
+   integration with req.rawBody for signatures. The recent
+   messages show you're debugging a 400 error. Let me help..."
+
+   [Session continues from ~2K tokens instead of 190K]
+```
+
+### Benefits:
+
+**✅ Full Control**
+- Our custom summarization prompt (not Anthropic's)
+- Our vector search strategy (not generic compaction)
+- Our .devsession format preserved
+
+**✅ Zero Data Loss**
+- Full conversation saved with embeddings
+- Can always load more context from .devsession if needed
+- Summary captures all key decisions/code changes
+
+**✅ Seamless Continuation**
+- Claude Code never hits its 200K limit
+- Compacted context is focused and relevant
+- Can compact multiple times in a long session
+
+**✅ Cost Efficient**
+- 2K tokens vs 190K tokens = 98.9% reduction
+- Vector search finds only relevant context
+- Pay for embeddings once, use forever
+
+### Implementation Timeline:
+
+**Phase 1 (MVP):** Token counting + notification
+```python
+# Just warn user when approaching limit
+if tokens > 190_000:
+    show_notification("Approaching context limit - consider saving")
+```
+
+**Phase 2:** Manual compaction trigger
+```python
+# User clicks "Compact Session" button
+# Generates .devsession and compacted context
+# Copies to clipboard
+```
+
+**Phase 3:** Automatic compaction
+```python
+# Automatically triggers at 190K
+# Generates compacted context
+# Auto-pastes if API available, otherwise copies to clipboard
+```
+
+**Phase 4:** Continuous monitoring
+```python
+# Real-time token display
+# Multiple compaction rounds (190K → 2K → 190K → 2K)
+# Session "chapters" in .devsession
+```
+
+### Key Design Decisions:
+
+**Why 190K not 195K or 185K?**
+- 190K gives 10K token buffer (safety margin)
+- Compaction takes 5-10 seconds (need buffer)
+- Embedding generation is async (need time)
+
+**Why copy to clipboard vs auto-paste?**
+- Claude Code API may not support programmatic input
+- Clipboard is universal, always works
+- User maintains control
+
+**Can we compact multiple times?**
+- Yes! Each compaction creates a new "chapter"
+- Previous chapters saved in .devsession
+- Can have: Chapter 1 (190K) → Chapter 2 (190K) → Chapter 3...
+
+---
+
 ## Incremental Vector Building
 
 ### During Recording:
