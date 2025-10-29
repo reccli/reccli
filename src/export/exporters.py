@@ -27,21 +27,161 @@ class SessionExporter:
         # Try to extract terminal output from .cast file
         self.terminal_output = self._extract_terminal_output()
 
+    def _clean_incremental_typing(self, content: str) -> str:
+        """
+        Remove incremental typing artifacts from terminal output.
+        Keeps only final versions of lines (after Enter was pressed).
+        """
+        import re
+
+        lines = content.split('\n')
+
+        # First pass: identify all prompt lines and group them
+        prompt_positions = []
+        for i, line in enumerate(lines):
+            if line.strip().startswith('>'):
+                prompt_positions.append(i)
+
+        if not prompt_positions:
+            return content
+
+        # Group prompts that are part of incremental typing
+        # Look for prompts that are close together (incremental typing vs separate commands)
+        # A large gap (>10 lines) or a response from Claude indicates a new command
+        prompt_groups = []
+        current_group = [prompt_positions[0]]
+
+        for i in range(1, len(prompt_positions)):
+            prev_pos = prompt_positions[i-1]
+            curr_pos = prompt_positions[i]
+
+            # Check if there's a Claude response (⏺) between the two prompts
+            has_response = False
+            for j in range(prev_pos + 1, curr_pos):
+                if '⏺' in lines[j]:
+                    has_response = True
+                    break
+
+            # If there's a response or large gap, start new group
+            if has_response or (curr_pos - prev_pos > 10):
+                prompt_groups.append(current_group)
+                current_group = [curr_pos]
+            else:
+                # Same group (incremental typing)
+                current_group.append(curr_pos)
+
+        # Don't forget the last group
+        prompt_groups.append(current_group)
+
+        # Determine which lines to keep
+        lines_to_keep = set()
+        for group in prompt_groups:
+            # For each group, find the prompt with actual content (not just whitespace)
+            non_empty_prompts = [pos for pos in group if lines[pos].strip() not in ['>', '> ']]
+
+            if non_empty_prompts:
+                # Keep the last non-empty prompt
+                lines_to_keep.add(non_empty_prompts[-1])
+            elif len(group) == 1:
+                # Single empty prompt might be intentional
+                lines_to_keep.add(group[0])
+
+        # Build cleaned output - remove duplicates and unnecessary lines
+        cleaned_lines = []
+        seen_lines = set()
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+
+            # Skip separators
+            if all(c in '─' for c in stripped) and stripped:
+                continue
+
+            # Keep selected prompt lines (but only if they have content)
+            if i in lines_to_keep:
+                if stripped not in ['>', '> ']:
+                    cleaned_lines.append(line)
+                continue
+
+            # Skip other prompt lines
+            if stripped.startswith('>'):
+                continue
+
+            # Skip empty lines
+            if not stripped:
+                continue
+
+            # Skip ALL loading animations (don't keep any)
+            if any(x in stripped for x in ['Galloping', 'Warping', 'Deliberating', 'Combobulating',
+                                           'Musing', 'Prestidigitating', 'Finagling', 'Whatchamacalliting',
+                                           '(esc to interrupt)']):
+                continue
+
+            # Skip "Press Ctrl-D" and exit messages first (before checking UI elements)
+            if any(x in stripped for x in ['Press Ctrl-D', 'again to exit']):
+                continue
+
+            # Skip duplicate UI elements - only keep first occurrence
+            if any(x in stripped for x in ['? for shortcuts', 'Thinking off', 'tab to toggle']):
+                if stripped not in seen_lines:
+                    seen_lines.add(stripped)
+                    cleaned_lines.append(line)
+                continue
+
+            # Skip duplicate status messages
+            if 'Claude Opus limit reached' in stripped:
+                # Only keep one
+                if stripped not in seen_lines:
+                    seen_lines.add(stripped)
+                    cleaned_lines.append(line)
+                continue
+
+            # Keep everything else
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
+
     def _extract_terminal_output(self) -> str:
-        """Extract plain text output from asciinema .cast file"""
+        """Extract plain text output from session file (.cast or .txt)"""
         if not self.session_file.exists():
             return ""
 
+        # Check if it's a plain text file from script command
+        if self.session_file.suffix == '.txt':
+            try:
+                with open(self.session_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    # Strip terminal control codes for cleaner output
+                    import re
+                    # Remove ANSI escape sequences
+                    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                    cleaned = ansi_escape.sub('', content)
+                    # Remove incremental typing artifacts
+                    cleaned = self._clean_incremental_typing(cleaned)
+                    return cleaned
+            except Exception as e:
+                print(f"Error reading txt file: {e}")
+                return ""
+
+        # Handle .cast files
         try:
-            # Use asciinema cat to get plain text output
+            # Use asciinema convert to get plain text output (asciinema 3.x)
             result = subprocess.run(
-                ['asciinema', 'cat', str(self.session_file)],
+                ['asciinema', 'convert', '-f', 'raw', str(self.session_file), '-'],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
             if result.returncode == 0:
-                return result.stdout
+                # Apply the same cleaning as for .txt files
+                import re
+                content = result.stdout
+                # Remove ANSI escape sequences
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                cleaned = ansi_escape.sub('', content)
+                # Remove incremental typing artifacts
+                cleaned = self._clean_incremental_typing(cleaned)
+                return cleaned
         except (subprocess.SubprocessError, FileNotFoundError):
             pass
 
@@ -59,7 +199,16 @@ class SessionExporter:
                 except json.JSONDecodeError:
                     continue
 
-            return ''.join(output)
+            content = ''.join(output)
+
+            # Apply the same cleaning as for other methods
+            import re
+            # Remove ANSI escape sequences
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            cleaned = ansi_escape.sub('', content)
+            # Remove incremental typing artifacts
+            cleaned = self._clean_incremental_typing(cleaned)
+            return cleaned
         except Exception:
             return ""
 

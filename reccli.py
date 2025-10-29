@@ -16,7 +16,7 @@ from typing import Dict, Tuple, Optional
 
 try:
     import tkinter as tk
-    from tkinter import messagebox
+    from tkinter import ttk, messagebox
     HAS_GUI = True
 except ImportError:
     HAS_GUI = False
@@ -104,8 +104,8 @@ class CLIRecorder:
             print("⚠️  Warning: Install 'asciinema' for best recording quality")
             print("   Run: pip install asciinema")
 
-    def start(self, filename=None) -> Tuple[bool, str]:
-        """Start recording session"""
+    def start(self, filename=None, auto_launch_claude=False, tool_name="claude", terminal_id=None) -> Tuple[bool, str]:
+        """Start recording session using asciinema (nested shell approach)"""
         if self.recording:
             return False, "Already recording"
 
@@ -115,57 +115,98 @@ class CLIRecorder:
             filename = f"session_{timestamp}"
 
         self.start_time = time.time()
+        self.output_file = self.output_dir / f"{filename}.cast"
 
-        if self.has_asciinema:
-            # Use asciinema for best compatibility
-            self.output_file = self.output_dir / f"{filename}.cast"
-            cmd = ['asciinema', 'rec', '--quiet', '--overwrite', str(self.output_file)]
+        if sys.platform == 'darwin':  # macOS
+            # Use asciinema rec - creates a nested shell
+            # Optionally auto-launch a tool inside the recording
+            # Use just the filename, not full path - asciinema will create it in terminal's pwd
+            simple_filename = f"{filename}.cast"
+            cmd = f"asciinema rec {simple_filename}"
 
-            # Start in new terminal
-            if sys.platform == 'darwin':  # macOS
-                terminal_cmd = ['osascript', '-e', f'tell app "Terminal" to do script "cd {os.getcwd()} && {" ".join(cmd)}"']
-            elif sys.platform == 'linux':
-                terminal_cmd = self._get_linux_terminal_cmd(cmd)
+            # Store the simple filename so we can find it later
+            self.temp_filename = simple_filename
+
+            # Build AppleScript to activate terminal and send keystrokes
+            if auto_launch_claude:
+                # Start script, then immediately launch the selected tool
+                script_text = f'''
+                tell application "Terminal"
+                    activate
+                    delay 0.2
+                end tell
+                tell application "System Events"
+                    tell process "Terminal"
+                        keystroke "{cmd}"
+                        keystroke return
+                        delay 1.0
+                        keystroke "{tool_name}"
+                        keystroke return
+                    end tell
+                end tell
+                '''
             else:
-                return False, "Platform not supported"
+                # Just start script without launching anything
+                script_text = f'''
+                tell application "Terminal"
+                    activate
+                    delay 0.2
+                end tell
+                tell application "System Events"
+                    tell process "Terminal"
+                        keystroke "{cmd}"
+                        keystroke return
+                    end tell
+                end tell
+                '''
 
             try:
-                subprocess.Popen(terminal_cmd)
+                result = subprocess.run(['osascript', '-e', script_text], check=True, capture_output=True, text=True)
+                print(f"AppleScript result: stdout={result.stdout}, stderr={result.stderr}")
                 self.recording = True
                 return True, str(self.output_file)
             except Exception as e:
-                return False, str(e)
-
-        elif self.has_script:
-            # Fallback to script command
-            self.output_file = self.output_dir / f"{filename}.log"
-            if sys.platform == 'darwin':  # macOS
-                cmd = ['script', '-q', str(self.output_file)]
-            else:  # Linux
-                cmd = ['script', '-q', '-f', str(self.output_file)]
-
-            try:
-                self.process = subprocess.Popen(cmd)
-                self.recording = True
-                return True, str(self.output_file)
-            except Exception as e:
-                return False, str(e)
-
-        return False, "No recording tool available"
+                print(f"AppleScript error: {e}")
+                return False, f"Failed to start recording: {str(e)}"
+        else:
+            return False, "Currently only macOS is supported"
 
     def stop(self) -> Tuple[bool, str, float]:
-        """Stop recording session"""
+        """Stop recording session by typing exit to exit nested shells"""
         if not self.recording:
             return False, "Not recording", 0
 
         duration = time.time() - self.start_time if self.start_time else 0
 
-        if self.process:
-            self.process.terminate()
+        if sys.platform == 'darwin':  # macOS
+            # Send Ctrl+D twice: once to exit whatever is running (e.g., claude)
+            # and once to exit the asciinema session
+            # Activate Terminal first to ensure we're targeting the right window
+            script_text = '''
+            tell application "Terminal"
+                activate
+                delay 0.2
+            end tell
+            tell application "System Events"
+                tell process "Terminal"
+                    keystroke "d" using control down
+                    delay 0.3
+                    keystroke "d" using control down
+                end tell
+            end tell
+            '''
+
             try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+                subprocess.run(['osascript', '-e', script_text], check=True, capture_output=True)
+                # Give asciinema time to finish writing and close
+                time.sleep(1.0)
+
+                # Update output_file to point to where the file actually is (home directory)
+                # The export dialog will handle moving it to the user's chosen location
+                self.output_file = Path.home() / self.temp_filename
+                print(f"Recording saved to: {self.output_file}")
+            except Exception as e:
+                print(f"Warning: Failed to stop recording: {e}")
 
         self.recording = False
         return True, str(self.output_file), duration
@@ -187,12 +228,18 @@ class CLIRecorder:
         return ['xterm', '-e', 'bash', '-c', ' '.join(cmd)]
 
 class ReccliGUI:
-    """Floating button GUI"""
+    """Floating button GUI attached to terminal window"""
 
     def __init__(self):
         self.config = ReccliConfig()
         self.recorder = CLIRecorder()
         self.update_timer = None
+        self.terminal_window = None
+        self.last_terminal_position = None
+        self.terminal_recording_states = {}  # Track recording state per terminal window ID
+        self.current_terminal_id = None  # Current active terminal window ID
+        self.last_terminal_id = None  # Track last terminal ID to detect changes
+        self.terminal_is_frontmost = False  # Track if terminal is the frontmost app
 
         # Create GUI
         self.root = tk.Tk()
@@ -200,8 +247,8 @@ class ReccliGUI:
         self.root.overrideredirect(True)  # Remove window decorations
         self.root.attributes('-topmost', True)
 
-        # Make window small and round
-        self.root.geometry("70x70")
+        # Make window wider to fit "RecCli" text + button (80x35)
+        self.root.geometry("80x35")
 
         # Try to make window transparent
         try:
@@ -209,14 +256,15 @@ class ReccliGUI:
         except:
             pass
 
-        # Position in top-right corner
+        # Get terminal window position and attach to it
+        self.find_terminal_window()
         self.position_window()
 
-        # Create canvas for circular button
+        # Create canvas for "RecCli" text + button
         self.canvas = tk.Canvas(
             self.root,
-            width=70,
-            height=70,
+            width=80,
+            height=35,
             highlightthickness=0,
             bg='#2c2c2c'
         )
@@ -226,9 +274,9 @@ class ReccliGUI:
         self.draw_button(recording=False)
 
         # Bind events
-        self.canvas.bind("<Button-1>", self.on_click)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonPress-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<Button-3>", self.show_menu)  # Right-click
 
         # Create right-click menu
@@ -243,82 +291,270 @@ class ReccliGUI:
         self.recording = False
         self.start_pos = None
         self.duration = 0
+        self.is_dragging = False
+        self.target_terminal_id = None  # Track which terminal window to record
+
+        # Start position tracking loop
+        self.track_terminal_position()
+
+    def find_terminal_window(self):
+        """Find the active terminal window position using AppleScript"""
+        try:
+            script = '''
+            tell application "System Events"
+                set frontApp to name of first application process whose frontmost is true
+                if frontApp is "Terminal" or frontApp is "iTerm2" then
+                    tell process frontApp
+                        set frontWindow to window 1
+                        set windowPosition to position of frontWindow
+                        set windowSize to size of frontWindow
+                        set windowName to name of frontWindow
+                        return (item 1 of windowPosition) & "," & (item 2 of windowPosition) & "," & (item 1 of windowSize) & "," & (item 2 of windowSize) & "," & windowName
+                    end tell
+                else
+                    return "NOT_TERMINAL"
+                end if
+            end tell
+            '''
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and result.stdout.strip():
+                output = result.stdout.strip()
+                if output == "NOT_TERMINAL":
+                    # Not focused on terminal
+                    self.terminal_window = None
+                    self.current_terminal_id = None
+                    self.terminal_is_frontmost = False
+                    return
+                else:
+                    # Terminal is frontmost
+                    self.terminal_is_frontmost = True
+
+                # Clean up output - remove extra spaces and split by comma
+                cleaned = output.replace(' ', '')
+                parts = [p.strip() for p in cleaned.split(',') if p.strip()]
+                if len(parts) >= 5:
+                    window_id = parts[4]  # Use window name as unique ID
+                    self.current_terminal_id = window_id
+                    self.terminal_window = {
+                        'x': int(parts[0]),
+                        'y': int(parts[1]),
+                        'width': int(parts[2]),
+                        'height': int(parts[3]),
+                        'id': window_id
+                    }
+                    # Initialize recording state for this terminal if not exists
+                    if window_id not in self.terminal_recording_states:
+                        self.terminal_recording_states[window_id] = False
+            else:
+                self.terminal_window = None
+                self.current_terminal_id = None
+        except Exception as e:
+            # Silently fail
+            self.terminal_window = None
+            self.current_terminal_id = None
+
+    def track_terminal_position(self):
+        """Continuously track terminal position and update button position"""
+        # Don't update position if user is dragging
+        if not self.is_dragging:
+            self.find_terminal_window()
+
+            # Toggle topmost based on terminal focus
+            try:
+                self.root.attributes('-topmost', self.terminal_is_frontmost)
+            except:
+                pass
+
+            # Only update button if terminal changed
+            if self.current_terminal_id != self.last_terminal_id:
+                is_recording = self.terminal_recording_states.get(self.current_terminal_id, False)
+                self.draw_button(recording=is_recording)
+                self.last_terminal_id = self.current_terminal_id
+
+            # Only update position if it changed
+            if self.terminal_window != self.last_terminal_position:
+                self.position_window()
+                self.last_terminal_position = self.terminal_window.copy() if self.terminal_window else None
+        # Check position every 50ms for smooth tracking
+        self.root.after(50, self.track_terminal_position)
 
     def position_window(self):
-        """Position window in top-right corner"""
+        """Position window in top-right corner of terminal or screen"""
         self.root.update_idletasks()
-        screen_width = self.root.winfo_screenwidth()
-        x = screen_width - 100
-        y = 30
+
+        if self.terminal_window:
+            # Position at top-right of terminal window (moved 38px right, 52px down)
+            x = self.terminal_window['x'] + self.terminal_window['width'] - 132 + 38  # 82 + 50px left - 14px right
+            y = self.terminal_window['y'] + 28 + 24  # Moved down 52px total
+        else:
+            # Fallback to screen top-right
+            screen_width = self.root.winfo_screenwidth()
+            x = screen_width - 132 + 38  # 82 + 50px left - 14px right
+            y = 28 + 24  # Moved down 52px total
+
         self.root.geometry(f"+{x}+{y}")
 
     def draw_button(self, recording=False):
         """Draw the recording button"""
         self.canvas.delete("all")
 
+        # Draw "RecCli" text on the left, top-aligned
+        self.canvas.create_text(
+            25, 10,
+            text="RecCli",
+            fill='white',
+            font=('Arial', 10, 'bold'),
+            anchor='n'
+        )
+
         if recording:
-            # Red square when recording
+            # Black square with white border when recording (shifted right for text)
             self.button = self.canvas.create_rectangle(
-                15, 15, 55, 55,
-                fill='#ff4757',
-                outline='#ff6348',
-                width=2
+                52, 7, 73, 28,
+                fill='black',
+                outline='white',
+                width=1
             )
-            # White square in center (stop icon)
+            # Red square in center (stop icon)
             self.canvas.create_rectangle(
-                28, 28, 42, 42,
-                fill='white',
+                59, 15, 66, 22,
+                fill='#ff4757',
                 outline=''
             )
         else:
-            # Green circle when ready
+            # Black circle with white border when ready (shifted right for text)
             self.button = self.canvas.create_oval(
-                10, 10, 60, 60,
-                fill='#27ae60',
-                outline='#2ecc71',
-                width=2
+                50, 5, 75, 30,
+                fill='black',
+                outline='white',
+                width=1
             )
             # Red dot in center (record icon)
             self.canvas.create_oval(
-                28, 28, 42, 42,
+                59, 15, 66, 22,
                 fill='#e74c3c',
                 outline=''
             )
 
-        # Duration text
-        if recording and self.duration > 0:
-            mins = int(self.duration // 60)
-            secs = int(self.duration % 60)
-            self.canvas.create_text(
-                35, 65,
-                text=f"{mins:02d}:{secs:02d}",
-                fill='white',
-                font=('Arial', 9, 'bold')
-            )
-
-    def on_click(self, event):
-        """Handle button click"""
-        if not self.recording:
-            self.start_recording()
-        else:
-            self.stop_recording()
-
     def start_recording(self):
         """Start recording"""
-        success, result = self.recorder.start()
-        if success:
-            self.recording = True
-            self.draw_button(recording=True)
-            self.update_duration()
-            self.show_notification("Recording started", "#27ae60")
-        else:
-            messagebox.showerror("Error", f"Failed to start: {result}")
+        # Capture which terminal window is currently active BEFORE showing dialog
+        try:
+            script = '''
+            tell application "System Events"
+                set frontApp to name of first application process whose frontmost is true
+                if frontApp is "Terminal" then
+                    tell application "Terminal"
+                        return id of front window
+                    end tell
+                else if frontApp is "iTerm2" then
+                    tell application "iTerm"
+                        return id of current window
+                    end tell
+                end if
+            end tell
+            '''
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and result.stdout.strip():
+                self.target_terminal_id = result.stdout.strip()
+                print(f"Captured terminal ID: {self.target_terminal_id}")
+        except Exception as e:
+            print(f"Failed to capture terminal ID: {e}")
+            self.target_terminal_id = None
+
+        try:
+            # Ask user which tool to launch
+            dialog = tk.Toplevel(self.root)
+            dialog.title("Launch Tool")
+            dialog.geometry("300x250")
+            dialog.resizable(False, False)
+
+            # Center on screen
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (150)
+            y = (dialog.winfo_screenheight() // 2) - (125)
+            dialog.geometry(f"+{x}+{y}")
+
+            # Make modal
+            dialog.transient(self.root)
+            dialog.grab_set()
+            dialog.focus_force()
+        except Exception as e:
+            print(f"Error creating dialog: {e}")
+            messagebox.showerror("Error", f"Failed to create dialog: {e}")
+            return
+
+        selected_tool = tk.StringVar(value="claude")
+
+        ttk.Label(
+            dialog,
+            text="Which tool would you like to launch?",
+            font=('Arial', 11),
+            padding=20
+        ).pack()
+
+        ttk.Radiobutton(
+            dialog,
+            text="Claude Code",
+            variable=selected_tool,
+            value="claude"
+        ).pack(anchor=tk.W, padx=40, pady=5)
+
+        ttk.Radiobutton(
+            dialog,
+            text="Codex CLI",
+            variable=selected_tool,
+            value="codex"
+        ).pack(anchor=tk.W, padx=40, pady=5)
+
+        ttk.Radiobutton(
+            dialog,
+            text="Just record (no tool)",
+            variable=selected_tool,
+            value="none"
+        ).pack(anchor=tk.W, padx=40, pady=5)
+
+        def start_with_tool():
+            tool = selected_tool.get()
+            dialog.destroy()
+
+            if tool == "none":
+                success, result = self.recorder.start(auto_launch_claude=False, terminal_id=self.target_terminal_id)
+                notification = "Recording started"
+            else:
+                success, result = self.recorder.start(auto_launch_claude=True, tool_name=tool, terminal_id=self.target_terminal_id)
+                notification = f"Recording started - {tool} launching"
+
+            if success:
+                self.recording = True
+                # Set recording state for current terminal
+                if self.current_terminal_id:
+                    self.terminal_recording_states[self.current_terminal_id] = True
+                self.draw_button(recording=True)
+                self.update_duration()
+                self.show_notification(notification, "#27ae60")
+            else:
+                messagebox.showerror("Error", f"Failed to start: {result}")
+
+        def cancel():
+            dialog.destroy()
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(side=tk.BOTTOM, pady=20)
+
+        ttk.Button(button_frame, text="Cancel", command=cancel, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Start", command=start_with_tool, width=10).pack(side=tk.RIGHT, padx=5)
+
+        dialog.wait_window()
 
     def stop_recording(self):
         """Stop recording"""
         success, result, duration = self.recorder.stop()
         if success:
             self.recording = False
+            # Clear recording state for current terminal
+            if self.current_terminal_id:
+                self.terminal_recording_states[self.current_terminal_id] = False
             self.draw_button(recording=False)
 
             # Stop duration timer
@@ -453,13 +689,30 @@ Share your stats on X!"""
     def on_press(self, event):
         """Start drag tracking"""
         self.start_pos = (event.x, event.y)
+        self.is_dragging = False
 
     def on_drag(self, event):
         """Handle window dragging"""
         if self.start_pos:
+            self.is_dragging = True
             x = self.root.winfo_pointerx() - self.start_pos[0]
             y = self.root.winfo_pointery() - self.start_pos[1]
             self.root.geometry(f"+{x}+{y}")
+
+    def on_release(self, event):
+        """Handle mouse button release"""
+        # Only trigger click if we weren't dragging
+        if not self.is_dragging:
+            # Check recording state for current terminal
+            is_recording = self.terminal_recording_states.get(self.current_terminal_id, False)
+            print(f"Button clicked! Recording={is_recording} Terminal={self.current_terminal_id}")
+            if not is_recording:
+                self.start_recording()
+            else:
+                self.stop_recording()
+        # Reset dragging state
+        self.is_dragging = False
+        self.start_pos = None
 
     def quit(self):
         """Quit application"""

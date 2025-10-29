@@ -37,13 +37,13 @@ class ExportDialog:
         # Create dialog window
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Export Session")
-        self.dialog.geometry("500x550")
+        self.dialog.geometry("500x600")
         self.dialog.resizable(False, False)
 
         # Center on screen
         self.dialog.update_idletasks()
         x = (self.dialog.winfo_screenwidth() // 2) - (500 // 2)
-        y = (self.dialog.winfo_screenheight() // 2) - (550 // 2)
+        y = (self.dialog.winfo_screenheight() // 2) - (600 // 2)
         self.dialog.geometry(f"+{x}+{y}")
 
         # Make modal
@@ -55,9 +55,43 @@ class ExportDialog:
 
     def _build_ui(self):
         """Build the dialog UI"""
+        # Buttons FIRST - pack at bottom
+        button_frame = ttk.Frame(self.dialog)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
+
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            command=self._cancel,
+            width=15
+        ).pack(side=tk.LEFT)
+
+        ttk.Button(
+            button_frame,
+            text="Export",
+            command=self._export,
+            width=15
+        ).pack(side=tk.RIGHT)
+
+        # Content container - scrollable
+        canvas = tk.Canvas(self.dialog, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.dialog, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(20, 0), pady=(20, 0))
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=(20, 0))
+
         # Session Info Frame
-        info_frame = ttk.LabelFrame(self.dialog, text="Session Information", padding=15)
-        info_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
+        info_frame = ttk.LabelFrame(scrollable_frame, text="Session Information", padding=15)
+        info_frame.pack(fill=tk.X, padx=(0, 20), pady=(0, 10))
 
         session_id = self.metadata.get('session_id', 'Unknown')
         duration = format_duration(self.metadata.get('duration_seconds', 0))
@@ -66,8 +100,8 @@ class ExportDialog:
         ttk.Label(info_frame, text=f"Duration: {duration}", font=('Arial', 11)).pack(anchor=tk.W, pady=(5, 0))
 
         # Format Selection Frame
-        format_frame = ttk.LabelFrame(self.dialog, text="Export Format", padding=15)
-        format_frame.pack(fill=tk.X, padx=20, pady=10)
+        format_frame = ttk.LabelFrame(scrollable_frame, text="Export Format", padding=15)
+        format_frame.pack(fill=tk.X, padx=(0, 20), pady=10)
 
         self.format_var = tk.StringVar(value=self.config.get('default_export_format', 'md'))
 
@@ -100,8 +134,8 @@ class ExportDialog:
             desc_label.pack(anchor=tk.W, padx=(20, 0))
 
         # Save Location Frame
-        location_frame = ttk.LabelFrame(self.dialog, text="Save Location", padding=15)
-        location_frame.pack(fill=tk.X, padx=20, pady=10)
+        location_frame = ttk.LabelFrame(scrollable_frame, text="Save Location", padding=15)
+        location_frame.pack(fill=tk.X, padx=(0, 20), pady=10)
 
         default_location = self.config.get('default_save_location', str(Path.home() / 'Documents'))
         self.location_var = tk.StringVar(value=default_location)
@@ -123,8 +157,8 @@ class ExportDialog:
         ).pack(side=tk.RIGHT, padx=(5, 0))
 
         # Filename Frame
-        filename_frame = ttk.LabelFrame(self.dialog, text="Filename", padding=15)
-        filename_frame.pack(fill=tk.X, padx=20, pady=10)
+        filename_frame = ttk.LabelFrame(scrollable_frame, text="Filename", padding=15)
+        filename_frame.pack(fill=tk.X, padx=(0, 20), pady=10)
 
         default_filename = session_id.replace('session-', 'session_')
         self.filename_var = tk.StringVar(value=default_filename)
@@ -142,25 +176,9 @@ class ExportDialog:
         self.extension_label.pack(side=tk.RIGHT, padx=(5, 0))
 
         # Update extension when format changes
-        self.format_var.trace('w', lambda *args: self.extension_label.config(text=f".{self.format_var.get()}"))
-
-        # Buttons
-        button_frame = ttk.Frame(self.dialog)
-        button_frame.pack(fill=tk.X, padx=20, pady=(10, 20))
-
-        ttk.Button(
-            button_frame,
-            text="Cancel",
-            command=self._cancel,
-            width=15
-        ).pack(side=tk.LEFT)
-
-        ttk.Button(
-            button_frame,
-            text="Export",
-            command=self._export,
-            width=15
-        ).pack(side=tk.RIGHT)
+        def update_extension(*args):
+            self.extension_label.config(text=f".{self.format_var.get()}")
+        self.format_var.trace_add('write', update_extension)
 
     def _browse_location(self):
         """Browse for save location"""

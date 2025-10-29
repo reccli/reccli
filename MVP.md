@@ -50,27 +50,36 @@ This approach:
 ### Core Features
 
 #### 1. Basic Recording
-```
-┌─────────────────────────────────────┐
-│  RecCli       [● REC]  [⚙️]         │
-└─────────────────────────────────────┘
-```
+
+**UI Design:**
+- Floating overlay button attached to top-right corner of terminal window
+- Follows terminal window when moved (updates position every 500ms)
+- Circular green button with red dot (ready to record)
+- Transforms to red square with white stop icon (while recording)
+- Timer displayed below button during recording
+- Always-on-top, semi-transparent overlay
 
 **Functionality:**
-- Click [● REC] → Start recording terminal session
+- Click [● REC] → Start recording terminal session in new window
 - Click [■ STOP] → Stop recording, show export dialog
 - Uses asciinema for terminal capture
-- Display recording duration
+- Display recording duration in real-time
+- Right-click menu for settings, stats, and recordings folder
+- Draggable if needed (manual repositioning)
 - No project dropdown (Phase 2)
 - No context management (Phase 2)
 
 **Technical:**
-- Python + tkinter UI
+- Python + tkinter UI (floating overlay)
+- AppleScript integration for terminal window position tracking
 - asciinema subprocess for recording
 - Simple session storage in memory
 - Auto-generate session ID
+- Supports both Terminal.app and iTerm2
 
 **Success Criteria:**
+- Button attaches to terminal window top-right corner
+- Button follows terminal when window is moved
 - Record terminal session without crashes
 - Accurate capture of terminal output
 - Recording duration displayed in real-time
