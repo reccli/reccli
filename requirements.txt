@@ -1,0 +1,25 @@
+# RecCli Requirements
+
+# Phase 1: Basic Recording (MVP)
+asciinema>=2.3.0
+
+# Phase 2: Intelligent Context System
+# Uncomment when implementing Phase 2
+
+# AI / LLM
+# anthropic>=0.7.0  # Claude API
+
+# Embeddings
+# sentence-transformers>=2.2.0  # Local embeddings
+# numpy>=1.24.0  # Vector operations
+
+# Token counting
+# tiktoken>=0.5.0  # Token counting
+
+# Security
+# keyring>=24.0.0  # Secure API key storage
+
+# Development
+# pytest>=7.4.0  # Testing
+# black>=23.0.0  # Code formatting
+# mypy>=1.7.0  # Type checking
