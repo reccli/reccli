@@ -202,9 +202,221 @@ def select_recent_project(project):
 
 Shows initialization dialog (see below).
 
-## Project Initialization: Three Strategies
+## Project Initialization: Branching Logic
 
-### Strategy A: Smart Scan (Recommended)
+When RecCli detects a project without .devproject, it branches based on whether the project is **empty** or has **existing code**:
+
+```python
+def prompt_initialize_project(project):
+    """
+    Initialize .devproject - branch based on project state
+    """
+    project_path = Path(project['path'])
+
+    # Check if project directory is empty or has minimal files
+    if is_empty_project(project_path):
+        # Empty project → Conversational onboarding
+        show_empty_project_onboarding(project)
+    else:
+        # Existing codebase → Give user choice
+        show_existing_project_choice(project)
+
+
+def is_empty_project(project_path):
+    """
+    Determine if project is empty (no significant code files)
+    """
+    # Ignore common non-code files
+    ignore = {'.git', '.gitignore', 'README.md', 'LICENSE', '.DS_Store',
+              'node_modules', '__pycache__', 'venv', '.env'}
+
+    files = list(project_path.rglob('*'))
+    code_files = [f for f in files
+                  if f.is_file()
+                  and f.name not in ignore
+                  and not any(p in ignore for p in f.parts)]
+
+    # Empty if fewer than 3 code files
+    return len(code_files) < 3
+
+
+def show_empty_project_onboarding(project):
+    """
+    Empty project → Conversational onboarding to capture intent
+    """
+    show_dialog(
+        title="New Project Setup",
+        message=f"I don't see any code in {project['name']} yet.\n\n"
+                "Let me ask you a few questions to understand what you're building.\n"
+                "This helps me make better suggestions as you code!",
+        buttons=["Continue with Setup", "Skip for Now"]
+    )
+
+    if user_choice == "Continue":
+        # Run conversational onboarding (see PROJECT_ONBOARDING.md)
+        devproject = run_conversational_onboarding(project)
+        save_devproject(devproject, project_path / '.devproject')
+    else:
+        # Create minimal .devproject
+        create_minimal_devproject(project)
+
+
+def show_existing_project_choice(project):
+    """
+    Existing codebase → Let user choose initialization method
+    """
+    choice = show_dialog(
+        title="Initialize RecCli",
+        message=f"I see {project['name']} has existing code.\n\n"
+                "How would you like to create the project overview?",
+        options=[
+            {
+                "id": "scan",
+                "title": "🔍 Scan Codebase (Recommended)",
+                "description": "I'll analyze your code, README, and dependencies to "
+                               "generate a project overview automatically.",
+                "time": "~30 seconds"
+            },
+            {
+                "id": "interview",
+                "title": "💬 Answer Questions",
+                "description": "I'll ask you questions about the project to build "
+                               "a more complete overview with business context.",
+                "time": "~2 minutes"
+            },
+            {
+                "id": "minimal",
+                "title": "⚡ Minimal Setup",
+                "description": "Create a basic project file, I'll learn as we work.",
+                "time": "instant"
+            }
+        ]
+    )
+
+    if choice == "scan":
+        devproject = smart_scan_codebase(project)
+
+        # Show what was found, let user review/edit
+        if show_confirmation_with_edit(devproject):
+            save_devproject(devproject, project_path / '.devproject')
+        else:
+            # User wants to answer questions instead
+            show_existing_project_choice(project)
+
+    elif choice == "interview":
+        # Run conversational onboarding even though code exists
+        # This captures business context that code can't reveal
+        devproject = run_conversational_onboarding(project,
+                                                   prefill_from_scan=True)
+        save_devproject(devproject, project_path / '.devproject')
+
+    elif choice == "minimal":
+        create_minimal_devproject(project)
+```
+
+### Decision Tree
+
+```
+                        RecCli Starts
+                              |
+                              v
+                    Check for .devproject
+                              |
+                    ┌─────────┴─────────┐
+                    |                   |
+              YES: Exists          NO: Missing
+                    |                   |
+                    v                   v
+            Load .devproject    Detect project type
+            Show welcome               |
+            Start recording            |
+                              ┌─────────┴─────────┐
+                              |                   |
+                         Empty Project      Existing Code
+                        (< 3 code files)   (has code files)
+                              |                   |
+                              v                   v
+                    ┌─────────────────┐   ┌─────────────────────────┐
+                    │ Conversational  │   │  Give User Choice:      │
+                    │   Onboarding    │   │                         │
+                    │                 │   │  [ ] Scan Codebase      │
+                    │ "What are you   │   │  [ ] Answer Questions   │
+                    │  building?"     │   │  [ ] Minimal Setup      │
+                    └────────┬────────┘   └───────┬─────────────────┘
+                             |                     |
+                             |          ┌──────────┼──────────┐
+                             |          |          |          |
+                             |          v          v          v
+                             |     Smart Scan  Onboard  Create Basic
+                             |          |          |          |
+                             |          v          v          v
+                             |     Review &   Pre-fill + Create .devproject
+                             |     Edit?     Questions    (minimal)
+                             |          |          |          |
+                             |          v          |          |
+                             |     Accept?        |          |
+                             |     /    \         |          |
+                             |   Yes    No        |          |
+                             |    |      |        |          |
+                             |    |   Go back     |          |
+                             |    |    to menu    |          |
+                             v    v               v          v
+                          ┌───────────────────────────────────┐
+                          │   .devproject Created & Saved     │
+                          │   Auto-update .gitignore          │
+                          │   Add to projects cache           │
+                          └──────────────┬────────────────────┘
+                                         v
+                               Show welcome message
+                                Start recording
+                                   [● REC]
+```
+
+### Decision Flow with Context Quality
+
+```
+                    Empty Project                Existing Codebase
+                         |                              |
+                         v                              v
+            ┌────────────────────────┐    ┌───────────────────────────┐
+            │ Conversational         │    │ User Chooses Approach:    │
+            │ Onboarding             │    │                           │
+            │                        │    │ A: Scan (Fast)            │
+            │ Captures:              │    │ B: Interview (Complete)   │
+            │ • Purpose & value prop │    │ C: Minimal (Quick)        │
+            │ • Target users         │    │                           │
+            │ • Core features        │    │                           │
+            │ • Goals & metrics      │    │                           │
+            │                        │    │                           │
+            │ Result:                │    │                           │
+            │ ★★★★★ Rich context     │    │                           │
+            │ (Strategic + Technical)│    │                           │
+            └────────────────────────┘    └─────┬─────────────────────┘
+                                                 |
+                              ┌──────────────────┼──────────────────┐
+                              |                  |                  |
+                              v                  v                  v
+                    ┌─────────────────┐ ┌──────────────┐ ┌─────────────┐
+                    │ Option A: Scan  │ │ Option B:    │ │ Option C:   │
+                    │                 │ │ Interview    │ │ Minimal     │
+                    │ Captures:       │ │              │ │             │
+                    │ • Tech stack    │ │ Captures:    │ │ Captures:   │
+                    │ • Architecture  │ │ • Everything │ │ • Name only │
+                    │ • From README   │ │ • Pre-fills  │ │             │
+                    │                 │ │   tech from  │ │             │
+                    │ Result:         │ │   scan       │ │ Result:     │
+                    │ ★★★☆☆ Technical │ │              │ │ ★☆☆☆☆ Basic │
+                    │ context only    │ │ Result:      │ │             │
+                    │                 │ │ ★★★★★ Rich   │ │             │
+                    └─────────────────┘ └──────────────┘ └─────────────┘
+
+                          Fast              Complete           Instant
+                        (~30 sec)          (~2 min)          (<5 sec)
+```
+
+## Project Initialization: Implementation Strategies
+
+### Strategy A: Smart Scan (For Existing Codebases)
 
 **Automatically analyze existing repo to generate .devproject:**
 
@@ -379,7 +591,47 @@ Output as JSON matching the .devproject schema.
     return json.loads(response)
 ```
 
-### Strategy B: Guided Manual Setup
+### Strategy B: Conversational Onboarding (For Empty Projects or User Choice)
+
+**See [PROJECT_ONBOARDING.md](PROJECT_ONBOARDING.md) for complete details.**
+
+When project is empty or user chooses to answer questions instead of scan, run AI-guided interview to capture:
+- Project purpose and value proposition
+- Target users and use cases
+- Core features planned
+- Development stage and milestones
+- Optional: ICP, success metrics, go-to-market strategy
+
+**Benefit:** Captures business/strategic context that can't be inferred from code.
+
+**Pre-filling for existing codebases:**
+```python
+def run_conversational_onboarding(project, prefill_from_scan=False):
+    """
+    Run AI interview, optionally pre-fill technical details from code scan
+    """
+    if prefill_from_scan:
+        # Scan codebase first to pre-fill technical fields
+        tech_info = quick_scan_tech_stack(project['path'])
+
+        # Start interview with tech details already known
+        # Focus questions on business/product context
+        prefilled_data = {
+            'tech_stack': tech_info['tech_stack'],
+            'platform': tech_info['platform'],
+            'existing_features': tech_info['features_detected']
+        }
+    else:
+        prefilled_data = None
+
+    # Run conversational interview
+    devproject = ai_guided_interview(project, prefilled_data)
+    return devproject
+```
+
+### Strategy B (Legacy): Guided Manual Setup
+
+**Note:** This is the old approach - replaced by conversational onboarding above.
 
 **User fills in project details:**
 
@@ -415,7 +667,7 @@ Output as JSON matching the .devproject schema.
 └──────────────────────────────────────────┘
 ```
 
-### Strategy C: Lazy Initialization (Mid-Conversation)
+### Strategy C: Minimal Setup (Lazy Initialization)
 
 **Start recording without .devproject, build context from session:**
 

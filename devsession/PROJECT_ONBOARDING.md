@@ -2,9 +2,35 @@
 
 ## Overview
 
-When RecCli starts in a new project (no .devproject exists), trigger an **AI-guided project scoping interview** to capture intent, goals, and requirements BEFORE code is written.
+Conversational onboarding uses an **AI-guided project scoping interview** to capture intent, goals, and requirements that can't be inferred from code alone.
 
-This creates a strong foundation for the .devproject file and prevents the AI from having to infer business context from code sessions.
+This creates a strong foundation for the .devproject file with strategic context (purpose, users, goals) that code scanning can't reveal.
+
+## When Onboarding is Triggered
+
+Conversational onboarding is used in two scenarios:
+
+### 1. Empty Projects (Automatic)
+When RecCli detects a project with **no code files** (< 3 files excluding README, LICENSE, .git):
+```
+Reason: No code to scan, so capture intent upfront
+Flow: Conversational interview → Creates .devproject → User starts coding
+Benefit: AI has full strategic context from first line of code
+```
+
+### 2. Existing Codebases (User Choice)
+When RecCli detects a project with **existing code**, user chooses:
+- **Option A:** Scan codebase (fast, technical context only)
+- **Option B:** Answer questions (slower, strategic context too) ← Onboarding
+- **Option C:** Minimal setup (skip both)
+
+```
+Reason: User wants business/product context captured, not just tech stack
+Flow: Quick tech scan (pre-fill) → Conversational interview → Creates .devproject
+Benefit: .devproject has both technical AND strategic context
+```
+
+**Key Insight:** For existing codebases, onboarding can **pre-fill** technical details from a quick scan, then focus questions on business context (purpose, users, goals, metrics) that code can't reveal.
 
 ---
 
