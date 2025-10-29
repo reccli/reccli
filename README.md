@@ -14,8 +14,9 @@ Every developer has lost that perfect debugging session. The one where everythin
 
 - 🔴 **One-click recording** - Floating button stays on top while you work
 - ⏱️ **Live duration tracker** - See exactly how long you've been recording
-- 💾 **Auto-save with timestamps** - Never lose a session
-- 🎥 **Multiple formats** - asciinema or script
+- 💾 **5 export formats** - Plain text, Markdown, JSON, HTML, or Asciinema cast
+- 📤 **Smart export dialog** - Choose format and location after each session
+- ⚙️ **Customizable settings** - Set default format and save location
 - 🚀 **Zero config** - Works immediately after install
 - 🆓 **100% Free & Open Source** - MIT Licensed
 
@@ -45,13 +46,28 @@ curl -sSL https://raw.githubusercontent.com/willluecke/RecCli/main/install.sh | 
 - **Square (red)** = Recording in progress
 - Drag anywhere on your screen
 - Stays on top of all windows
-- Right-click for quick access to recordings
+- Right-click for quick access to settings, stats, and recordings
 
 ### Smart Recording
 - Captures everything: input, output, colors, timing
-- Supports both asciinema (.cast) and script (.log) formats
-- Organized by timestamp: `session_20251027_143045.cast`
+- Live duration tracking during recording
+- Organized by timestamp: `session_20251029_143045`
 - All recordings stored locally in `~/.reccli/recordings`
+
+### Export Formats
+After each recording, choose from 5 export formats:
+
+1. **Plain Text (.txt)** - Simple text file with session metadata
+2. **Markdown (.md)** - Formatted markdown with code blocks (default)
+3. **JSON (.json)** - Structured JSON with full metadata
+4. **HTML (.html)** - Beautiful styled HTML page you can open in any browser
+5. **Asciinema Cast (.cast)** - Native format for replay with `asciinema play`
+
+### Customizable Settings
+- Set your default export format
+- Choose default save location
+- Configure recording preferences
+- Access via right-click menu → Settings
 
 ### CLI Mode
 ```bash

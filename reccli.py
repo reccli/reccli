@@ -12,7 +12,7 @@ import subprocess
 import datetime
 import shutil
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 try:
     import tkinter as tk
@@ -20,6 +20,16 @@ try:
     HAS_GUI = True
 except ImportError:
     HAS_GUI = False
+
+# Import RecCli modules
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from src.ui import ExportDialog, SettingsDialog
+    from src.export import format_duration
+    HAS_EXPORT = True
+except ImportError:
+    HAS_EXPORT = False
+    print("⚠️  Export modules not found. Basic recording only.")
 
 # Configuration
 VERSION = "1.0.0"
@@ -45,8 +55,17 @@ class ReccliConfig:
             'total_time_recorded': 0,
             'first_recording': None,
             'last_recording': None,
-            'install_date': datetime.datetime.now().isoformat()
+            'install_date': datetime.datetime.now().isoformat(),
+            # Export settings
+            'default_export_format': 'md',
+            'default_save_location': str(Path.home() / 'Documents' / 'reccli_sessions'),
+            # Recording settings
+            'show_recording_indicator': True,
+            'show_duration_timer': True,
+            'auto_pause_on_idle': False
         }
+        # Create default save location
+        Path(config['default_save_location']).mkdir(parents=True, exist_ok=True)
         self.save_config(config)
         return config
 
@@ -214,6 +233,7 @@ class ReccliGUI:
 
         # Create right-click menu
         self.menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add_command(label="⚙️ Settings", command=self.show_settings)
         self.menu.add_command(label="📊 Stats", command=self.show_stats)
         self.menu.add_command(label="📁 Recordings", command=self.open_recordings_folder)
         self.menu.add_separator()
@@ -304,16 +324,49 @@ class ReccliGUI:
             # Stop duration timer
             if self.update_timer:
                 self.root.after_cancel(self.update_timer)
+                recorded_duration = self.duration
                 self.duration = 0
 
             # Update stats
             self.config.increment_stats(duration)
 
-            # Show notification
-            filename = Path(result).name
-            self.show_notification(f"Saved: {filename}", "#27ae60")
+            # Show export dialog if available
+            if HAS_EXPORT:
+                self.show_export_dialog(Path(result), recorded_duration)
+            else:
+                # Just show notification
+                filename = Path(result).name
+                self.show_notification(f"Saved: {filename}", "#27ae60")
         else:
             messagebox.showerror("Error", f"Failed to stop: {result}")
+
+    def show_export_dialog(self, session_file: Path, duration_seconds: float):
+        """
+        Show export dialog after recording stops
+
+        Args:
+            session_file: Path to recorded .cast file
+            duration_seconds: Duration of recording in seconds
+        """
+        # Prepare metadata
+        metadata = {
+            'session_id': session_file.stem,
+            'duration': format_duration(duration_seconds),
+            'duration_seconds': duration_seconds,
+            'timestamp': datetime.datetime.now().isoformat()
+        }
+
+        # Show dialog
+        dialog = ExportDialog(self.root, session_file, metadata, self.config.config)
+        result = dialog.show()
+
+        if result:
+            # Successfully exported
+            filename = result['output_file'].name
+            self.show_notification(f"Exported: {filename}", "#27ae60")
+        else:
+            # Cancelled - session still saved as .cast
+            self.show_notification(f"Recording saved (not exported)", "#f39c12")
 
     def update_duration(self):
         """Update recording duration"""
@@ -347,6 +400,15 @@ class ReccliGUI:
 
         # Auto-close after 3 seconds
         notif.after(3000, notif.destroy)
+
+    def show_settings(self):
+        """Show settings dialog"""
+        if HAS_EXPORT:
+            from src.ui import SettingsDialog
+            dialog = SettingsDialog(self.root, self.config.config, self.config.save_config)
+            dialog.show()
+        else:
+            messagebox.showinfo("Settings", "Settings module not available")
 
     def show_stats(self):
         """Show recording statistics"""
