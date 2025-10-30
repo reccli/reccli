@@ -14,6 +14,13 @@ import shutil
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 
+# Debug logging to file
+DEBUG_LOG = Path("/tmp/reccli_debug.log")
+def debug_log(msg):
+    with open(DEBUG_LOG, "a") as f:
+        f.write(f"{datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]} - {msg}\n")
+        f.flush()
+
 try:
     import tkinter as tk
     from tkinter import ttk, messagebox
@@ -95,6 +102,7 @@ class CLIRecorder:
         self.process = None
         self.output_file = None
         self.start_time = None
+        self.terminal_id = None  # Track which terminal window is being recorded
 
         # Check for recording tools
         self.has_asciinema = shutil.which('asciinema') is not None
@@ -108,6 +116,10 @@ class CLIRecorder:
         """Start recording session using asciinema (nested shell approach)"""
         if self.recording:
             return False, "Already recording"
+
+        # Store terminal_id for targeting during stop
+        self.terminal_id = terminal_id
+        debug_log(f"CLIRecorder.start() - Stored terminal_id: {self.terminal_id}")
 
         # Generate filename
         if not filename:
@@ -179,22 +191,39 @@ class CLIRecorder:
         duration = time.time() - self.start_time if self.start_time else 0
 
         if sys.platform == 'darwin':  # macOS
-            # Send Ctrl+D twice: once to exit whatever is running (e.g., claude)
-            # and once to exit the asciinema session
-            # Activate Terminal first to ensure we're targeting the right window
-            script_text = '''
-            tell application "Terminal"
-                activate
-                delay 0.2
-            end tell
-            tell application "System Events"
-                tell process "Terminal"
-                    keystroke "d" using control down
-                    delay 0.3
-                    keystroke "d" using control down
+            # Send Ctrl+D to the SPECIFIC terminal window that's being recorded
+            # This prevents Ctrl+D from being sent to other terminal windows
+            debug_log(f"CLIRecorder.stop() - Using terminal_id: {self.terminal_id}")
+
+            if self.terminal_id:
+                # Target specific window by ID
+                script_text = f'''
+                tell application "Terminal"
+                    set targetWindow to first window whose id is {self.terminal_id}
+                    set index of targetWindow to 1
+                    activate
+                    delay 0.2
                 end tell
-            end tell
-            '''
+                tell application "System Events"
+                    tell process "Terminal"
+                        keystroke "d" using control down
+                    end tell
+                end tell
+                '''
+            else:
+                # Fallback to old behavior if terminal_id not available
+                debug_log("WARNING: No terminal_id available, using frontmost window")
+                script_text = '''
+                tell application "Terminal"
+                    activate
+                    delay 0.2
+                end tell
+                tell application "System Events"
+                    tell process "Terminal"
+                        keystroke "d" using control down
+                    end tell
+                end tell
+                '''
 
             try:
                 subprocess.run(['osascript', '-e', script_text], check=True, capture_output=True)
@@ -209,6 +238,7 @@ class CLIRecorder:
                 print(f"Warning: Failed to stop recording: {e}")
 
         self.recording = False
+        self.terminal_id = None  # Clear terminal_id after stopping
         return True, str(self.output_file), duration
 
     def _get_linux_terminal_cmd(self, cmd):
@@ -230,43 +260,63 @@ class CLIRecorder:
 class ReccliGUI:
     """Floating button GUI attached to terminal window"""
 
-    def __init__(self):
+    def __init__(self, terminal_id=None):
         self.config = ReccliConfig()
         self.recorder = CLIRecorder()
-        self.update_timer = None
         self.terminal_window = None
         self.last_terminal_position = None
-        self.terminal_recording_states = {}  # Track recording state per terminal window ID
         self.current_terminal_id = None  # Current active terminal window ID
+        self.my_terminal_id = terminal_id  # The specific terminal this instance is attached to (never changes)
         self.last_terminal_id = None  # Track last terminal ID to detect changes
         self.terminal_is_frontmost = False  # Track if terminal is the frontmost app
+        self.is_dark_mode = self._detect_dark_mode()  # Detect system appearance
+        self.last_appearance_check = None  # Track last appearance check
+        print(f"DEBUG: Initialized with dark mode = {self.is_dark_mode}")
 
         # Create GUI
         self.root = tk.Tk()
-        self.root.title("reccli")
-        self.root.overrideredirect(True)  # Remove window decorations
+        self.root.title("")
+
+        # Try different approach for macOS rounded corners
+        try:
+            # On macOS, this gives us rounded corners with close button
+            # Style options: closeBox (close button), collapseBox (minimize), resizable
+            self.root.tk.call('::tk::unsupported::MacWindowStyle', 'style', self.root._w, 'floating', 'closeBox')
+        except:
+            # Fallback to overrideredirect if not on macOS
+            self.root.overrideredirect(True)
+
         self.root.attributes('-topmost', True)
 
-        # Make window wider to fit "RecCli" text + button (80x35)
-        self.root.geometry("80x35")
+        # Make window wider to fit "RecCli" text + button (80x30)
+        self.root.geometry("80x30")
 
-        # Try to make window transparent
-        try:
-            self.root.attributes('-alpha', 0.95)
-        except:
-            pass
+        # Set root window background color
+        # Dark mode: #2c2c2c (very dark), Light mode: #e5e5e5 (light gray)
+        bg_color = '#2c2c2c' if self.is_dark_mode else '#e5e5e5'
+        self.root.configure(bg=bg_color)
+        print(f"DEBUG: Root bg_color = {bg_color} (is_dark_mode={self.is_dark_mode})")
 
         # Get terminal window position and attach to it
-        self.find_terminal_window()
+        if self.my_terminal_id:
+            # Terminal ID specified - lock onto it immediately
+            debug_log(f"ReccliGUI initialized with specified terminal ID: {self.my_terminal_id}")
+            self.find_terminal_by_id(self.my_terminal_id)
+        else:
+            # No terminal ID specified - use frontmost terminal at launch
+            self.find_terminal_window()
+            self.my_terminal_id = self.current_terminal_id  # Lock onto this terminal forever
+            debug_log(f"ReccliGUI initialized - locked to frontmost terminal ID: {self.my_terminal_id}")
         self.position_window()
 
         # Create canvas for "RecCli" text + button
+        print(f"DEBUG: Canvas bg_color = {bg_color} (is_dark_mode={self.is_dark_mode})")
         self.canvas = tk.Canvas(
             self.root,
             width=80,
-            height=35,
+            height=30,
             highlightthickness=0,
-            bg='#2c2c2c'
+            bg=bg_color
         )
         self.canvas.pack()
 
@@ -290,51 +340,132 @@ class ReccliGUI:
         # Track state
         self.recording = False
         self.start_pos = None
-        self.duration = 0
         self.is_dragging = False
         self.target_terminal_id = None  # Track which terminal window to record
+        self.recording_start_time = None  # Track when recording started
 
         # Start position tracking loop
         self.track_terminal_position()
 
+    def _detect_dark_mode(self):
+        """Detect if macOS is in dark mode"""
+        try:
+            result = subprocess.run(
+                ['defaults', 'read', '-g', 'AppleInterfaceStyle'],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            # Dark mode: command succeeds and contains "Dark"
+            # Light mode: command fails (returncode != 0)
+            return result.returncode == 0 and 'Dark' in result.stdout
+        except:
+            return False  # Default to light mode if detection fails
+
+    def _get_terminal_window_index(self, target_id):
+        """Get the z-order index (window stack position) of a terminal window"""
+        try:
+            result = subprocess.run([
+                'osascript',
+                '-e', 'tell application "Terminal"',
+                '-e', f'set targetWindow to first window whose id is {target_id}',
+                '-e', 'return index of targetWindow',
+                '-e', 'end tell'
+            ], capture_output=True, text=True, timeout=1)
+
+            if result.returncode == 0 and result.stdout.strip():
+                index = int(result.stdout.strip())
+                debug_log(f"Terminal {target_id} has z-index: {index}")
+                return index
+            return None
+        except Exception as e:
+            debug_log(f"Error getting terminal z-index: {e}")
+            return None
+
+    def find_terminal_by_id(self, target_id):
+        """Find a specific terminal window by its numeric ID"""
+        try:
+            # Query all Terminal windows and find the one matching target_id
+            result = subprocess.run([
+                'osascript',
+                '-e', 'tell application "Terminal"',
+                '-e', 'repeat with w in windows',
+                '-e', f'if id of w is {target_id} then',
+                '-e', 'set windowPosition to position of w',
+                '-e', 'set windowSize to size of w',
+                '-e', 'set windowID to id of w',
+                '-e', 'return (item 1 of windowPosition) & "," & (item 2 of windowPosition) & "," & (item 1 of windowSize) & "," & (item 2 of windowSize) & "," & windowID',
+                '-e', 'end if',
+                '-e', 'end repeat',
+                '-e', 'return "NOT_FOUND"',
+                '-e', 'end tell'
+            ], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and result.stdout.strip():
+                output = result.stdout.strip()
+                if output != "NOT_FOUND":
+                    # Parse the window info - format is "x, ,, y, ,, width, ,, height, ,, id"
+                    parts = [p.strip() for p in output.replace(',,', ',').split(',') if p.strip()]
+                    if len(parts) >= 5:
+                        window_id = parts[4]
+                        self.current_terminal_id = window_id
+                        self.terminal_window = {
+                            'x': int(parts[0]),
+                            'y': int(parts[1]),
+                            'width': int(parts[2]),
+                            'height': int(parts[3]),
+                            'id': window_id
+                        }
+                        debug_log(f"Instance {self.my_terminal_id}: Found terminal at ({parts[0]}, {parts[1]})")
+                        return
+                else:
+                    debug_log(f"Instance {self.my_terminal_id}: Terminal NOT_FOUND - keeping old position")
+            # If we didn't find it, keep old values
+        except Exception as e:
+            debug_log(f"Instance {self.my_terminal_id}: Error finding terminal by ID: {e}")
+            pass
+
     def find_terminal_window(self):
         """Find the active terminal window position using AppleScript"""
         try:
-            script = '''
-            tell application "System Events"
-                set frontApp to name of first application process whose frontmost is true
-                if frontApp is "Terminal" or frontApp is "iTerm2" then
-                    tell process frontApp
-                        set frontWindow to window 1
-                        set windowPosition to position of frontWindow
-                        set windowSize to size of frontWindow
-                        set windowName to name of frontWindow
-                        return (item 1 of windowPosition) & "," & (item 2 of windowPosition) & "," & (item 1 of windowSize) & "," & (item 2 of windowSize) & "," & windowName
-                    end tell
-                else
-                    return "NOT_TERMINAL"
-                end if
-            end tell
-            '''
-            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=2)
+            result = subprocess.run([
+                'osascript',
+                '-e', 'tell application "System Events"',
+                '-e', 'set frontApp to name of first application process whose frontmost is true',
+                '-e', 'if frontApp is "Terminal" then',
+                '-e', 'tell application "Terminal"',
+                '-e', 'set frontWindow to front window',
+                '-e', 'set windowPosition to position of frontWindow',
+                '-e', 'set windowSize to size of frontWindow',
+                '-e', 'set windowID to id of frontWindow',
+                '-e', 'return (item 1 of windowPosition) & "," & (item 2 of windowPosition) & "," & (item 1 of windowSize) & "," & (item 2 of windowSize) & "," & windowID',
+                '-e', 'end tell',
+                '-e', 'else',
+                '-e', 'return "NOT_TERMINAL"',
+                '-e', 'end if',
+                '-e', 'end tell'
+            ], capture_output=True, text=True, timeout=2)
+            debug_log(f"AppleScript result: returncode={result.returncode}, stdout='{result.stdout.strip()}', stderr='{result.stderr.strip()}'")
             if result.returncode == 0 and result.stdout.strip():
                 output = result.stdout.strip()
                 if output == "NOT_TERMINAL":
-                    # Not focused on terminal
+                    # Not focused on terminal - keep last_terminal_id!
                     self.terminal_window = None
                     self.current_terminal_id = None
                     self.terminal_is_frontmost = False
+                    # Don't clear last_terminal_id - we need it when button is clicked
                     return
                 else:
                     # Terminal is frontmost
                     self.terminal_is_frontmost = True
 
-                # Clean up output - remove extra spaces and split by comma
-                cleaned = output.replace(' ', '')
-                parts = [p.strip() for p in cleaned.split(',') if p.strip()]
+                # Parse output - format is "x, ,, y, ,, width, ,, height, ,, id"
+                # Remove empty strings and extra commas
+                parts = [p.strip() for p in output.replace(',,', ',').split(',') if p.strip()]
+                debug_log(f"Parsed terminal window parts: {parts}")
                 if len(parts) >= 5:
-                    window_id = parts[4]  # Use window name as unique ID
+                    window_id = parts[4]  # Numeric terminal window ID
                     self.current_terminal_id = window_id
+                    self.last_terminal_id = window_id  # Update last known ID
                     self.terminal_window = {
                         'x': int(parts[0]),
                         'y': int(parts[1]),
@@ -342,14 +473,17 @@ class ReccliGUI:
                         'height': int(parts[3]),
                         'id': window_id
                     }
-                    # Initialize recording state for this terminal if not exists
-                    if window_id not in self.terminal_recording_states:
-                        self.terminal_recording_states[window_id] = False
+                    debug_log(f"Terminal window found: {self.terminal_window}")
+                else:
+                    debug_log(f"Not enough parts in output: {len(parts)}")
+                    self.terminal_window = None
+                    self.current_terminal_id = None
             else:
+                debug_log(f"AppleScript failed or no output")
                 self.terminal_window = None
                 self.current_terminal_id = None
         except Exception as e:
-            # Silently fail
+            debug_log(f"Exception in find_terminal_window: {e}")
             self.terminal_window = None
             self.current_terminal_id = None
 
@@ -357,22 +491,52 @@ class ReccliGUI:
         """Continuously track terminal position and update button position"""
         # Don't update position if user is dragging
         if not self.is_dragging:
-            self.find_terminal_window()
+            # ALWAYS track only our specific terminal (the one we're attached to)
+            if self.my_terminal_id:
+                # Query all terminal windows and find the one matching my_terminal_id
+                self.find_terminal_by_id(self.my_terminal_id)
 
-            # Toggle topmost based on terminal focus
+                # Check if our specific terminal is frontmost
+                try:
+                    result = subprocess.run([
+                        'osascript',
+                        '-e', 'tell application "System Events"',
+                        '-e', 'set frontApp to name of first application process whose frontmost is true',
+                        '-e', 'return frontApp',
+                        '-e', 'end tell'
+                    ], capture_output=True, text=True, timeout=1)
+                    is_terminal_frontmost = result.returncode == 0 and result.stdout.strip() == "Terminal"
+                    # Check if OUR specific terminal is the frontmost one
+                    self.terminal_is_frontmost = is_terminal_frontmost and self.current_terminal_id == self.my_terminal_id
+                except:
+                    self.terminal_is_frontmost = False
+            else:
+                # Fallback - no terminal ID set yet
+                self.find_terminal_window()
+
+            # Simple window layering - just topmost when our terminal is focused
             try:
-                self.root.attributes('-topmost', self.terminal_is_frontmost)
-            except:
-                pass
+                if self.terminal_is_frontmost:
+                    # Our terminal is frontmost
+                    self.root.attributes('-topmost', True)
+                else:
+                    # Our terminal is NOT frontmost
+                    self.root.attributes('-topmost', False)
+            except Exception as e:
+                debug_log(f"Error managing window layering: {e}")
 
             # Only update button if terminal changed
             if self.current_terminal_id != self.last_terminal_id:
-                is_recording = self.terminal_recording_states.get(self.current_terminal_id, False)
-                self.draw_button(recording=is_recording)
-                self.last_terminal_id = self.current_terminal_id
+                # Redraw button with current global recording state
+                debug_log(f"Terminal changed to {self.current_terminal_id}, recording={self.recording}")
+                self.draw_button(recording=self.recording)
+                # Only update last_terminal_id if current is not None (preserve last known terminal)
+                if self.current_terminal_id is not None:
+                    self.last_terminal_id = self.current_terminal_id
 
             # Only update position if it changed
             if self.terminal_window != self.last_terminal_position:
+                debug_log(f"Position changed, updating window position")
                 self.position_window()
                 self.last_terminal_position = self.terminal_window.copy() if self.terminal_window else None
         # Check position every 50ms for smooth tracking
@@ -383,84 +547,70 @@ class ReccliGUI:
         self.root.update_idletasks()
 
         if self.terminal_window:
-            # Position at top-right of terminal window (moved 38px right, 52px down)
-            x = self.terminal_window['x'] + self.terminal_window['width'] - 132 + 38  # 82 + 50px left - 14px right
-            y = self.terminal_window['y'] + 28 + 24  # Moved down 52px total
-        else:
-            # Fallback to screen top-right
-            screen_width = self.root.winfo_screenwidth()
-            x = screen_width - 132 + 38  # 82 + 50px left - 14px right
-            y = 28 + 24  # Moved down 52px total
-
-        self.root.geometry(f"+{x}+{y}")
+            # Position at top-right of terminal window (moved 52px right, 29px up from top)
+            x = self.terminal_window['x'] + self.terminal_window['width'] - 132 + 52  # 82 + 50px left
+            y = self.terminal_window['y'] - 29  # 81px up from previous position (52 - (-29) = 81)
+            self.root.geometry(f"+{x}+{y}")
+        # If no terminal window, don't move - stay at last position
 
     def draw_button(self, recording=False):
         """Draw the recording button"""
+        print(f"DEBUG: draw_button called with recording={recording}")
         self.canvas.delete("all")
 
-        # Draw "RecCli" text on the left, top-aligned
+        # Set colors based on appearance mode
+        bg_color = '#2c2c2c' if self.is_dark_mode else '#e5e5e5'  # Dark gray or light gray
+        text_color = 'white' if self.is_dark_mode else '#333333'
+        button_fill = 'white' if self.is_dark_mode else 'black'  # White fill for dark mode, black for light
+        button_outline = 'black' if self.is_dark_mode else 'white'  # Black outline for dark, white for light
+        border_color = '#333333'
+
+        # Update canvas background
+        self.canvas.configure(bg=bg_color)
+
+        # Draw "RecCli" text on the left, vertically centered
         self.canvas.create_text(
-            25, 10,
+            25, 15,
             text="RecCli",
-            fill='white',
+            fill=text_color,
             font=('Arial', 10, 'bold'),
-            anchor='n'
+            anchor='center'
         )
 
         if recording:
-            # Black square with white border when recording (shifted right for text)
+            # Square with border when recording (shifted right for text)
             self.button = self.canvas.create_rectangle(
-                52, 7, 73, 28,
-                fill='black',
-                outline='white',
+                52, 5, 73, 26,
+                fill=button_fill,
+                outline=button_outline,
                 width=1
             )
             # Red square in center (stop icon)
             self.canvas.create_rectangle(
-                59, 15, 66, 22,
+                59, 12, 66, 19,
                 fill='#ff4757',
                 outline=''
             )
         else:
-            # Black circle with white border when ready (shifted right for text)
+            # Circle with border when ready (shifted right for text)
             self.button = self.canvas.create_oval(
-                50, 5, 75, 30,
-                fill='black',
-                outline='white',
+                50, 3, 75, 28,
+                fill=button_fill,
+                outline=button_outline,
                 width=1
             )
-            # Red dot in center (record icon)
+            # Red dot in center (record icon) - 6x6 circle, 1px right, 1px down
             self.canvas.create_oval(
-                59, 15, 66, 22,
+                60, 13, 66, 19,
                 fill='#e74c3c',
                 outline=''
             )
 
     def start_recording(self):
         """Start recording"""
-        # Capture which terminal window is currently active BEFORE showing dialog
-        try:
-            script = '''
-            tell application "System Events"
-                set frontApp to name of first application process whose frontmost is true
-                if frontApp is "Terminal" then
-                    tell application "Terminal"
-                        return id of front window
-                    end tell
-                else if frontApp is "iTerm2" then
-                    tell application "iTerm"
-                        return id of current window
-                    end tell
-                end if
-            end tell
-            '''
-            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0 and result.stdout.strip():
-                self.target_terminal_id = result.stdout.strip()
-                print(f"Captured terminal ID: {self.target_terminal_id}")
-        except Exception as e:
-            print(f"Failed to capture terminal ID: {e}")
-            self.target_terminal_id = None
+        # Always use our specific terminal ID (the one this instance is attached to)
+        self.target_terminal_id = self.my_terminal_id
+        debug_log(f"Start recording - target_terminal_id set to: {self.target_terminal_id} (my_terminal_id={self.my_terminal_id})")
 
         try:
             # Ask user which tool to launch
@@ -527,11 +677,9 @@ class ReccliGUI:
 
             if success:
                 self.recording = True
-                # Set recording state for current terminal
-                if self.current_terminal_id:
-                    self.terminal_recording_states[self.current_terminal_id] = True
+                self.recording_start_time = datetime.datetime.now()
+                debug_log(f"!!! RECORDING STARTED: terminal_id={self.target_terminal_id}, recording={self.recording}")
                 self.draw_button(recording=True)
-                self.update_duration()
                 self.show_notification(notification, "#27ae60")
             else:
                 messagebox.showerror("Error", f"Failed to start: {result}")
@@ -552,16 +700,11 @@ class ReccliGUI:
         success, result, duration = self.recorder.stop()
         if success:
             self.recording = False
-            # Clear recording state for current terminal
-            if self.current_terminal_id:
-                self.terminal_recording_states[self.current_terminal_id] = False
+            print(f"DEBUG: Recording stopped, redrawing button")
             self.draw_button(recording=False)
 
-            # Stop duration timer
-            if self.update_timer:
-                self.root.after_cancel(self.update_timer)
-                recorded_duration = self.duration
-                self.duration = 0
+            # Calculate duration from timestamps
+            recorded_duration = duration  # Use duration from recorder
 
             # Update stats
             self.config.increment_stats(duration)
@@ -603,13 +746,6 @@ class ReccliGUI:
         else:
             # Cancelled - session still saved as .cast
             self.show_notification(f"Recording saved (not exported)", "#f39c12")
-
-    def update_duration(self):
-        """Update recording duration"""
-        if self.recording:
-            self.duration += 1
-            self.draw_button(recording=True)
-            self.update_timer = self.root.after(1000, self.update_duration)
 
     def show_notification(self, message, color="#2c2c2c"):
         """Show a temporary notification"""
@@ -703,10 +839,9 @@ Share your stats on X!"""
         """Handle mouse button release"""
         # Only trigger click if we weren't dragging
         if not self.is_dragging:
-            # Check recording state for current terminal
-            is_recording = self.terminal_recording_states.get(self.current_terminal_id, False)
-            print(f"Button clicked! Recording={is_recording} Terminal={self.current_terminal_id}")
-            if not is_recording:
+            # Check global recording state
+            print(f"Button clicked! Recording={self.recording}")
+            if not self.recording:
                 self.start_recording()
             else:
                 self.stop_recording()
@@ -727,26 +862,202 @@ Share your stats on X!"""
         """Run the GUI"""
         self.root.mainloop()
 
+def get_all_terminal_ids():
+    """Get IDs of all visible, non-minimized Terminal windows"""
+    try:
+        result = subprocess.run([
+            'osascript',
+            '-e', 'tell application "Terminal"',
+            '-e', 'set windowIDs to {}',
+            '-e', 'repeat with w in windows',
+            '-e', 'if visible of w is true and miniaturized of w is false then',
+            '-e', 'set end of windowIDs to id of w',
+            '-e', 'end if',
+            '-e', 'end repeat',
+            '-e', 'return windowIDs',
+            '-e', 'end tell'
+        ], capture_output=True, text=True, timeout=5)
+
+        if result.returncode == 0 and result.stdout.strip():
+            # Parse comma-separated IDs
+            ids = [id.strip() for id in result.stdout.strip().split(',') if id.strip()]
+            debug_log(f"Found visible terminal IDs: {ids}")
+            return ids
+        return []
+    except Exception as e:
+        debug_log(f"Error getting terminal IDs: {e}")
+        return []
+
+def launch_all_terminals():
+    """Launch one reccli instance for each open terminal window"""
+    terminal_ids = get_all_terminal_ids()
+
+    if not terminal_ids:
+        print("❌ No Terminal windows found")
+        return
+
+    print(f"📺 Found {len(terminal_ids)} Terminal windows")
+    print(f"🚀 Launching reccli for each terminal...")
+
+    # Store process info in a file for tracking
+    processes_file = Path("/tmp/reccli_processes.json")
+    processes = {}
+
+    script_path = Path(__file__).resolve()
+
+    for term_id in terminal_ids:
+        try:
+            # Launch reccli in background for this specific terminal
+            # Use --terminal-id to specify which terminal to attach to
+            proc = subprocess.Popen(
+                [sys.executable, str(script_path), 'gui', '--terminal-id', term_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            processes[term_id] = proc.pid
+            print(f"  ✓ Launched for terminal {term_id} (PID: {proc.pid})")
+        except Exception as e:
+            print(f"  ✗ Failed to launch for terminal {term_id}: {e}")
+
+    # Save process info
+    with open(processes_file, 'w') as f:
+        json.dump(processes, f, indent=2)
+
+    print(f"\n✅ Launched {len(processes)} reccli instances")
+    print(f"📝 Process info saved to {processes_file}")
+
+def killall_reccli():
+    """Kill all running reccli instances"""
+    try:
+        result = subprocess.run(['pkill', '-f', 'reccli.py gui'], capture_output=True, text=True)
+        print("✅ All reccli instances stopped")
+
+        # Clean up tracking file
+        processes_file = Path("/tmp/reccli_processes.json")
+        if processes_file.exists():
+            processes_file.unlink()
+            print("📝 Cleaned up process tracking file")
+    except Exception as e:
+        print(f"❌ Error stopping instances: {e}")
+
+def watch_terminals():
+    """Watch for new Terminal windows and auto-launch reccli instances"""
+    print("👀 RecCli watcher started")
+    print("   Monitoring for new Terminal windows...")
+    print("   Press Ctrl+C to stop")
+
+    processes_file = Path("/tmp/reccli_processes.json")
+    script_path = Path(__file__).resolve()
+
+    # Track which terminals we've already launched for
+    tracked_terminals = set()
+
+    # Load existing processes if any
+    if processes_file.exists():
+        try:
+            with open(processes_file, 'r') as f:
+                existing = json.load(f)
+                tracked_terminals = set(existing.keys())
+                debug_log(f"Watcher: Loaded {len(tracked_terminals)} existing terminals: {tracked_terminals}")
+        except:
+            pass
+
+    try:
+        while True:
+            # Get current visible terminals
+            current_terminals = set(get_all_terminal_ids())
+
+            # Find new terminals (in current but not in tracked)
+            new_terminals = current_terminals - tracked_terminals
+
+            # Find closed terminals (in tracked but not in current)
+            closed_terminals = tracked_terminals - current_terminals
+
+            # Launch popups for new terminals
+            for term_id in new_terminals:
+                try:
+                    proc = subprocess.Popen(
+                        [sys.executable, str(script_path), 'gui', '--terminal-id', term_id],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+                    print(f"  ✓ Launched reccli for new terminal {term_id} (PID: {proc.pid})")
+                    debug_log(f"Watcher: Launched for new terminal {term_id}, PID: {proc.pid}")
+                    tracked_terminals.add(term_id)
+
+                    # Update processes file
+                    if processes_file.exists():
+                        with open(processes_file, 'r') as f:
+                            processes = json.load(f)
+                    else:
+                        processes = {}
+                    processes[term_id] = proc.pid
+                    with open(processes_file, 'w') as f:
+                        json.dump(processes, f, indent=2)
+                except Exception as e:
+                    print(f"  ✗ Failed to launch for terminal {term_id}: {e}")
+                    debug_log(f"Watcher: Error launching for {term_id}: {e}")
+
+            # Clean up closed terminals from tracking
+            if closed_terminals:
+                debug_log(f"Watcher: Terminals closed: {closed_terminals}")
+                tracked_terminals -= closed_terminals
+
+                # Update processes file
+                if processes_file.exists():
+                    try:
+                        with open(processes_file, 'r') as f:
+                            processes = json.load(f)
+                        for term_id in closed_terminals:
+                            processes.pop(term_id, None)
+                        with open(processes_file, 'w') as f:
+                            json.dump(processes, f, indent=2)
+                    except:
+                        pass
+
+            # Check every 2 seconds
+            time.sleep(2)
+
+    except KeyboardInterrupt:
+        print("\n👋 Watcher stopped")
+        debug_log("Watcher: Stopped by user")
+
 def main():
     """Main entry point"""
     import argparse
 
     parser = argparse.ArgumentParser(description='reccli - One-click CLI recorder')
-    parser.add_argument('command', nargs='?', default='gui',
-                       choices=['gui', 'start', 'stop', 'status'],
-                       help='Command to execute')
+    parser.add_argument('command', nargs='?', default='watch',
+                       choices=['gui', 'launch', 'watch', 'killall', 'start', 'stop', 'status'],
+                       help='Command to execute (default: watch)')
+    parser.add_argument('--terminal-id', type=str, help='Specific terminal ID to attach to (internal use)')
     parser.add_argument('--version', action='version', version=f'reccli {VERSION}')
 
     args = parser.parse_args()
 
-    if args.command == 'gui':
+    if args.command == 'watch':
+        # Default command: watch for new terminals and auto-launch
+        watch_terminals()
+
+    elif args.command == 'launch':
+        # Launch one instance per current terminal
+        launch_all_terminals()
+
+    elif args.command == 'killall':
+        # Kill all reccli instances
+        killall_reccli()
+
+    elif args.command == 'gui':
         if not HAS_GUI:
             print("❌ GUI not available. Install tkinter:")
             print("   Ubuntu/Debian: sudo apt-get install python3-tk")
             print("   macOS: brew install python-tk")
             sys.exit(1)
 
-        app = ReccliGUI()
+        # Pass terminal_id if specified (from launcher)
+        app = ReccliGUI(terminal_id=args.terminal_id)
         app.run()
 
     elif args.command == 'status':
