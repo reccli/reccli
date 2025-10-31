@@ -271,11 +271,12 @@ class ReccliGUI:
         self.terminal_is_frontmost = False  # Track if terminal is the frontmost app
         self.is_dark_mode = self._detect_dark_mode()  # Detect system appearance
         self.last_appearance_check = None  # Track last appearance check
+        self.popup_hidden = False  # Track if popup is hidden due to terminal minimize
         print(f"DEBUG: Initialized with dark mode = {self.is_dark_mode}")
 
         # Create GUI
         self.root = tk.Tk()
-        self.root.title("")
+        self.root.title("RecCli")  # Window title shows full brand name
 
         # Try different approach for macOS rounded corners
         try:
@@ -288,7 +289,7 @@ class ReccliGUI:
 
         self.root.attributes('-topmost', True)
 
-        # Make window wider to fit "RecCli" text + button (80x30)
+        # Size: 80x30 for "RecCli", shrinks to 65x30 when recording shows "Rec"
         self.root.geometry("80x30")
 
         # Set root window background color
@@ -309,7 +310,7 @@ class ReccliGUI:
             debug_log(f"ReccliGUI initialized - locked to frontmost terminal ID: {self.my_terminal_id}")
         self.position_window()
 
-        # Create canvas for "RecCli" text + button
+        # Create canvas for text + button
         print(f"DEBUG: Canvas bg_color = {bg_color} (is_dark_mode={self.is_dark_mode})")
         self.canvas = tk.Canvas(
             self.root,
@@ -343,6 +344,7 @@ class ReccliGUI:
         self.is_dragging = False
         self.target_terminal_id = None  # Track which terminal window to record
         self.recording_start_time = None  # Track when recording started
+        self.tooltip = None  # Tooltip window
 
         # Start position tracking loop
         self.track_terminal_position()
@@ -386,11 +388,17 @@ class ReccliGUI:
         """Find a specific terminal window by its numeric ID"""
         try:
             # Query all Terminal windows and find the one matching target_id
+            # Also check if it's visible and not minimized
             result = subprocess.run([
                 'osascript',
                 '-e', 'tell application "Terminal"',
                 '-e', 'repeat with w in windows',
                 '-e', f'if id of w is {target_id} then',
+                '-e', 'set isVisible to visible of w',
+                '-e', 'set isMini to miniaturized of w',
+                '-e', 'if isVisible is false or isMini is true then',
+                '-e', 'return "CLOSED_OR_MINIMIZED"',
+                '-e', 'end if',
                 '-e', 'set windowPosition to position of w',
                 '-e', 'set windowSize to size of w',
                 '-e', 'set windowID to id of w',
@@ -402,7 +410,35 @@ class ReccliGUI:
             ], capture_output=True, text=True, timeout=2)
             if result.returncode == 0 and result.stdout.strip():
                 output = result.stdout.strip()
-                if output != "NOT_FOUND":
+                if output == "CLOSED_OR_MINIMIZED":
+                    debug_log(f"Instance {self.my_terminal_id}: Terminal closed or minimized")
+                    # If recording, just hide the popup, don't quit
+                    if self.recorder.recording:
+                        # Only hide if not already hidden
+                        if not self.popup_hidden:
+                            debug_log(f"Instance {self.my_terminal_id}: Recording active, hiding popup")
+                            self.root.withdraw()  # Hide the popup window completely
+                            self.popup_hidden = True
+                        return
+                    else:
+                        # Not recording, safe to quit
+                        debug_log(f"Instance {self.my_terminal_id}: Not recording, quitting")
+                        self.quit()
+                        return
+                elif output != "NOT_FOUND":
+                    # Terminal is visible and not minimized
+                    # If popup was hidden, restore it
+                    if self.popup_hidden:
+                        debug_log(f"Instance {self.my_terminal_id}: Terminal restored, showing popup (recording={self.recorder.recording})")
+                        self.root.deiconify()
+                        self.popup_hidden = False
+                        # Redraw button with correct recording state from recorder
+                        self.draw_button(recording=self.recorder.recording)
+                        # Sync GUI state with recorder
+                        self.recording = self.recorder.recording
+                        # Update last_terminal_id to prevent double-redraw in track_terminal_position
+                        self.last_terminal_id = self.my_terminal_id
+
                     # Parse the window info - format is "x, ,, y, ,, width, ,, height, ,, id"
                     parts = [p.strip() for p in output.replace(',,', ',').split(',') if p.strip()]
                     if len(parts) >= 5:
@@ -418,8 +454,9 @@ class ReccliGUI:
                         debug_log(f"Instance {self.my_terminal_id}: Found terminal at ({parts[0]}, {parts[1]})")
                         return
                 else:
-                    debug_log(f"Instance {self.my_terminal_id}: Terminal NOT_FOUND - keeping old position")
-            # If we didn't find it, keep old values
+                    debug_log(f"Instance {self.my_terminal_id}: Terminal NOT_FOUND - quitting")
+                    self.quit()
+            # If we didn't find it, quit
         except Exception as e:
             debug_log(f"Instance {self.my_terminal_id}: Error finding terminal by ID: {e}")
             pass
@@ -527,9 +564,12 @@ class ReccliGUI:
 
             # Only update button if terminal changed
             if self.current_terminal_id != self.last_terminal_id:
-                # Redraw button with current global recording state
-                debug_log(f"Terminal changed to {self.current_terminal_id}, recording={self.recording}")
-                self.draw_button(recording=self.recording)
+                # Redraw button with actual recorder state (source of truth)
+                actual_recording = self.recorder.recording
+                debug_log(f"Terminal changed to {self.current_terminal_id}, recording={actual_recording}")
+                self.draw_button(recording=actual_recording)
+                # Sync GUI state
+                self.recording = actual_recording
                 # Only update last_terminal_id if current is not None (preserve last known terminal)
                 if self.current_terminal_id is not None:
                     self.last_terminal_id = self.current_terminal_id
@@ -568,46 +608,130 @@ class ReccliGUI:
         # Update canvas background
         self.canvas.configure(bg=bg_color)
 
-        # Draw "RecCli" text on the left, vertically centered
+        # State-dependent text: "RecCli" when idle, "Rec" when recording
+        if recording:
+            # Minimal "Rec" during recording - cinematic and focused
+            label_text = "Rec"
+            text_x = 20
+        else:
+            # Full "RecCli" when idle - brand visibility
+            label_text = "RecCli"
+            text_x = 25
+
         self.canvas.create_text(
-            25, 15,
-            text="RecCli",
+            text_x, 15,
+            text=label_text,
             fill=text_color,
             font=('Arial', 10, 'bold'),
             anchor='center'
         )
 
         if recording:
-            # Square with border when recording (shifted right for text)
+            # Square with border when recording (positioned for "Rec" text - shorter)
             self.button = self.canvas.create_rectangle(
-                52, 5, 73, 26,
+                40, 5, 61, 26,
                 fill=button_fill,
                 outline=button_outline,
                 width=1
             )
             # Red square in center (stop icon)
             self.canvas.create_rectangle(
-                59, 12, 66, 19,
+                47, 12, 54, 19,
                 fill='#ff4757',
                 outline=''
             )
         else:
-            # Circle with border when ready (shifted right for text)
+            # Circle with border when ready (positioned for "RecCli" text)
             self.button = self.canvas.create_oval(
                 50, 3, 75, 28,
                 fill=button_fill,
                 outline=button_outline,
                 width=1
             )
-            # Red dot in center (record icon) - 6x6 circle, 1px right, 1px down
+            # Red dot in center (record icon) - 6x6 circle
             self.canvas.create_oval(
                 60, 13, 66, 19,
                 fill='#e74c3c',
                 outline=''
             )
 
+    def _check_for_active_tools(self):
+        """Check if Claude or Codex is already running in this specific terminal"""
+        if not self.my_terminal_id:
+            return False
+
+        try:
+            # Get the TTY/shell info for this terminal window
+            # This is a simplification - ideally we'd check the process tree of the specific terminal
+            # For now, we'll just check if there are ANY claude/codex processes
+            # This needs AppleScript to get the tab info for the specific terminal window
+
+            script = f'''
+            tell application "Terminal"
+                set targetWindow to first window whose id is {self.my_terminal_id}
+                set tabList to every tab of targetWindow
+                repeat with t in tabList
+                    set processes to processes of t
+                    repeat with p in processes
+                        if p contains "claude" or p contains "codex" then
+                            return "FOUND"
+                        end if
+                    end repeat
+                end repeat
+                return "NOT_FOUND"
+            end tell
+            '''
+
+            result = subprocess.run(
+                ['osascript', '-e', script],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+
+            return result.returncode == 0 and "FOUND" in result.stdout
+        except Exception as e:
+            debug_log(f"Error checking for active tools: {e}")
+            return False
+
+    def show_tool_warning(self):
+        """Show warning tooltip when trying to record with tools already running"""
+        # Create tooltip window
+        tooltip = tk.Toplevel(self.root)
+        tooltip.overrideredirect(True)
+        tooltip.attributes('-topmost', True)
+
+        # Position near the button
+        x = self.root.winfo_x() - 50
+        y = self.root.winfo_y() + 35
+        tooltip.geometry(f"+{x}+{y}")
+
+        # Style based on dark mode
+        bg_color = '#2c2c2c' if self.is_dark_mode else '#f0f0f0'
+        fg_color = 'white' if self.is_dark_mode else '#333333'
+
+        label = tk.Label(
+            tooltip,
+            text="⚠️ Start RecCli before launching tools",
+            bg=bg_color,
+            fg=fg_color,
+            font=('Arial', 10),
+            padx=15,
+            pady=10,
+            justify='center'
+        )
+        label.pack()
+
+        # Auto-close after 3 seconds
+        tooltip.after(3000, tooltip.destroy)
+
     def start_recording(self):
         """Start recording"""
+        # Check if tools are already running
+        if self._check_for_active_tools():
+            self.show_tool_warning()
+            return
+
         # Always use our specific terminal ID (the one this instance is attached to)
         self.target_terminal_id = self.my_terminal_id
         debug_log(f"Start recording - target_terminal_id set to: {self.target_terminal_id} (my_terminal_id={self.my_terminal_id})")
@@ -700,8 +824,10 @@ class ReccliGUI:
         success, result, duration = self.recorder.stop()
         if success:
             self.recording = False
-            print(f"DEBUG: Recording stopped, redrawing button")
-            self.draw_button(recording=False)
+            print(f"DEBUG: Recording stopped, showing 'Stopped' state")
+
+            # Show "Stopped" temporarily
+            self.show_stopped_state()
 
             # Calculate duration from timestamps
             recorded_duration = duration  # Use duration from recorder
@@ -718,6 +844,25 @@ class ReccliGUI:
                 self.show_notification(f"Saved: {filename}", "#27ae60")
         else:
             messagebox.showerror("Error", f"Failed to stop: {result}")
+
+    def show_stopped_state(self):
+        """Show 'Stopped' text briefly, then revert to 'RecCli'"""
+        # Draw stopped state
+        self.canvas.delete("all")
+        bg_color = '#2c2c2c' if self.is_dark_mode else '#e5e5e5'
+        text_color = 'white' if self.is_dark_mode else '#333333'
+
+        self.canvas.configure(bg=bg_color)
+        self.canvas.create_text(
+            40, 15,
+            text="Stopped",
+            fill=text_color,
+            font=('Arial', 10, 'bold'),
+            anchor='center'
+        )
+
+        # Revert to normal after 1.5 seconds
+        self.root.after(1500, lambda: self.draw_button(recording=False))
 
     def show_export_dialog(self, session_file: Path, duration_seconds: float):
         """
@@ -839,9 +984,10 @@ Share your stats on X!"""
         """Handle mouse button release"""
         # Only trigger click if we weren't dragging
         if not self.is_dragging:
-            # Check global recording state
-            print(f"Button clicked! Recording={self.recording}")
-            if not self.recording:
+            # Check actual recorder state (source of truth)
+            actual_recording = self.recorder.recording
+            print(f"Button clicked! GUI recording={self.recording}, Recorder recording={actual_recording}")
+            if not actual_recording:
                 self.start_recording()
             else:
                 self.stop_recording()
@@ -886,6 +1032,29 @@ def get_all_terminal_ids():
         return []
     except Exception as e:
         debug_log(f"Error getting terminal IDs: {e}")
+        return []
+
+def get_all_terminal_ids_including_minimized():
+    """Get IDs of ALL Terminal windows, including minimized ones"""
+    try:
+        result = subprocess.run([
+            'osascript',
+            '-e', 'tell application "Terminal"',
+            '-e', 'set windowIDs to {}',
+            '-e', 'repeat with w in windows',
+            '-e', 'set end of windowIDs to id of w',
+            '-e', 'end repeat',
+            '-e', 'return windowIDs',
+            '-e', 'end tell'
+        ], capture_output=True, text=True, timeout=5)
+
+        if result.returncode == 0 and result.stdout.strip():
+            # Parse comma-separated IDs
+            ids = [id.strip() for id in result.stdout.strip().split(',') if id.strip()]
+            return ids
+        return []
+    except Exception as e:
+        debug_log(f"Error getting all terminal IDs: {e}")
         return []
 
 def launch_all_terminals():
@@ -965,14 +1134,18 @@ def watch_terminals():
 
     try:
         while True:
-            # Get current visible terminals
-            current_terminals = set(get_all_terminal_ids())
+            # Get current visible terminals (for launching new popups)
+            visible_terminals = set(get_all_terminal_ids())
 
-            # Find new terminals (in current but not in tracked)
-            new_terminals = current_terminals - tracked_terminals
+            # Get ALL terminals including minimized (to detect actual closes)
+            all_terminals = set(get_all_terminal_ids_including_minimized())
 
-            # Find closed terminals (in tracked but not in current)
-            closed_terminals = tracked_terminals - current_terminals
+            # Find new terminals (visible but not tracked)
+            new_terminals = visible_terminals - tracked_terminals
+
+            # Find closed terminals (tracked but not in ALL terminals, including minimized)
+            # This way we only remove from tracking when terminal is actually closed, not just minimized
+            closed_terminals = tracked_terminals - all_terminals
 
             # Launch popups for new terminals
             for term_id in new_terminals:
