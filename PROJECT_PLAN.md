@@ -160,6 +160,7 @@ DevsessionRecorder (reccli/recorder.py)
 - [x] Visual states (idle/recording/stopped)
 - [x] BackgroundRecorder using subprocess + AppleScript
 - [x] Launcher script (`reccli-gui.py`)
+- [x] **Added watcher** - Auto-launches GUI for new terminals, prevents duplicates on Space changes
 
 **Files Created**:
 - `reccli/llm.py` (300 lines) - LLMSession class

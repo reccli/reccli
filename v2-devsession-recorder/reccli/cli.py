@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-from .recorder import record_session
+from .recorder import record_session, watch_terminals
 from .devsession import DevSession
 from .llm import chat_session, one_shot_query
 from .config import Config
@@ -279,6 +279,11 @@ def cmd_config(args):
     return 0
 
 
+def cmd_watch(args):
+    """Watch for new terminal windows and auto-launch GUI"""
+    return watch_terminals()
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -366,6 +371,10 @@ Examples:
     export_parser.add_argument('-f', '--format', choices=['txt', 'md', 'cast'], default='md', help='Export format')
     export_parser.add_argument('-o', '--output', help='Output file path')
     export_parser.set_defaults(func=cmd_export)
+
+    # Watch command (NEW - Auto-launch GUI for terminals)
+    watch_parser = subparsers.add_parser('watch', help='Watch for new terminal windows and auto-launch GUI')
+    watch_parser.set_defaults(func=cmd_watch)
 
     # Parse arguments
     args = parser.parse_args()

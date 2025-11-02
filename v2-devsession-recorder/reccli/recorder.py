@@ -445,15 +445,15 @@ class DevsessionGUI:
     def find_terminal_by_id(self, target_id):
         """Find specific terminal window by ID"""
         try:
+            # Only check if minimized (not 'visible' since that's false on different Space)
             result = subprocess.run([
                 'osascript',
                 '-e', 'tell application "Terminal"',
                 '-e', 'repeat with w in windows',
                 '-e', f'if id of w is {target_id} then',
-                '-e', 'set isVisible to visible of w',
                 '-e', 'set isMini to miniaturized of w',
-                '-e', 'if isVisible is false or isMini is true then',
-                '-e', 'return "CLOSED_OR_MINIMIZED"',
+                '-e', 'if isMini is true then',
+                '-e', 'return "MINIMIZED"',
                 '-e', 'end if',
                 '-e', 'set windowPosition to position of w',
                 '-e', 'set windowSize to size of w',
@@ -467,7 +467,7 @@ class DevsessionGUI:
 
             if result.returncode == 0 and result.stdout.strip():
                 output = result.stdout.strip()
-                if output == "CLOSED_OR_MINIMIZED":
+                if output == "MINIMIZED":
                     if self.recorder.recording:
                         if not self.popup_hidden:
                             self.root.withdraw()
@@ -777,3 +777,136 @@ class DevsessionGUI:
     def run(self):
         """Run the GUI"""
         self.root.mainloop()
+
+
+# Watcher functions for auto-launching GUI per terminal
+
+def get_all_terminal_ids_including_minimized():
+    """Get IDs of ALL Terminal windows, including minimized and across Spaces"""
+    try:
+        result = subprocess.run([
+            'osascript',
+            '-e', 'tell application "Terminal"',
+            '-e', 'set windowIDs to {}',
+            '-e', 'repeat with w in windows',
+            '-e', 'set end of windowIDs to id of w',
+            '-e', 'end repeat',
+            '-e', 'return windowIDs',
+            '-e', 'end tell'
+        ], capture_output=True, text=True, timeout=5)
+
+        if result.returncode == 0 and result.stdout.strip():
+            ids = [id.strip() for id in result.stdout.strip().split(',') if id.strip()]
+            return ids
+        return []
+    except Exception:
+        return []
+
+
+def watch_terminals():
+    """Watch for new Terminal windows and auto-launch reccli instances"""
+    import json
+    import time
+    from pathlib import Path
+
+    print("👀 RecCli v2 watcher started")
+    print("   Monitoring for new Terminal windows...")
+    print("   Press Ctrl+C to stop")
+
+    processes_file = Path("/tmp/reccli_v2_processes.json")
+    gui_script = Path(__file__).parent.parent / "reccli-gui.py"
+
+    if not gui_script.exists():
+        print(f"❌ Error: GUI script not found at {gui_script}")
+        return 1
+
+    # Track which terminals we've already launched for
+    tracked_terminals = set()
+
+    # Load existing processes if any
+    if processes_file.exists():
+        try:
+            with open(processes_file, 'r') as f:
+                existing = json.load(f)
+                tracked_terminals = set(existing.keys())
+        except:
+            pass
+
+    try:
+        while True:
+            # Get ALL terminals (including minimized and across Spaces)
+            all_terminals = set(get_all_terminal_ids_including_minimized())
+
+            # Find new terminals (in all_terminals but not tracked)
+            new_terminals = all_terminals - tracked_terminals
+
+            # Find closed terminals (tracked but not in all_terminals)
+            closed_terminals = tracked_terminals - all_terminals
+
+            # Launch popups for new terminals
+            for term_id in new_terminals:
+                # Double-check: is there already a running process for this terminal?
+                # This prevents race conditions during Space changes
+                existing_pid = None
+                if processes_file.exists():
+                    try:
+                        with open(processes_file, 'r') as f:
+                            processes = json.load(f)
+                            existing_pid = processes.get(term_id)
+                    except:
+                        pass
+
+                # Check if existing process is still alive
+                if existing_pid:
+                    try:
+                        os.kill(int(existing_pid), 0)  # Signal 0 = check if process exists
+                        tracked_terminals.add(term_id)  # Add to tracking to prevent future attempts
+                        continue  # Skip launching duplicate
+                    except (OSError, ValueError):
+                        # Process is dead, safe to launch new one
+                        pass
+
+                try:
+                    proc = subprocess.Popen(
+                        [sys.executable, str(gui_script), term_id],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+                    print(f"  ✓ Launched reccli for new terminal {term_id} (PID: {proc.pid})")
+                    tracked_terminals.add(term_id)
+
+                    # Update processes file
+                    if processes_file.exists():
+                        with open(processes_file, 'r') as f:
+                            processes = json.load(f)
+                    else:
+                        processes = {}
+                    processes[term_id] = proc.pid
+                    with open(processes_file, 'w') as f:
+                        json.dump(processes, f, indent=2)
+                except Exception as e:
+                    print(f"  ✗ Failed to launch for terminal {term_id}: {e}")
+
+            # Clean up closed terminals from tracking
+            if closed_terminals:
+                tracked_terminals -= closed_terminals
+
+                # Update processes file
+                if processes_file.exists():
+                    try:
+                        with open(processes_file, 'r') as f:
+                            processes = json.load(f)
+                        for term_id in closed_terminals:
+                            processes.pop(term_id, None)
+                        with open(processes_file, 'w') as f:
+                            json.dump(processes, f, indent=2)
+                    except:
+                        pass
+
+            # Check every 2 seconds
+            time.sleep(2)
+
+    except KeyboardInterrupt:
+        print("\n👋 Watcher stopped")
+        return 0
