@@ -439,80 +439,297 @@ llm.query("Why modal?", context=full_discussion)
 ---
 
 ### Phase 5: Vector Embeddings & Search
-**Goal**: Enable semantic search across session history
+**Goal**: Semantic search over sessions with hybrid recall (dense + sparse) and time-aware boosts
+
+#### Advanced Temporal Indexing
+Beyond simple recency boosts, .devsession uses **temporal structure as a first-class index**:
+
+**Must-Have Features**:
+- **Temporal scopes & joins**: Query specific time intervals (`LAST_48H`, `BETWEEN(t1,t2)`, `AROUND(event,±Δ)`)
+- **Time-aware boosts**: `score *= exp(-Δt/τ)` (τ=3 days default) + `1.2×` for same section
+- **Hybrid retrieval**: Dense ANN (cosine) ∪ BM25 (text + kind + filenames) with Reciprocal Rank Fusion
+
+**Should-Have Features** (add if time permits):
+- **Episode detection**: Heuristic segmentation (bursts, topic shifts, vocabulary change)
+- **Time-aware reranker features**: `Δt`, `same_episode`, `near_checkpoint`, `precedes/follows decision`
+
+#### Index Schema
+```json
+{
+  "id": "span_7a1e",
+  "session_id": "sess_042",
+  "section": "billing-retry",
+  "t_start": "2024-10-26T18:22:12",
+  "t_end": "2024-10-26T18:28:49",
+  "episode_id": 15,
+  "start_idx": 42,
+  "end_idx": 50,
+  "kind": "decision|code|problem|note",
+  "text": "Use modal dialog for export",
+  "embedding": [0.123, -0.456, ...]
+}
+```
 
 #### Tasks:
 - [ ] Integrate OpenAI embeddings API (text-embedding-3-small)
-- [ ] Generate embeddings for each conversation message
-- [ ] Store embeddings in .devsession vector_index
-- [ ] Implement cosine similarity search
-- [ ] Create `search(query)` function
+  - [ ] Batch at 256-512 tokens/chunk for cost efficiency
+  - [ ] Chunk summary items first (decisions/problems/next_steps)
+  - [ ] Add per-message embeddings only if needed
+- [ ] Store embeddings in .devsession vector_index with temporal metadata
+- [ ] Implement hybrid retrieval
+  - [ ] Dense ANN search (cosine similarity on embeddings)
+  - [ ] BM25 sparse search (on text + kind + filenames)
+  - [ ] Reciprocal Rank Fusion (RRF) to combine results
+- [ ] Add temporal boosts
+  - [ ] Exponential decay: `score *= exp(-Δt/τ)` where τ=3 days
+  - [ ] Same-section boost: `score *= 1.2` if in current section
+  - [ ] Near-decision boost: favor spans near key decisions
+- [ ] Implement temporal scopes API
+  - [ ] `search(query, time={'lastHours': 48})`
+  - [ ] `search(query, time={'between': [t1, t2]})`
+  - [ ] `search(query, time={'around': {'event': 'dec_7a1e', 'window_min': 30}})`
+- [ ] Create `search(query, k=30, scope={...})` function
+  - [ ] Return results with message_range for O(1) expansion
+  - [ ] Include badges: recent, same-section, near-decision
+- [ ] Add confidence threshold (drop results with cosine <0.25 unless BM25 strong)
 - [ ] Cache embeddings (don't regenerate)
 
-**Deliverable**: Semantic search across session history
+#### Acceptance Tests:
+- [ ] Query "why modal" returns decision item first; expanding yields exact discussion
+- [ ] "yesterday's crash" favors last day's logs over older similar text
+- [ ] Results show why (badges: recent, same section, doc/decision)
+- [ ] `search("error", time={'around': {'event': 'dec_7a1e', 'window_min': 30}})` returns logs ±30min from decision
 
-**Duration**: 2 days
+**Deliverable**: Hybrid semantic search with temporal awareness and scoped queries
+
+**Definition of Done**: `reccli search "why modal"` returns decision item with badges; "expand 42-50" works
+
+**Duration**: 2-3 days
 
 ---
 
 ### Phase 6: Memory Middleware (The Magic)
-**Goal**: Hydrate LLM prompts from .devsession memory
+**Goal**: Hydrate LLM prompts from .devsession memory in ~2K tokens reliably
 
 #### This is the breakthrough - replacing 200K tokens with 2K intelligent tokens.
+
+#### Work Package Continuity (WPC) - Predictive Retrieval
+
+**What**: While you're reviewing/typing, RecCli quietly predicts the next 1-3 artifacts you'll need and pre-retrieves them.
+
+**Why**: Feels instantaneous when you hit "accept" or ask the next question (like Claude Code).
+
+**Heuristic Predictor** (no ML yet):
+1. **Files touched in last 10 min** + neighbors in same folder
+2. **Files referenced in next_steps** or latest decision
+3. **Recent failing test → source under test**
+4. **Doc/spec linked in last 30 min**
+5. **Logs around last error (±5m)**
+
+**Signals Used**:
+- Recent K events (last 50-100 msgs)
+- Active section/episode
+- Latest summary "next_steps"
+- Cursor file focus or most-mentioned file
+- Pending diffs/tool outputs
+
+**Prefetch Queue**:
+- Bounded queue (size 3-5) of "likely next artifacts"
+- Pre-run search (Phase 5) and stage expansions
+- Memory budget ≤900 tokens pre-staged
+- Evict LRU when budget exceeded
+
+**UX**:
+- Quiet prefetch (runs when idle >1.5s)
+- Show "Up next" pills: `retry.ts`, `test_retry.spec.ts`, `payments_api.md`
+- Instant injection when user accepts/asks
+- Provenance badges: *touched recently, failing test, next step*
+
+**Safety**:
+- Don't auto-apply changes (stage only)
+- Back off if last 3 predictions rejected
+- Respect secrets/PII filters before prefetch
+- Never prefetch outside current project/session
+
+#### MemoryMiddleware Design
+
+**`hydrate_prompt(user_input)` flow:**
+1. **Pins + recent** (always include): ~700-900 tokens
+2. **Summary slice** (top N high-impact decisions/problems): ~600-900 tokens
+3. **Relevant history** via search (Phase 5): pick ≤3 spans, ~300-600 tokens
+4. **Pre-staged WPC items**: inject artifacts from prefetch queue
+5. Emit tools: `EXPAND(range_id)` and `SEARCH(query)` instructions
+
+**Prompt header (compact):**
+- Timeline (3-5 lines)
+- Current section
+- Active TODOs
+- Model rules: "Prefer recent evidence unless contradicted by canonical doc"
 
 #### Tasks:
 - [ ] Implement `MemoryMiddleware` class
   - [ ] `hydrate_prompt(user_input)` - Build context
-  - [ ] Load summary layer (~500 tokens)
-  - [ ] Get recent messages (~500 tokens)
-  - [ ] Vector search relevant history (~1000 tokens)
+  - [ ] Load summary layer (~600-900 tokens)
+  - [ ] Get recent messages (~700-900 tokens)
+  - [ ] Vector search relevant history (~300-600 tokens)
   - [ ] Construct structured prompt with EXPAND/SEARCH tools
+  - [ ] Token budget enforcement (soft cap 1.6-1.8K; hard cap 2K)
+
+- [ ] Implement Work Package Continuity (WPC)
+  - [ ] `predictNext(signal)` - Heuristic predictor
+  - [ ] `prefetch(items, budgetTokens=900)` - Pre-retrieve spans
+  - [ ] `useStagedContext(staged)` - Inject into hydrate_prompt
+  - [ ] Prefetch queue with LRU eviction
+  - [ ] Idle detection (trigger after 1.5s no input)
+  - [ ] Adaptive cooldown (back off if predictions rejected)
+
+- [ ] Add time-aware reranker features (from Phase 5)
+  - [ ] Append `[Δt:2h][episode:15][near:CP_12]` to chunks
+  - [ ] Favor current episode in scoring
 
 - [ ] Test hydration with various scenarios
 - [ ] Benchmark token usage vs raw context
 
-**Deliverable**: Working context hydration from .devsession
+#### Acceptance Tests:
+- [ ] Continuing session after 24h: model proposes same pinned Next Steps
+- [ ] Asking "why did we switch X?" returns decision + citations + EXPAND option
+- [ ] Token budget respected (soft cap 1.6-1.8K; hard cap 2K)
+- [ ] After editing `retry.ts`, WPC prefetches `test_retry.spec.ts` + `retry_helpers.ts`
+- [ ] When test fails, WPC stages failing test + source under test in "Up next"
+- [ ] If 3 predictions in row unused, WPC halves prefetch frequency for 10 min
 
-**Duration**: 3 days
+**Deliverable**: Working context hydration from .devsession + predictive retrieval
+
+**Definition of Done**: `reccli chat --session s.devsession` answers "what next?" correctly after a day
+
+**Duration**: 3-4 days
 
 ---
 
 ### Phase 7: Preemptive Compaction
-**Goal**: Auto-compact at 190K tokens before Claude Code's 200K limit
+**Goal**: Auto-compact at ~90-95% of window (190K tokens) and keep working seamlessly
+
+#### Triggering & Flow
+Watch `token_counts`. When ≥ 180K (warn) / 190K (compact):
+
+1. **Generate fresh summary** (Phase 4 single-stage Sonnet)
+2. **Extract last K messages** (implicit goal - what we're working on now)
+3. **Use Phase 5 search** to pull ≤3 key spans for continuity
+4. **Replace live context** with: Summary (3-5K) + Recent (20K) + Key spans (~2K)
+5. **Log compaction event** into .devsession file
+6. **Use WPC predictions** to include likely-next spans so conversation flows
+
+**Result**: ~25-30K tokens total (leaves 170K headroom to continue)
+
+#### Manual Checkpoints
+- [ ] Implement `reccli checkpoint add "CP_12 - pre-release"` command
+- [ ] Store checkpoint: `{id, t, label, criteria}`
+- [ ] Support "show changes since CP_x" queries
+- [ ] Include checkpoint metadata in compaction events
+
+#### Episode Continuity
+- [ ] Heuristic episode detection (bursts, topic shifts, file set changes)
+- [ ] Assign episode_id to summary items
+- [ ] Favor current episode when selecting key spans post-compaction
+- [ ] Display current episode in "Up next" context
 
 #### Tasks:
 - [ ] Implement compaction trigger logic
-- [ ] Generate fresh summary from ALL events
-- [ ] Extract recent N messages as implicit goal
-- [ ] Vector search earlier events using recent as query
-- [ ] Save compaction event to history
-- [ ] Reset context to ~2K tokens
-- [ ] Continue seamlessly
+  - [ ] Monitor token_counts (warn at 180K, compact at 190K)
+  - [ ] Auto-trigger or manual via `reccli compact <file>`
+- [ ] Generate fresh summary from ALL events (Phase 4)
+- [ ] Extract recent N messages as implicit goal (~20K tokens)
+- [ ] Vector search earlier events using recent as query (≤3 spans)
+- [ ] Use WPC predictions to add likely-next artifacts
+- [ ] Persist compaction event to .devsession history
+  - [ ] Store: timestamp, tokens_before, tokens_after, summary_id, retained_spans
+- [ ] Reset context to ~25-30K tokens
+- [ ] Continue seamlessly without user intervention
+- [ ] Implement manual checkpoints
+  - [ ] CLI command `reccli checkpoint add <label>`
+  - [ ] Query "since CP_x" → list spans & code changes
+- [ ] Episode detection heuristic
+  - [ ] Detect bursts (surge in errors)
+  - [ ] Detect new file set
+  - [ ] Detect vocabulary shift
+  - [ ] Assign episode_id to spans
 
-**Deliverable**: Automatic compaction with zero context loss
+#### Safety
+- [ ] Always preserve: pins, tool/file events, last K messages
+- [ ] UI/CLI message: "Context compacted → 2.1K tokens; expand any span on demand"
+- [ ] No hard-limit errors - model keeps responding
 
-**Duration**: 2 days
+#### Acceptance Tests:
+- [ ] After compaction, asking about just-resolved bug retrieves span instantly
+- [ ] No hard-limit errors; model continues responding normally
+- [ ] "What changed since CP_12?" lists spans & code changes in chronological order
+- [ ] After compaction, "what next?" pulls from current episode first
+- [ ] Compaction log shows tokens_before=190K, tokens_after=28K
+
+**Deliverable**: Automatic compaction with zero context loss + manual checkpoints + episode awareness
+
+**Definition of Done**: Context hits 190K → auto-compacts → chat continues without error
+
+**Duration**: 2-3 days
 
 ---
 
 ### Phase 8: LLM Adapters
-**Goal**: Support multiple LLM providers
+**Goal**: Pluggable providers with deterministic JSON/tool outputs
+
+#### Interface
+```python
+llm.generate(
+    messages,
+    tools=None,          # Tool calling support
+    schema=None,         # JSON schema for structured output
+    model_id="claude-3-5-sonnet-20241022",
+    temperature=0.0      # Determinism
+)
+```
+
+#### Common Features
+- JSON/tool calling support (for summaries, structured outputs)
+- Temperature 0-0.2 for determinism
+- Streaming support
+- Token counting
+- Cost tracking
 
 #### Tasks:
 - [ ] Create base LLM adapter interface
+  - [ ] `generate()` method with consistent signature
+  - [ ] JSON schema enforcement
+  - [ ] Tool/function calling abstraction
+  - [ ] Streaming interface
 - [ ] Implement Claude adapter (Anthropic API)
-- [ ] Implement OpenAI adapter (GPT-4)
+  - [ ] Message format conversion
+  - [ ] Tool calling via Anthropic's format
+  - [ ] JSON mode via system prompt
+- [ ] Implement OpenAI adapter (GPT-4/GPT-5)
+  - [ ] Message format conversion
+  - [ ] Function calling via OpenAI's format
+  - [ ] JSON mode via response_format
 - [ ] Implement Ollama adapter (local models)
-- [ ] Add model selection in CLI (`--model claude|gpt4|ollama`)
+  - [ ] Graceful degradation (no tools → pure text)
+  - [ ] Local JSON parsing fallback
+- [ ] Add model selection in CLI (`--model claude|openai|ollama`)
+- [ ] Store provenance: `{model, model_version, created_at}` on summaries
+
+#### Acceptance Tests:
+- [ ] Swap Claude↔OpenAI with `--model` flag; summaries & hydration succeed
+- [ ] Ollama small model: graceful degradation (no tools → pure text)
+- [ ] All adapters respect temperature=0 for deterministic output
 
 **Deliverable**: Works with any LLM provider
+
+**Definition of Done**: `--model openai` works with same flows as `--model claude`
 
 **Duration**: 2 days
 
 ---
 
 ### Phase 9: CLI Commands (User Interface)
-**Goal**: Clean, intuitive CLI for users
+**Goal**: Happy-path UX with zero-config defaults
 
 #### Core Commands:
 ```bash
@@ -527,98 +744,422 @@ reccli chat --session <file> --model <provider>
 reccli list                   # Show all sessions
 reccli resume <file>          # Load session context
 reccli summarize <file>       # Generate/update summary
-reccli search "query"         # Search across sessions
+reccli search "query"         # Hybrid search with badges + expand IDs
+reccli expand <range_id>      # Expand summary item to full context
 
 # Compaction
 reccli compact <file>         # Manual compaction
 reccli check-tokens <file>    # Show token count
 
+# Checkpoints
+reccli checkpoint add <label> # Create manual checkpoint
+reccli checkpoint list        # Show checkpoints
+reccli diff-since <checkpoint> # Show changes since checkpoint
+
 # Project
 reccli project init           # Create .devproject
-reccli project status         # Show overview
+reccli project status         # Show overview (roll-up decisions/issues)
 ```
+
+#### Polish
+- Progress spinners for long ops (embed, summarize)
+- Pretty "why this result" output with badges:
+  - `[RECENT]` - within last 48h
+  - `[SAME-SECTION]` - current section
+  - `[NEAR-DECISION]` - near key decision
+  - `[FAILING-TEST]` - related to test failure
+- Color-coded output (decisions=green, problems=red, next_steps=blue)
+- Token counts and cost estimates in progress messages
+- "Up next" pills showing WPC predictions
 
 #### Tasks:
 - [ ] Implement CLI using `click` or `typer`
-- [ ] Add help text and examples
+  - [ ] All core commands with proper argument parsing
+  - [ ] `--help` text and usage examples
+  - [ ] Model selection (`--model claude|openai|ollama`)
+  - [ ] Debug mode (`--debug` for verbose logging)
+- [ ] Add search command with badges
+  - [ ] Display relevance score
+  - [ ] Show why result matched (badges)
+  - [ ] Provide expand IDs for drill-down
+- [ ] Add expand command
+  - [ ] Retrieve full context for summary item
+  - [ ] Display core range + ±N context messages
+  - [ ] Mark which messages are in core vs context
+- [ ] Add checkpoint commands
+  - [ ] Create checkpoints with labels
+  - [ ] List all checkpoints with timestamps
+  - [ ] Diff since checkpoint (show spans + code changes)
 - [ ] Error handling and validation
+  - [ ] File not found → helpful message
+  - [ ] Invalid .devsession → schema errors
+  - [ ] API errors → retry logic + clear messages
 - [ ] Progress indicators for long operations
+  - [ ] Spinner for embedding generation
+  - [ ] Progress bar for batch operations
+  - [ ] "Compacting... 190K → 28K tokens (saving $0.45)" messages
 - [ ] Pretty output formatting
+  - [ ] Color-coded by item type
+  - [ ] Tables for search results
+  - [ ] Tree view for lineage queries
+  - [ ] Compact headers with key metadata
 
-**Deliverable**: Full CLI interface
+#### Acceptance Tests:
+- [ ] New user can record → summarize → chat with memory in <5 minutes
+- [ ] `reccli search "modal"` shows badges and expand IDs
+- [ ] `reccli expand dec_7a1e` shows full discussion with context
+- [ ] Help text is clear and includes examples
+- [ ] All commands work without reading docs
+
+**Deliverable**: Full CLI interface with polished UX
+
+**Definition of Done**: Fresh install → record → summarize → chat in <5 minutes, no docs needed
 
 **Duration**: 3 days
 
 ---
 
 ### Phase 10: .devproject (Project Layer)
-**Goal**: Project-level context across sessions
+**Goal**: Cross-session project memory with causal edges and lineage
+
+#### Schema (Lean)
+```json
+{
+  "project": {
+    "name": "RecCli",
+    "stack": ["python", "vite", "anthropic"],
+    "created_at": "2025-11-01T10:00:00Z"
+  },
+  "sessions": [
+    {
+      "id": "sess_042",
+      "path": "./session_042.devsession",
+      "t_first": "2025-11-01T10:00:00Z",
+      "t_last": "2025-11-01T18:30:00Z",
+      "highlights": ["dec_7a1e", "code_3f2b"]
+    }
+  ],
+  "key_decisions": [
+    {
+      "id": "dec_7a1e",
+      "from_session": "sess_042",
+      "summary": "Use modal dialog for export",
+      "t": "2025-11-01T14:22:00Z"
+    }
+  ],
+  "open_issues": [
+    {
+      "id": "issue_9c4d",
+      "from_session": "sess_042",
+      "severity": "high",
+      "description": "Memory leak in recorder"
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP_12",
+      "t": "2025-11-01T18:00:00Z",
+      "label": "pre-release",
+      "criteria": "all tests passing"
+    }
+  ],
+  "causal_edges": [
+    {
+      "from_id": "dec_7a1e",
+      "to_id": "code_3f2b",
+      "rel": "derived_from",
+      "t_edge": "2025-11-01T14:30:00Z"
+    }
+  ]
+}
+```
+
+#### Causal Reasoning Graph
+Build DAG of decisions/problems/code-changes with edges:
+- `supports` - decision supports implementation
+- `derived_from` - code derived from decision
+- `blocked_by` - issue blocks progress
+- `resolved_by` - fix resolves issue
+
+Edges enable:
+- "Why did we do X?" → returns decision chain with timestamps + citations
+- Retrieval = hop graph first, then pull text spans
+- Provenance queries
+
+#### Lineage Queries
+Since everything is timestamped, expose lineage:
+```bash
+reccli lineage billing/retry.ts --since CP_9
+# Shows chain of changes/decisions/problems in chronological order
+```
+
+Great for audits and onboarding.
+
+#### Commands
+```bash
+reccli project init               # Scan folder; attach sessions
+reccli project status             # Roll-up: key decisions/open issues
+reccli project search "query"     # Cross-session search
+reccli explain-decision <id>      # Show causal chain with times + refs
+reccli lineage <file> --since <cp> # File history since checkpoint
+```
 
 #### Tasks:
-- [ ] Define .devproject schema
-  - Project overview
-  - Tech stack
-  - Key decisions (across sessions)
-  - Current phase
-  - Session list with summaries
-
+- [ ] Define .devproject schema with causal edges
+  - [ ] Project metadata (name, stack, created_at)
+  - [ ] Session list with highlights
+  - [ ] Cross-session key_decisions rollup
+  - [ ] Cross-session open_issues rollup
+  - [ ] Checkpoints list
+  - [ ] Causal edges graph
 - [ ] Implement project commands
+  - [ ] `project init` - Scan folder for .devsession files
+  - [ ] `project status` - Show rollup of decisions/issues
+  - [ ] `project search` - Search across all sessions
+  - [ ] `explain-decision` - Show causal chain
+  - [ ] `lineage` - File/feature history
 - [ ] Auto-update project from sessions
+  - [ ] Extract highlights when adding session
+  - [ ] Update key_decisions rollup
+  - [ ] Update open_issues list
+  - [ ] Derive causal edges from summary references
 - [ ] Load project context for new sessions
+  - [ ] Include project overview in initial prompt
+  - [ ] Reference key decisions from earlier sessions
+  - [ ] Flag open issues in context
+- [ ] Causal edge extraction
+  - [ ] Parse summary item references
+  - [ ] Infer edges: decision→code, problem→fix, decision→decision
+  - [ ] Store as `{from_id, to_id, rel, t_edge}`
+  - [ ] Build graph for traversal
 
-**Deliverable**: Multi-session project awareness
+#### Acceptance Tests:
+- [ ] Search over project returns hits from older sessions; expand works via `message_range`
+- [ ] `project status` shows key decisions and open issues from all sessions
+- [ ] `explain-decision dec_7a1e` shows causal chain: prior decisions → this decision → implementations
+- [ ] `lineage billing/retry.ts --since CP_9` lists chain of changes in order
+- [ ] New session automatically includes project context in initial prompt
 
-**Duration**: 2 days
+**Deliverable**: Multi-session project awareness with causal reasoning
+
+**Definition of Done**: `reccli project status` shows cross-session decisions/open issues
+
+**Duration**: 2-3 days
 
 ---
 
 ### Phase 11: Testing & Benchmarking
-**Goal**: Prove .devsession works better than alternatives
+**Goal**: Prove .devsession beats "raw long context" and plain RAG
 
-#### Benchmark Tests:
-1. **Continuity Test**: Multi-file refactor over 5 sessions
-2. **Decision Recall**: "Why did we choose X?" queries
-3. **Token Efficiency**: Measure tokens used vs raw context
-4. **Quality Test**: LLM accuracy with .devsession vs without
+#### Benchmark Suite
 
-#### Comparison:
-- Raw long context (200K tokens)
-- Standard RAG (no summary)
-- .devsession (2K tokens with expansion)
+**1. Continuity Test** (5-session refactor)
+- Success metric: Correct file touched + correct rationale
+- Compare context awareness across session boundaries
+- Measure: Accuracy, tokens per task, TTFU (time to first useful answer)
 
-**Expected Results**:
-- 99% token reduction
+**2. Decision Recall** (Why questions)
+- Query: "Why choose modal?"
+- Should return: decision + span + quote
+- Measure: Accuracy, retrieval time, token count
+
+**3. Token Efficiency**
+- Tokens per solved task
+- Context size over time
+- Cost per session
+
+**4. Latency (TTFU)**
+- Time to first useful answer
+- Search latency
+- Expansion overhead
+
+**5. Time-Sensitive Tasks** (prove temporal advantage)
+- **Root cause since checkpoint**: "What broke billing since CP_12?"
+- **Resume after 3 days**: Load session, continue correctly
+- **Policy override detection**: Flag when decision B contradicts A
+
+#### Comparison Matrix
+
+| Metric | Raw 200K | Chunked RAG | .devsession |
+|--------|----------|-------------|-------------|
+| Tokens/task | 200K | 50K | 2-5K |
+| TTFU | Slow | Medium | Fast |
+| Accuracy | Baseline | -10% | +5% |
+| Cost/session | $0.60 | $0.15 | $0.01 |
+| Temporal queries | ❌ | ❌ | ✅ |
+| Lossless retrieval | ❌ | ❌ | ✅ |
+
+**Target Outcomes**:
+- ≥3× lower tokens than RAG
+- ≥2× faster TTFU
 - Equal or better accuracy
-- 10x faster response times
-- 10x lower API costs
+- Only system with temporal reasoning
 
 #### Tasks:
 - [ ] Create benchmark suite
+  - [ ] 5-session continuity scenario (real refactor)
+  - [ ] 20 "why?" decision recall queries
+  - [ ] 10 time-sensitive queries (since checkpoint, resume, contradictions)
+  - [ ] Token tracking across all methods
+- [ ] Implement comparison systems
+  - [ ] Raw context baseline (dump all 200K)
+  - [ ] Standard chunked RAG (no summary layer)
+  - [ ] .devsession (summary + expand)
 - [ ] Run comparative tests
+  - [ ] Same prompts across all 3 systems
+  - [ ] Blind evaluation of quality
+  - [ ] Measure tokens, cost, latency
 - [ ] Document results
+  - [ ] Accuracy by task type
+  - [ ] Token efficiency charts
+  - [ ] Cost comparison
+  - [ ] TTFU distribution
+  - [ ] Temporal query success rate (only .devsession can do this)
 - [ ] Create performance charts
+  - [ ] Bar chart: tokens per task
+  - [ ] Line chart: accuracy over session count
+  - [ ] Table: feature comparison matrix
 
-**Deliverable**: Proof that .devsession works
+**Deliverable**: Benchmark report with graphs proving .devsession wins on tokens/latency/accuracy
 
-**Duration**: 3 days
+**Definition of Done**: Benchmark report shows .devsession wins on tokens, latency, and accuracy
+
+**Duration**: 3-4 days
 
 ---
 
 ### Phase 12: Documentation & Examples
-**Goal**: Make it easy for others to adopt
+**Goal**: Unblocked adoption with clear docs and working examples
+
+#### Deliverables
+
+**1. 5-Minute Quickstart** (with GIFs)
+- Install → record → summarize → chat workflow
+- Copy-paste commands that just work
+- Visual examples of search results with badges
+- "Up next" WPC predictions demo
+
+**2. "How Compaction Works" Page**
+- Visual diagram of 190K → 28K flow
+- Explanation of what's kept vs summarized
+- Post-compaction retrieval examples
+- Cost savings breakdown
+
+**3. Example .devsession Files**
+- `simple.devsession` - Small 20-message example
+- `full-session.devsession` - Complete 200K session with summary
+- Annotated to explain structure
+
+**4. API Documentation**
+- `MemoryMiddleware.hydrate_prompt()`
+- `ContextRetriever.two_level_search()`
+- `SessionSummarizer.generate()`
+- LLM adapter interface
+- WPC predictor API
+
+**5. Architecture Docs**
+- Two-level linked retrieval explanation
+- Temporal indexing design
+- Work Package Continuity flow
+- Causal reasoning graph
+- Schema evolution strategy
+
+**6. Format Spec**
+- `.devsession` JSON schema with examples
+- `.devproject` JSON schema
+- Summary schema v1.1
+- Vector index format
+- Checkpoint format
 
 #### Tasks:
 - [ ] Update README with examples
-- [ ] Write quickstart guide
+  - [ ] Installation instructions
+  - [ ] Quick start commands
+  - [ ] Feature highlights with badges
+  - [ ] Link to full docs
+- [ ] Write quickstart guide (5 min to wow)
+  - [ ] Step-by-step with screenshots/GIFs
+  - [ ] Record → summarize → chat workflow
+  - [ ] Search and expand examples
+  - [ ] WPC predictions demo
 - [ ] Create example .devsession files
+  - [ ] Small example (annotated)
+  - [ ] Full example (real session)
+  - [ ] Include all layers (events, conversation, summary, vector_index)
 - [ ] Document .devsession format spec
+  - [ ] JSON schema with field descriptions
+  - [ ] Required vs optional fields
+  - [ ] Versioning strategy
+  - [ ] Migration guide
 - [ ] Write architecture documentation
+  - [ ] High-level overview diagram
+  - [ ] Two-level retrieval deep-dive
+  - [ ] Temporal indexing design
+  - [ ] WPC flow chart
+  - [ ] Compaction process
+  - [ ] Causal graph structure
 - [ ] Add API reference
-- [ ] Create video demo
+  - [ ] All public classes and methods
+  - [ ] Parameter descriptions
+  - [ ] Return value formats
+  - [ ] Usage examples for each API
+- [ ] Create video demo (optional)
+  - [ ] 2-minute overview
+  - [ ] Real coding session with compaction
+  - [ ] Search/expand demonstration
 
-**Deliverable**: Complete documentation
+**Deliverable**: Complete documentation + examples published
+
+**Definition of Done**: README + Quickstart + Examples published; copy-paste commands work
 
 **Duration**: 2 days
+
+---
+
+## 🎯 Advanced Temporal Features - Priority Matrix
+
+### What We're Building vs What Can Wait
+
+The user provided extensive context about advanced temporal indexing capabilities. Here's what's **must-have** vs **nice-to-have**:
+
+| Feature | Priority | Phase | Why Now / Why Later |
+|---------|----------|-------|---------------------|
+| **Temporal boosts** (`exp(-Δt/τ)`, same-section) | **MUST** | P5 | Immediate relevance/TTFU gains |
+| **Temporal scopes** (`LAST_48H`, `BETWEEN`, `AROUND`) | **MUST** | P5 | First-class time filtering |
+| **Time-aware reranker** (Δt, episode, checkpoint) | **SHOULD** | P6 | Precision bump, low cost |
+| **Episode detection** (heuristic) | **SHOULD** | P6-P7 | Stabilizes "resume work" |
+| **Manual checkpoints** | **SHOULD** | P7 | Makes "what changed since X?" trivial |
+| **Causal edges** (supports/derived_from/blocks) | **SHOULD** | P10 | Enables "why?" answers |
+| **Lineage queries** (file/feature history) | **SHOULD** | P10 | Killer onboarding/audit feature |
+| **Time-sensitive benchmarks** | **MUST** | P11 | Prove advantage vs vector-only |
+| **Delta vectors** (before/after embeddings) | **COULD** | P11+ | Nice for "what changed", not MVP |
+| **Predictive retrieval** (WPC) | **MUST** | P6 | Magic UX feel |
+| **Contradiction checks** (policy overrides) | **COULD** | P10-P11 | Governance layer, not MVP |
+
+### Minimal Path to "Wow"
+- **P5**: Scopes + boosts (feels next-gen vs plain vector)
+- **P6**: Reranker features + episode heuristic + **WPC** (magic UX)
+- **P7**: Manual checkpoints + "since CP_x" diffs
+- **P10**: Causal edges + explain/lineage commands
+- **P11**: Time-sensitive benchmarks proving temporal advantage
+
+### Cross-Cutting Upgrades (Bake In Now)
+- **JSON schema/tool-calling** for summaries (already in Phase 4 ✅)
+- **Provenance everywhere**: `{model, model_version, created_at}` on summary/search indices
+- **Secrets/PII guard** before any LLM call (already in Phase 4 ✅)
+- **Confidence flags** on summary items → surface low-confidence for review
+
+### Temporal Structure is the Differentiator
+
+> **User insight**: "Temporal boosts help; temporal structure differentiates."
+
+Use `.devsession` to model:
+- **Episodes** (heuristic segmentation by bursts/topic shifts)
+- **Checkpoints** (manual markers at meaningful moments)
+- **Causality** (decision→code→problem→fix chains)
+- **Lineage** (file/feature evolution over time)
+
+This turns RecCli from "better vector search" into a **time-aware reasoning memory** - something others can't fake with a decay factor.
 
 ---
 
@@ -626,23 +1167,27 @@ reccli project status         # Show overview
 
 | Phase | Duration | Cumulative | Status |
 |-------|----------|------------|--------|
-| 0. Terminal Recording | 3 days | 3 days | ⏳ NEXT |
-| 1. File Management | 2 days | 5 days | ⏸️ |
-| 2. Conversation Parsing | 3 days | 8 days | ⏸️ |
-| 3. Token Counting | 1 day | 9 days | ⏸️ |
-| 4. Summary Generation | 3 days | 12 days | ⏸️ |
-| 5. Vector Embeddings | 2 days | 14 days | ⏸️ |
-| 6. Memory Middleware | 3 days | 17 days | ⏸️ |
-| 7. Preemptive Compaction | 2 days | 19 days | ⏸️ |
-| 8. LLM Adapters | 2 days | 21 days | ⏸️ |
-| 9. CLI Commands | 3 days | 24 days | ⏸️ |
-| 10. .devproject | 2 days | 26 days | ⏸️ |
-| 11. Testing & Benchmarking | 3 days | 29 days | ⏸️ |
-| 12. Documentation | 2 days | 31 days | ⏸️ |
+| 0. Terminal Recording | 1 day | 1 day | ✅ COMPLETE |
+| 0.5. Native LLM + GUI | 1 day | 2 days | ✅ COMPLETE |
+| 1. File Management | 1 hour | 2 days | ✅ COMPLETE |
+| 2. Conversation Parsing | 2 hours | 2 days | ✅ COMPLETE |
+| 3. Token Counting | 1 hour | 2 days | ✅ COMPLETE |
+| 4. Summary Generation | 2 hours | 2 days | ✅ COMPLETE |
+| 5. Vector Embeddings + Temporal | 2-3 days | 4-5 days | ⏳ NEXT |
+| 6. Memory Middleware + WPC | 3-4 days | 7-9 days | ⏸️ |
+| 7. Preemptive Compaction + Episodes | 2-3 days | 9-12 days | ⏸️ |
+| 8. LLM Adapters | 2 days | 11-14 days | ⏸️ |
+| 9. CLI Commands | 3 days | 14-17 days | ⏸️ |
+| 10. .devproject + Causal Edges | 2-3 days | 16-20 days | ⏸️ |
+| 11. Testing & Benchmarking | 3-4 days | 19-24 days | ⏸️ |
+| 12. Documentation | 2 days | 21-26 days | ⏸️ |
 
-**Total Estimated Duration**: ~30 days (1 month)
+**Total Estimated Duration**: ~21-26 days (3-4 weeks)
 
-**MVP Target** (Phases 0-9): ~24 days
+**MVP Target** (Phases 0-9): ~14-17 days
+
+**Phases 0-4 Complete**: ✅ 2 days (actual)
+**Remaining to MVP**: ~12-15 days
 
 ---
 
