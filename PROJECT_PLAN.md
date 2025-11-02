@@ -513,11 +513,55 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
 
 #### This is the breakthrough - replacing 200K tokens with 2K intelligent tokens.
 
-#### Work Package Continuity (WPC) - Predictive Retrieval
+#### The Predictive Stack: Three Complementary Systems
 
-**What**: While you're reviewing/typing, RecCli quietly predicts the next 1-3 artifacts you'll need and pre-retrieves them.
+RecCli uses a **three-layer predictive stack** for instant-feeling UX:
 
-**Why**: Feels instantaneous when you hit "accept" or ask the next question (like Claude Code).
+```
+User opens chat
+    ↓
+[Layer 3: ML Predictive Retrieval] - "Based on recent events, pre-fetch likely artifacts"
+    ↓
+User asks question
+    ↓
+Answer with pre-fetched context (faster!)
+    ↓
+[Layer 2: Post-Answer Reasoning] - "Spend 100 tokens predicting next question"
+    ↓
+Pre-fetch context for predicted next question
+    ↓
+User accepts code edit
+    ↓
+[Layer 1: Work Package Continuity] - "Generate related files while user was reading"
+    ↓
+User clicks accept → all files ready instantly
+```
+
+**Layer 1: Work Package Continuity (WPC)** - Pre-generating artifacts (Phase 6)
+- **What**: Generate multiple files while user reviews first one
+- **When**: During code generation (user hasn't clicked accept yet)
+- **Example**: Edit `retry.ts` → also generate `test_retry.spec.ts` + `retry_helpers.ts`
+- **Goal**: Instant multi-file edits
+
+**Layer 2: Post-Answer Reasoning** - Predict next query (Phase 6)
+- **What**: After answering, use extra 100 tokens to predict next query
+- **When**: Immediately after providing answer to user
+- **Example**: User asks "how does auth work?" → Answer + reasoning "they'll probably ask about session storage next" → pre-fetch that context
+- **Goal**: Next question feels instant because context already loaded
+
+**Layer 3: ML Predictive Retrieval** - Artifact prediction model (Phase 11+)
+- **What**: Train tiny model on session logs to predict needed artifacts
+- **When**: When user opens chat session
+- **Input**: Recent K events → **Output**: Probabilities over artifact types (doc, code, error)
+- **Example**: See recent test failures → predict 60% chance user will ask about source under test → pre-fetch it
+- **Goal**: Context pre-loaded before user even asks
+- **Status**: Could-Have feature, train on logs after MVP
+
+#### Work Package Continuity (WPC) - Layer 1 Implementation
+
+**What**: While you're reviewing/typing, RecCli quietly generates the next 1-3 artifacts you'll need.
+
+**Why**: Feels instantaneous when you hit "accept" (like Claude Code).
 
 **Heuristic Predictor** (no ML yet):
 1. **Files touched in last 10 min** + neighbors in same folder
@@ -575,13 +619,21 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
   - [ ] Construct structured prompt with EXPAND/SEARCH tools
   - [ ] Token budget enforcement (soft cap 1.6-1.8K; hard cap 2K)
 
-- [ ] Implement Work Package Continuity (WPC)
+- [ ] Implement Work Package Continuity (WPC) - Layer 1
   - [ ] `predictNext(signal)` - Heuristic predictor
   - [ ] `prefetch(items, budgetTokens=900)` - Pre-retrieve spans
   - [ ] `useStagedContext(staged)` - Inject into hydrate_prompt
   - [ ] Prefetch queue with LRU eviction
   - [ ] Idle detection (trigger after 1.5s no input)
   - [ ] Adaptive cooldown (back off if predictions rejected)
+
+- [ ] Implement Post-Answer Reasoning - Layer 2
+  - [ ] After generating answer, append reasoning prompt: "What will user likely ask next?"
+  - [ ] Budget: 100 tokens for prediction reasoning
+  - [ ] Parse prediction → identify likely artifacts/context needed
+  - [ ] Pre-fetch predicted context (via Phase 5 search)
+  - [ ] Store in prefetch queue alongside WPC items
+  - [ ] Track prediction accuracy for learning
 
 - [ ] Add time-aware reranker features (from Phase 5)
   - [ ] Append `[Δt:2h][episode:15][near:CP_12]` to chunks
@@ -594,9 +646,11 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
 - [ ] Continuing session after 24h: model proposes same pinned Next Steps
 - [ ] Asking "why did we switch X?" returns decision + citations + EXPAND option
 - [ ] Token budget respected (soft cap 1.6-1.8K; hard cap 2K)
-- [ ] After editing `retry.ts`, WPC prefetches `test_retry.spec.ts` + `retry_helpers.ts`
-- [ ] When test fails, WPC stages failing test + source under test in "Up next"
-- [ ] If 3 predictions in row unused, WPC halves prefetch frequency for 10 min
+- [ ] **Layer 1 (WPC)**: After editing `retry.ts`, WPC prefetches `test_retry.spec.ts` + `retry_helpers.ts`
+- [ ] **Layer 1 (WPC)**: When test fails, WPC stages failing test + source under test in "Up next"
+- [ ] **Layer 1 (WPC)**: If 3 predictions in row unused, WPC halves prefetch frequency for 10 min
+- [ ] **Layer 2 (Post-Answer)**: After answering "how does auth work?", next question about sessions feels instant (context pre-fetched)
+- [ ] **Layer 2 (Post-Answer)**: Prediction reasoning budget stays ≤100 tokens
 
 **Deliverable**: Working context hydration from .devsession + predictive retrieval
 
@@ -1116,6 +1170,137 @@ reccli lineage <file> --since <cp> # File history since checkpoint
 
 ---
 
+## 🚀 Phase 11+: Advanced Features (Could-Have)
+
+These features enhance the system but are not required for MVP. Implement after Phases 0-12 are complete.
+
+### ML Predictive Retrieval (Layer 3 of Predictive Stack)
+
+**Goal**: Train a tiny next-step model on session logs to predict needed artifacts before user asks
+
+**Why**: Pre-loads context before user even opens chat, feels magical
+
+#### Model Design
+
+**Input Features** (from recent K events):
+- File tokens (bag of words from recent files)
+- Action verbs (edit, test, debug, refactor, etc.)
+- Test failure indicators (which tests failed recently)
+- Summary tags (decisions, problems, next_steps)
+- Episode ID (current work phase)
+- Time since last activity
+- Error keywords
+
+**Output**:
+- Probabilities over **artifact types**: `{doc: 0.3, code: 0.5, test: 0.15, error: 0.05}`
+- Top-k file candidates with confidence scores
+- Predicted next action type
+
+**Training Data**:
+- Your own .devsession logs (implicit labels from user actions)
+- What user opened/expanded next after each state
+- Timestamped sequence of artifacts accessed
+
+**Model Architecture**:
+- Tiny classifier (few hours of data is enough)
+- Simple feedforward or small transformer
+- Fast inference (<50ms)
+- Regularly retrained on new sessions
+
+#### Implementation
+
+```python
+class MLPredictor:
+    def __init__(self, model_path=None):
+        self.model = load_model(model_path) if model_path else None
+        self.fallback_heuristic = HeuristicPredictor()  # Layer 1 fallback
+
+    def predict_next_artifacts(self, recent_events, top_k=5):
+        """
+        Predict what artifacts user will need next
+
+        Returns:
+            [
+                {"type": "code", "path": "retry.ts", "confidence": 0.85, "reason": "recent_test_failure"},
+                {"type": "test", "path": "test_retry.spec.ts", "confidence": 0.72, "reason": "adjacent_to_code"},
+                ...
+            ]
+        """
+        if not self.model:
+            return self.fallback_heuristic.predict(recent_events)
+
+        features = self.extract_features(recent_events)
+        predictions = self.model.predict(features)
+
+        # Blend with heuristic for robustness
+        heuristic_preds = self.fallback_heuristic.predict(recent_events)
+        return self.blend_predictions(predictions, heuristic_preds, alpha=0.7)
+
+    def collect_training_example(self, state, user_action):
+        """Implicit labeling: what did user do next?"""
+        self.training_buffer.append({
+            "features": self.extract_features(state),
+            "label": user_action  # what they actually opened/asked
+        })
+
+    def retrain(self, min_examples=100):
+        """Retrain on accumulated session logs"""
+        if len(self.training_buffer) < min_examples:
+            return
+
+        X, y = self.prepare_training_data(self.training_buffer)
+        self.model.fit(X, y)
+        self.save_model()
+```
+
+#### Integration Points
+
+**On session open**:
+```python
+# Predict what user will need
+predictions = ml_predictor.predict_next_artifacts(recent_events, top_k=5)
+
+# Pre-fetch top predictions
+for pred in predictions[:3]:
+    if pred["confidence"] > 0.6:
+        prefetch_queue.add(pred, reason=pred["reason"])
+```
+
+**After each user action**:
+```python
+# Collect training data
+ml_predictor.collect_training_example(
+    state=current_state,
+    user_action=what_user_just_did
+)
+
+# Periodic retraining
+if session_count % 10 == 0:
+    ml_predictor.retrain()
+```
+
+#### Tasks:
+- [ ] Design feature extraction from recent events
+- [ ] Implement training data collection (implicit labels from user actions)
+- [ ] Train initial tiny classifier on your own logs
+- [ ] Implement prediction blending (ML + heuristic)
+- [ ] Add periodic retraining pipeline
+- [ ] Measure prediction accuracy (hit rate ≥60%)
+- [ ] A/B test: ML predictor vs heuristic-only
+
+#### Acceptance Tests:
+- [ ] Prefetch hit rate ≥60% (predicted artifact was used within next 3 queries)
+- [ ] Inference latency <50ms
+- [ ] Model retrains automatically every 10 sessions
+- [ ] Graceful fallback to heuristic if model unavailable
+- [ ] Blended predictions outperform heuristic-only baseline
+
+**Deliverable**: ML-powered predictive retrieval with automatic retraining
+
+**Duration**: 1-2 weeks (after MVP complete)
+
+---
+
 ## 🎯 Advanced Temporal Features - Priority Matrix
 
 ### What We're Building vs What Can Wait
@@ -1133,15 +1318,20 @@ The user provided extensive context about advanced temporal indexing capabilitie
 | **Lineage queries** (file/feature history) | **SHOULD** | P10 | Killer onboarding/audit feature |
 | **Time-sensitive benchmarks** | **MUST** | P11 | Prove advantage vs vector-only |
 | **Delta vectors** (before/after embeddings) | **COULD** | P11+ | Nice for "what changed", not MVP |
-| **Predictive retrieval** (WPC) | **MUST** | P6 | Magic UX feel |
+| **Layer 1: Work Package Continuity** (pre-gen artifacts) | **MUST** | P6 | Magic UX feel (instant multi-file) |
+| **Layer 2: Post-Answer Reasoning** (predict next query) | **SHOULD** | P6 | Next question feels instant |
+| **Layer 3: ML Predictive Retrieval** (artifact prediction) | **COULD** | P11+ | Magic feel; train on logs after MVP |
 | **Contradiction checks** (policy overrides) | **COULD** | P10-P11 | Governance layer, not MVP |
 
 ### Minimal Path to "Wow"
 - **P5**: Scopes + boosts (feels next-gen vs plain vector)
-- **P6**: Reranker features + episode heuristic + **WPC** (magic UX)
+- **P6**: Reranker features + episode heuristic + **Predictive Stack Layers 1 & 2** (magic UX)
+  - Layer 1: Work Package Continuity (pre-generate artifacts)
+  - Layer 2: Post-Answer Reasoning (predict next query)
 - **P7**: Manual checkpoints + "since CP_x" diffs
 - **P10**: Causal edges + explain/lineage commands
 - **P11**: Time-sensitive benchmarks proving temporal advantage
+- **P11+**: Layer 3 ML Predictive Retrieval (train on logs after MVP)
 
 ### Cross-Cutting Upgrades (Bake In Now)
 - **JSON schema/tool-calling** for summaries (already in Phase 4 ✅)
