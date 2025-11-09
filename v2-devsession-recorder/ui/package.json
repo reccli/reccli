@@ -1,0 +1,26 @@
+{
+  "name": "reccli-ui",
+  "version": "0.1.0",
+  "description": "TypeScript + Ink UI for RecCli",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.tsx",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "npm run build && npm start"
+  },
+  "dependencies": {
+    "ink": "^4.4.1",
+    "ink-select-input": "^5.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^5.0.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.24",
+    "@types/react": "^18.3.26",
+    "tsx": "^4.6.0",
+    "typescript": "^5.9.3"
+  }
+}

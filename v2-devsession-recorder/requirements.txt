@@ -10,6 +10,19 @@ jsonschema>=4.17.0
 # Token counting (Required for context monitoring)
 tiktoken>=0.5.0
 
+# Phase 5: Vector Embeddings & Search
+# OpenAI embeddings (required for default embedding provider)
+# openai>=1.0.0  # Already listed above
+
+# BM25 sparse search (required for hybrid retrieval)
+rank-bm25>=0.2.2
+
+# Text hashing (optional - falls back to sha256)
+blake3>=0.3.0
+
+# Optional: Local embeddings (alternative to OpenAI)
+# sentence-transformers>=2.2.0
+
 # Optional: For better terminal handling
 # (not required, but nice to have)
 # rich>=13.0.0

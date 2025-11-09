@@ -162,18 +162,63 @@ class DevSession:
             "compaction_history": self.compaction_history
         }
 
-    def save(self, path: Path) -> None:
+    def save(self, path: Path, skip_validation: bool = False) -> None:
         """
-        Save .devsession file
+        Save .devsession file with validation
 
         Args:
             path: Output file path (.devsession extension)
+            skip_validation: Skip validation (use with caution)
+
+        Raises:
+            ValueError: If validation fails and auto-fix cannot repair
         """
         path = Path(path)
 
-        # Ensure .devsession extension
-        if path.suffix != '.devsession':
+        # Ensure .devsession extension (but don't add if already present or if it's a .tmp file)
+        path_str = str(path)
+        if not (path_str.endswith('.devsession') or path_str.endswith('.devsession.tmp')):
             path = path.with_suffix('.devsession')
+
+        # Validate summary before writing (Safeguard #7)
+        if not skip_validation and self.summary and self.conversation:
+            from .summary_verification import SummaryVerifier
+            from .reindexing import tag_messages_with_ids
+
+            # Ensure messages have IDs (needed for validation)
+            tag_messages_with_ids(self.conversation)
+
+            verifier = SummaryVerifier(self.conversation)
+            is_valid, errors = verifier.verify_summary(self.summary)
+
+            if not is_valid:
+                # Try auto-fix
+                print("⚠️  Summary validation failed before save:")
+                for category, category_errors in errors.items():
+                    if category_errors:
+                        print(f"  {category}:")
+                        for err in category_errors:
+                            print(f"    - {err}")
+
+                fixed_summary, warnings = verifier.auto_fix_summary(self.summary)
+
+                if warnings:
+                    print("🔧 Auto-fixing summary:")
+                    for warning in warnings:
+                        print(f"  - {warning}")
+
+                # Validate fixed summary
+                is_valid_after_fix, errors_after_fix = verifier.verify_summary(fixed_summary)
+
+                if is_valid_after_fix:
+                    print("✅ Summary fixed successfully")
+                    self.summary = fixed_summary
+                else:
+                    raise ValueError(
+                        f"Cannot save: Summary validation failed even after auto-fix. "
+                        f"Errors: {errors_after_fix}. "
+                        f"Use skip_validation=True to force save (not recommended)."
+                    )
 
         # Create parent directory if needed
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -440,6 +485,81 @@ class DevSession:
 
         print("✅ Summary generated successfully")
         return True
+
+    def generate_embeddings(self, provider=None, force: bool = False) -> int:
+        """
+        Generate embeddings for all messages in conversation
+
+        Args:
+            provider: EmbeddingProvider instance (or None to use default)
+            force: Force re-embedding even if embeddings exist
+
+        Returns:
+            Number of messages embedded
+
+        Example:
+            session.generate_embeddings()  # Use default OpenAI
+            session.generate_embeddings(LocalEmbeddings())  # Use local model
+        """
+        from .embeddings import get_embedding_provider
+        from datetime import datetime
+
+        if not self.conversation:
+            print("⚠️  No conversation to embed")
+            return 0
+
+        # Get provider
+        if provider is None:
+            provider = get_embedding_provider()
+
+        # Check if already embedded with same model
+        if not force:
+            existing_model = None
+            if self.conversation and len(self.conversation) > 0:
+                first_msg = self.conversation[0]
+                if 'embed_model' in first_msg:
+                    existing_model = first_msg['embed_model']
+
+            if existing_model == provider.model_name:
+                print(f"⚠️  Embeddings already exist for model {existing_model}")
+                print(f"   Use force=True to re-embed")
+                return 0
+
+        # Filter messages to embed (skip if already embedded and not forcing)
+        messages_to_embed = []
+        indices_to_embed = []
+
+        for i, msg in enumerate(self.conversation):
+            if force or 'embedding' not in msg:
+                messages_to_embed.append(msg)
+                indices_to_embed.append(i)
+
+        if not messages_to_embed:
+            print("✓ All messages already embedded")
+            return 0
+
+        # Batch embed all messages
+        texts = [msg['content'] for msg in messages_to_embed]
+        print(f"🔮 Generating embeddings for {len(texts)} messages using {provider.model_name}...")
+
+        try:
+            embeddings = provider.embed_batch(texts)
+        except Exception as e:
+            print(f"❌ Embedding failed: {e}")
+            return 0
+
+        # Attach embeddings to messages
+        embed_ts = datetime.now().isoformat()
+        for msg, embedding in zip(messages_to_embed, embeddings):
+            msg['embedding'] = embedding
+            msg['embed_model'] = provider.model_name
+            msg['embed_provider'] = provider.provider_name
+            msg['embed_dim'] = provider.dimensions
+            msg['embed_ts'] = embed_ts
+            msg['text_hash'] = provider.compute_text_hash(msg['content'])
+
+        print(f"✓ Generated {len(embeddings)} embeddings ({provider.dimensions}D)")
+        return len(embeddings)
 
     def pin_summary_item(self, item_id: str) -> bool:
         """

@@ -339,3 +339,409 @@ This is what ChatGPT/Claude are missing and why .devsession is a paradigm shift.
 **Decision Maker:** Based on user requirements + GPT-5 Pro analysis
 **Status:** Fully implemented and tested ✅
 **Test Coverage:** 100% (temporal extraction, break-even math, cost estimation, auto-decision logic, two-level retrieval)
+
+---
+
+## Phase 0: Write-Ahead Log (WAL) Recording Architecture
+
+### The Question
+How should we handle crash-safe terminal recording with minimal data loss?
+
+### The Answer: **Write-Ahead Log (WAL) Pattern**
+
+### The Problem
+Traditional terminal recorders have data loss risks:
+1. **Buffer loss**: Events buffered in memory lost on crash
+2. **Partial writes**: Corruption if process killed during save
+3. **No incremental parsing**: Must wait until end to parse conversation
+4. **All-or-nothing**: Complete session loss if finalization fails
+
+### The WAL Solution
+
+**Architecture:**
+```
+Recording starts → .wal file (append-only, fsync every 64 events)
+                         ↓
+                    Raw events stream
+                         ↓
+              On stop: Parse conversation
+                         ↓
+              Build .devsession atomically
+                         ↓
+              Auto-compact (conversation mode)
+                         ↓
+              Delete .wal (success)
+```
+
+**Implementation:** `reccli/wal_recorder.py`
+
+```python
+class WALRecorder:
+    """Crash-safe terminal recorder using write-ahead log pattern"""
+
+    def __init__(self, output_path: Path, shell: Optional[str] = None):
+        self.wal_path = output_path.with_suffix('.wal')
+        self.fsync_interval = 64  # fsync every N events
+
+    def _append_event(self, timestamp: float, event_type: str, data: str):
+        """Append event to WAL (crash-safe)"""
+        event = [timestamp, event_type, data]
+        self.wal_file.write(json.dumps(event) + '\n')
+        self.event_count += 1
+        self.fsync_counter += 1
+
+        # Periodic fsync for crash safety
+        if self.fsync_counter >= self.fsync_interval:
+            self.wal_file.flush()
+            os.fsync(self.wal_file.fileno())
+            self.fsync_counter = 0
+
+    def _finalize(self):
+        """Finalize recording: WAL → .devsession"""
+        # 1. Load events from WAL
+        # 2. Parse conversation
+        # 3. Build final .devsession
+        # 4. Atomic write: .tmp → rename
+        # 5. Auto-compact
+        # 6. Delete WAL
+```
+
+**Benefits:**
+1. **Crash-safe**: Events fsynced every 64 appends (max 64 events lost)
+2. **No corruption**: Atomic rename prevents partial writes
+3. **Fast**: Append-only writes, no seek operations
+4. **Clean**: WAL deleted after successful finalization
+5. **Debuggable**: WAL preserved on failure for recovery
+
+**File Lifecycle:**
+```
+~/reccli/sessions/session_20251102.wal       (during recording)
+         ↓
+~/reccli/sessions/session_20251102.devsession.tmp  (finalization)
+         ↓
+~/reccli/sessions/session_20251102.devsession      (atomic rename)
+         ↓
+WAL deleted (cleanup)
+```
+
+### Why Not Stream Directly to .devsession?
+
+**Alternative considered:**
+```python
+# Bad: Stream events directly to .devsession
+with open(output_path, 'w') as f:
+    f.write('{"events": [')
+    for event in stream:
+        f.write(json.dumps(event) + ',')
+```
+
+**Problems:**
+1. **Invalid JSON on crash**: Incomplete array, missing closing brackets
+2. **No atomic writes**: File left in broken state
+3. **Can't parse conversation**: Need complete event stream to parse
+4. **No rollback**: Corrupted file is unrecoverable
+
+**WAL advantages:**
+- Each line is valid JSON (recoverable even if incomplete)
+- Atomic finalization (all-or-nothing)
+- Parse after recording complete (conversation requires full context)
+- Clean separation: recording vs processing
+
+---
+
+## Session Compaction: Removing Redundant Data
+
+### The Problem: 189x Bloat
+
+**Test case:** Simple Q&A conversation
+- User: "which came first the chicken or the egg?"
+- Assistant: ~300 word response
+- Raw .devsession file: **189KB**
+- Actual conversation data: **1KB**
+- **Bloat ratio: 189x**
+
+**Breakdown of 189KB:**
+```
+Terminal events (raw keystrokes): 185KB (98%)
+  - Every keystroke captured ('w', 'h', 'i', 'c', 'h', ...)
+  - Incremental typing artifacts
+  - Shell prompts, UI chrome, animations
+  - ANSI escape codes
+
+Conversation (parsed): 1KB (0.5%)
+  - User message
+  - Assistant message
+
+Metadata: 3KB (1.5%)
+```
+
+**Problem:** 690MB/year for casual use (1 conversation/day)
+
+### The Solution: Auto-Compaction
+
+**Implementation:** `reccli/compactor.py`
+
+**Four compaction modes:**
+
+1. **none** - Keep everything (debugging)
+2. **conversation** - Keep only conversation + metadata (smallest, ~2KB)
+3. **audit** - Keep conversation + audit frames (~5-15KB)
+4. **lossless** - Move events to external .events.zst (keeps replay ability)
+
+**Default: conversation mode** (auto-applied after finalization)
+
+```python
+class SessionCompactor:
+    def _compact_conversation_only(self, data: Dict) -> Dict:
+        """Keep only conversation + minimal metadata"""
+        return {
+            'format': 'devsession',
+            'version': data.get('version', '2.0'),
+            'session_id': data.get('session_id'),
+            'conversation': data.get('conversation', []),
+            'meta': {
+                'duration': self._calculate_duration(data),
+                'message_count': len(data.get('conversation', [])),
+                'compaction': {
+                    'mode': 'conversation',
+                    'original_events': len(data.get('terminal_recording', {}).get('events', []))
+                }
+            },
+            'terminal_recording': None,  # Drop raw events
+            # ... other fields null/minimal
+        }
+```
+
+**Results:**
+```
+Before compaction: 189KB (282 raw events)
+After compaction:  2.2KB (2 messages)
+Saved: 186.8KB
+Compression ratio: 86x
+```
+
+**Integration with WAL:**
+```python
+def _finalize(self):
+    # ... parse conversation ...
+
+    # Auto-compact (conversation mode)
+    if len(conversation) > 0:
+        from .compactor import auto_compact
+        stats = auto_compact(self.output_path, mode='conversation')
+        print(f"✓ Compacted: {stats['saved_bytes']/1024:.1f}KB saved ({stats['compression_ratio']:.1f}x smaller)")
+```
+
+**Output:**
+```
+✅ Recording stopped
+Finalizing 282 events...
+Parsing conversation...
+✓ Parsed 2 messages
+✓ Finalized to /Users/will/reccli/sessions/session_20251102.devsession
+✓ Duration: 78.5s
+✓ Events: 282
+Compacting session...
+✓ Compacted: 125.8KB saved (75.8x smaller)
+```
+
+### Why This is Correct
+
+**Question:** "Should we keep raw events for replay?"
+
+**Answer:** No, because:
+1. **Replay is not a use case**: Users care about the conversation, not terminal playback
+2. **Video/GIF is better**: If visual needed, screen recording tools exist
+3. **Conversation is the artifact**: That's what matters for .devsession format
+4. **Bloat is unacceptable**: 189KB → 2KB is the right compression
+5. **Forward-compatible**: If replay needed later, we can implement lossless mode
+
+**Alternative if replay needed:**
+- Use `lossless` mode (moves events to external .events.zst)
+- But default to `conversation` mode for 98% of users
+
+---
+
+## Conversation Parsing: Terminal Events → Structured Messages
+
+### The Challenge
+
+**Input:** Raw terminal events (keystrokes, output, ANSI codes)
+```
+[0.0, "o", "\x1b[1m> \x1b[0m"]
+[1.2, "i", "w"]
+[1.3, "i", "h"]
+[1.4, "i", "i"]
+[1.5, "i", "c"]
+[1.6, "i", "h"]
+...
+[7.5, "i", "\r"]
+[8.0, "o", "⏺ This is actually..."]
+```
+
+**Output:** Structured conversation
+```json
+{
+  "role": "user",
+  "content": "which came first the chicken or the egg?",
+  "timestamp": 1.2
+}
+```
+
+### Implementation: `reccli/parser.py`
+
+**Key components:**
+
+1. **Character accumulation**: Build complete messages from keystrokes
+```python
+user_input_buffer = []
+for event in events:
+    if event[1] == "i":  # input event
+        if data == '\r':  # Enter pressed
+            user_text = ''.join(user_input_buffer)
+            conversation.append({"role": "user", "content": user_text})
+        elif data == '\x7f':  # Backspace
+            user_input_buffer.pop()
+        else:
+            user_input_buffer.append(data)
+```
+
+2. **Incremental typing cleanup**: Remove UI artifacts
+```python
+# Skip loading animations
+if stripped.startswith('✶') or 'Pondering' in stripped:
+    continue
+
+# Skip keyboard instructions (but keep menu content)
+if 'Enter to select' in stripped:
+    continue
+
+# Skip user prompt echo from assistant responses
+if stripped.startswith('>') and len(stripped) > 1:
+    continue
+```
+
+3. **Interactive menu handling**: Preserve decision trees
+```python
+# KEEP numbered menu options (valuable context)
+# Example:
+# ❯ 1. 3D model/game (Unity, Blender, Three.js)
+#   2. Physical model/prop
+#   3. Simulation/physics engine
+
+# SKIP keyboard shortcuts
+# Example: "Enter to select · Tab/Arrow keys to navigate"
+```
+
+**Design decision:** Keep menu content, remove UI chrome
+- ✅ Keep: Numbered options, menu text, questions
+- ❌ Remove: Keyboard shortcuts, animations, prompts
+
+### Filtering Strategy
+
+**Categories:**
+
+1. **Redundant UI (filter out):**
+   - Loading animations ("Pondering...", "Galloping...")
+   - Keyboard shortcuts ("Enter to select")
+   - Status indicators ("? for shortcuts")
+   - User prompt echo in assistant response
+
+2. **Valuable content (keep):**
+   - User messages
+   - Assistant responses
+   - Interactive menu options
+   - Decision tree questions
+   - Code blocks
+   - Error messages
+
+**Result:**
+```markdown
+**User:**
+which came first the chicken or the egg?
+
+**Assistant:**
+⏺ This is actually a question with a scientific answer! The egg came first.
+
+  From an evolutionary perspective...
+
+What type of UFO project would you like to create?
+❯ 1. 3D model/game (Unity, Blender, Three.js)
+  2. Physical model/prop
+  3. Simulation/physics engine
+
+⏺ User declined to answer questions
+```
+
+Clean, readable, preserves decision context.
+
+---
+
+## Export Formatting
+
+### Duration Display
+
+**Problem:** Raw float timestamps
+```markdown
+**Duration:** 55.144407987594604
+```
+
+**Solution:** Human-readable formatting
+```python
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
+```
+
+**Result:**
+```markdown
+**Duration:** 55s
+**Duration:** 1m 19s
+**Duration:** 2h 15m
+```
+
+---
+
+## Format Standardization: .devsession Only
+
+### The Question
+Should we support .cast (asciinema) format for exports?
+
+### The Answer: **No - .devsession Only**
+
+### Reasoning
+
+**Use cases for .cast format:**
+1. ~~Replay in asciinema player~~ → Not a use case (conversation matters, not playback)
+2. ~~Compatibility with existing tools~~ → We're not a terminal recorder, we're a conversation recorder
+3. ~~Standard format~~ → .devsession is our standard
+
+**.devsession advantages:**
+- Forward-compatible (can add summary/vector_index later)
+- Structured conversation layer
+- Metadata and compaction support
+- Single format everywhere (simplicity)
+
+**Decision: Remove all .cast references**
+- Removed from CLI export options
+- Removed from GUI export dialog
+- Removed from exporters.py
+- Export formats: txt, md, json, html only
+
+---
+
+**Decision Date:** 2025-11-02
+**Decision Maker:** Based on user requirements + production testing
+**Status:** Fully implemented and tested ✅
+**Implementation:**
+- WAL recorder: `reccli/wal_recorder.py`
+- Compactor: `reccli/compactor.py`
+- Parser: `reccli/parser.py`
+- Exporters: `src/export/exporters.py`

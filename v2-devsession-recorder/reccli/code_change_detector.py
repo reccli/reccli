@@ -203,10 +203,18 @@ class CodeChangeDetector:
             total_removed = sum(block["lines_removed"] for block in related_blocks)
 
             # Build message range
+            # Range semantics: [start_index, end_index) - inclusive-exclusive, 0-based
+            # Message IDs are 1-based: msg_042 is 42nd message, stored at index 41
             first_msg = info["first_seen"]
             last_msg = info["last_seen"]
-            first_idx = int(first_msg.split("_")[1])
-            last_idx = int(last_msg.split("_")[1])
+            first_msg_num = int(first_msg.split("_")[1])  # e.g., 42
+            last_msg_num = int(last_msg.split("_")[1])    # e.g., 50
+
+            # Convert to 0-based indices
+            # msg_042 (42nd message) → index 41 (0-based, inclusive)
+            # msg_050 (50th message) → index 49, so end_index = 50 (exclusive)
+            start_index = first_msg_num - 1   # 42 → 41
+            end_index = last_msg_num          # 50 (exclusive, so includes index 49 which is msg_050)
 
             changes.append({
                 "files": [file_path],
@@ -219,8 +227,8 @@ class CodeChangeDetector:
                 "message_range": {
                     "start": first_msg,
                     "end": last_msg,
-                    "start_index": first_idx,
-                    "end_index": last_idx
+                    "start_index": start_index,
+                    "end_index": end_index
                 },
                 "confidence": "high"
             })

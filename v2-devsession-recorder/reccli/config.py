@@ -11,7 +11,7 @@ class Config:
     """Manage RecCli configuration"""
 
     def __init__(self):
-        self.config_dir = Path.home() / '.reccli'
+        self.config_dir = Path.home() / 'reccli'
         self.config_file = self.config_dir / 'config.json'
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.data = self.load()
@@ -24,7 +24,7 @@ class Config:
                 'openai': None,
             },
             'default_model': 'claude',
-            'sessions_dir': str(Path.home() / '.reccli' / 'sessions'),
+            'sessions_dir': str(Path.home() / 'reccli' / 'sessions'),
         }
 
         if self.config_file.exists():
@@ -68,6 +68,6 @@ class Config:
 
     def get_sessions_dir(self) -> Path:
         """Get sessions directory"""
-        sessions_dir = Path(self.data.get('sessions_dir', Path.home() / '.reccli' / 'sessions'))
+        sessions_dir = Path(self.data.get('sessions_dir', Path.home() / 'reccli' / 'sessions'))
         sessions_dir.mkdir(parents=True, exist_ok=True)
         return sessions_dir

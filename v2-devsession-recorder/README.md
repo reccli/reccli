@@ -121,7 +121,8 @@ pip3 install anthropic openai
 # Export to different formats
 ./reccli-v2.py export my-session-name           # Markdown (default)
 ./reccli-v2.py export my-session-name -f txt    # Plain text
-./reccli-v2.py export my-session-name -f cast   # Asciinema .cast format
+./reccli-v2.py export my-session-name -f json   # Structured JSON
+./reccli-v2.py export my-session-name -f html   # Styled HTML page
 ```
 
 ## .devsession Format
@@ -131,29 +132,49 @@ Output files are in `.devsession` format with this structure:
 ```json
 {
   "format": "devsession",
-  "version": "1.0",
-  "session_id": "session_20251101_210500",
-  "created": "2025-11-01T21:05:00",
+  "version": "2.0",
+  "session_id": "session_20251102_133146",
+  "created": "2025-11-02T13:31:47",
+  "updated": "2025-11-02T13:33:05",
 
-  "terminal_recording": {
-    "version": 2,
-    "width": 80,
-    "height": 24,
-    "shell": "/bin/bash",
-    "events": [
-      [0.123, "o", "$ echo hello\r\n"],
-      [0.456, "o", "hello\r\n"],
-      [1.234, "i", "exit\r\n"]
-    ]
+  "conversation": [
+    {
+      "role": "user",
+      "content": "how can i make a ufo with gravity defying engines?",
+      "timestamp": 6.095755
+    },
+    {
+      "role": "assistant",
+      "content": "⏺ I can help you create a UFO model...",
+      "timestamp": 36.364826
+    }
+  ],
+
+  "meta": {
+    "duration": 78.496,
+    "message_count": 2,
+    "compaction": {
+      "mode": "conversation",
+      "compacted_at": "2025-11-02T13:33:05",
+      "original_events": 282
+    }
   },
 
-  "conversation": [],      // Parsed LLM conversation (Phase 2)
-  "summary": null,         // AI-generated summary (Phase 4)
-  "vector_index": null,    // Embeddings (Phase 5)
-  "checksums": {},         // Event integrity
-  "compaction_history": [] // Token management (Phase 7)
+  "terminal_recording": null,  // Removed after compaction (saves 75-189x space)
+  "summary": null,             // AI-generated summary (Phase 4)
+  "vector_index": null,        // Embeddings (Phase 5)
+  "token_counts": {},
+  "checksums": {},
+  "compaction_history": [
+    {
+      "mode": "conversation",
+      "timestamp": "2025-11-02T13:33:05"
+    }
+  ]
 }
 ```
+
+**Auto-compaction:** Sessions are automatically compacted after recording to remove redundant terminal events. Raw events (189KB) → Conversation only (2KB) = 75-189x file size reduction.
 
 ## Features Implemented
 
@@ -166,14 +187,20 @@ Output files are in `.devsession` format with this structure:
 ✅ **Drag to reposition** - Move button anywhere
 ✅ **Right-click menu** - Stats, sessions folder, quit
 ✅ **Visual feedback** - Different states for idle/recording/stopped
+✅ **Export dialog** - Export to txt, md, json, html formats
 
-### Terminal Recorder
-✅ **PTY-based terminal capture** - Records all I/O
-✅ **Auto-save every 50 events** - Crash protection
+### Terminal Recorder (WAL-based) ⭐ NEW
+✅ **Write-Ahead Log (WAL)** - Crash-safe append-only recording
+✅ **Atomic finalization** - No data corruption on crashes
+✅ **Auto-compaction** - 75-189x file size reduction (189KB → 2KB)
+✅ **Conversation parsing** - Terminal events → structured messages
+✅ **PTY-based capture** - Records all I/O
+✅ **fsync every 64 events** - Maximum 64 events lost on crash
 ✅ **Terminal resize handling** - Window size changes tracked
-✅ **Multiple export formats** - .txt, .md, .cast
+✅ **Multiple export formats** - .txt, .md, .json, .html (removed .cast)
 ✅ **Session management** - List, show, export
 ✅ **Clean shutdown** - Proper terminal restoration
+✅ **Interactive menu preservation** - Keeps decision trees, removes UI chrome
 
 ### Native LLM
 ✅ **Direct API calls** - Claude (Anthropic) and GPT (OpenAI)
@@ -183,12 +210,17 @@ Output files are in `.devsession` format with this structure:
 ✅ **Multiple models** - Claude Sonnet/Opus/Haiku, GPT-5/4
 ✅ **Auto-save to .devsession** - Clean conversation objects
 
-## What's Next (Future Phases)
+## Implementation Status
 
-- **Phase 1**: DevSession file management improvements
-- **Phase 2**: Conversation parser (extract LLM messages)
-- **Phase 3**: Token counting
-- **Phase 4**: AI summary generation
+✅ **Phase 0 Complete** - Pure Python PTY recording
+✅ **Phase 0.5 Complete** - Native LLM + GUI
+✅ **Phase 1 Complete** - WAL-based crash-safe recording
+✅ **Phase 2 Complete** - Conversation parser (terminal events → messages)
+✅ **Phase 2.5 Complete** - Auto-compaction (75-189x file size reduction)
+
+**Next phases:**
+- **Phase 3**: Token counting for conversation messages
+- **Phase 4**: AI summary generation (single-stage Sonnet)
 - **Phase 5**: Vector embeddings for semantic search
 - **Phase 6**: Memory middleware (context hydration)
 - **Phase 7**: Preemptive compaction at 190K tokens
@@ -251,14 +283,17 @@ $ exit
 
 ## Technical Details
 
-### How It Works
+### How It Works (WAL Architecture)
 
-1. **PTY Spawning**: Uses Python's `pty.spawn()` to create a pseudo-terminal
-2. **Event Capture**: Intercepts all I/O through custom read handlers
-3. **Timestamp Recording**: Each event gets precise timestamp (seconds since start)
-4. **Incremental Save**: Auto-saves every 50 events to prevent data loss
-5. **Signal Handling**: Catches SIGWINCH for terminal resize events
-6. **Clean Shutdown**: Restores terminal attributes on exit
+1. **WAL Recording**: Events written to crash-safe .wal file (append-only)
+2. **PTY Spawning**: Uses Python's `pty.spawn()` to create a pseudo-terminal
+3. **Event Capture**: Intercepts all I/O through custom read handlers
+4. **Timestamp Recording**: Each event gets precise timestamp (seconds since start)
+5. **Crash Protection**: fsync every 64 events (max 64 events lost on crash)
+6. **Signal Handling**: Catches SIGWINCH for terminal resize events
+7. **Finalization**: On stop, parse conversation → atomic .devsession write
+8. **Auto-compaction**: Remove redundant events (189KB → 2KB)
+9. **WAL Cleanup**: Delete .wal file after successful finalization
 
 ### Event Types
 
@@ -340,7 +375,10 @@ pip3 install anthropic openai
 This v2 recorder is ready for production use:
 1. ✅ Phase 0 complete - Pure Python PTY recording
 2. ✅ Phase 0.5 complete - Native LLM + GUI
-3. ⏳ Phase 1-7 - Intelligence layers (next)
+3. ✅ Phase 1 complete - WAL crash-safe recording
+4. ✅ Phase 2 complete - Conversation parser
+5. ✅ Phase 2.5 complete - Auto-compaction
+6. ⏳ Phase 3-7 - Intelligence layers (next)
 
 ---
 

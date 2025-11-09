@@ -105,8 +105,21 @@ const RecCliLandingPage: NextPage = () => {
         </header>
         
         {/* Hero Section */}
-        <section className="pt-32 pb-20 px-6">
-          <div className="container mx-auto max-w-5xl text-center">
+        <section className="pt-32 pb-20 px-6 relative overflow-hidden">
+          {/* Background Image */}
+          <div
+            className="absolute inset-0 opacity-30"
+            style={{
+              backgroundImage: 'url(/datatothought.png)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat',
+              filter: 'blur(2px)'
+            }}
+          />
+
+          {/* Content */}
+          <div className="container mx-auto max-w-5xl text-center relative z-10">
             <h1 className="text-5xl md:text-7xl font-black mb-6 leading-tight">
               Never Lose Terminal Context Again
             </h1>

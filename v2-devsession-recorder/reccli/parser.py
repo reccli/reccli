@@ -174,9 +174,12 @@ class ConversationParser:
         for i, line in enumerate(lines):
             stripped = line.strip()
 
-            # Skip separators
-            if all(c in '─' for c in stripped) and stripped:
-                continue
+            # Skip separators (lines that are mostly box-drawing characters)
+            if stripped and len(stripped) > 10:
+                # Count box-drawing and dash characters
+                box_chars = sum(1 for c in stripped if c in '─━│┃┄┅┆┇┈┉┊┋═║╔╗╚╝╠╣╦╩╬')
+                if box_chars / len(stripped) > 0.8:  # More than 80% box chars
+                    continue
 
             # Keep selected prompt lines (but only if they have content)
             if i in lines_to_keep:
@@ -184,29 +187,39 @@ class ConversationParser:
                     cleaned_lines.append(line)
                 continue
 
-            # Skip other prompt lines
-            if stripped.startswith('>'):
+            # Skip other prompt lines and window title updates
+            if stripped.startswith('>') or stripped.startswith('0;'):
                 continue
 
             # Skip empty lines
             if not stripped:
                 continue
 
-            # Skip loading animations
-            if any(x in stripped for x in ['Galloping', 'Warping', 'Deliberating', 'Combobulating',
+            # Skip ALL loading animations (don't keep any)
+            # Check for thinking indicators (✶, ·, ✻) or specific animation words
+            if (stripped.startswith('✶') or stripped.startswith('·') or stripped.startswith('✻') or
+                stripped.startswith('✽') or stripped.startswith('✢') or stripped.startswith('✳') or
+                any(x in stripped for x in ['Galloping', 'Warping', 'Deliberating', 'Combobulating',
                                            'Musing', 'Prestidigitating', 'Finagling', 'Whatchamacalliting',
-                                           '(esc to interrupt)']):
+                                           'Sautéing', 'Unfurling', 'Pondering', 'Cogitating', 'Ruminating',
+                                           'Juliening', 'Boondoggling', 'Thundering', 'Beaming', 'Perusing',
+                                           'Frosting', 'Channelling',
+                                           '(esc to interrupt)', 'esc to interrupt'])):
                 continue
 
             # Skip exit messages
             if any(x in stripped for x in ['Press Ctrl-D', 'again to exit']):
                 continue
 
-            # Skip duplicate UI elements - only keep first occurrence
-            if any(x in stripped for x in ['? for shortcuts', 'Thinking off', 'tab to toggle']):
-                if stripped not in seen_lines:
-                    seen_lines.add(stripped)
-                    cleaned_lines.append(line)
+            # Skip ALL UI chrome and tips (don't keep any)
+            # Only filter keyboard shortcuts and status indicators, NOT content
+            if any(x in stripped for x in ['? for shortcuts', 'Thinking off', 'tab to toggle',
+                                           'Tip: Connect Claude', '⎿', 'Connect Claude to your IDE']):
+                continue
+
+            # Skip keyboard instruction lines (but keep numbered menu items)
+            if any(x in stripped for x in ['Enter to select', 'Tab/Arrow keys to navigate',
+                                           'Esc to cancel', 'Arrow keys to navigate']) and len(stripped) < 100:
                 continue
 
             # Skip duplicate status messages
@@ -221,6 +234,31 @@ class ConversationParser:
 
         return '\n'.join(cleaned_lines)
 
+    def _is_startup_message(self, text: str) -> bool:
+        """Check if text is just a startup/welcome message with no real content"""
+        # Remove whitespace for checking
+        text_check = text.strip()
+
+        # Empty or very short
+        if len(text_check) < 20:
+            return True
+
+        # Check if it ends with a user prompt (means it's just UI chrome before first user input)
+        if text_check.endswith('> hey claude what is love?') or text_check.endswith('> '):
+            return True
+
+        # Just contains startup info and "Try" suggestions
+        startup_indicators = [
+            'Claude Code v',
+            'Try "edit',
+        ]
+
+        # If any startup indicator is present, it's likely a startup message
+        if any(indicator in text for indicator in startup_indicators):
+            return True
+
+        return False
+
     def group_output_lines(self, events: List[List], start_idx: int, end_idx: int) -> str:
         """
         Group consecutive output events into a single message
@@ -231,7 +269,7 @@ class ConversationParser:
             end_idx: End index (exclusive)
 
         Returns:
-            Combined output text
+            Combined output text (cleaned)
         """
         output_lines = []
         for i in range(start_idx, end_idx):
@@ -239,7 +277,23 @@ class ConversationParser:
                 output_lines.append(events[i][2])
 
         combined = ''.join(output_lines)
-        return self.clean_text(combined)
+        # First clean ANSI codes and normalize
+        cleaned = self.clean_text(combined)
+        # Then remove incremental typing artifacts
+        cleaned = self.clean_incremental_typing(cleaned)
+
+        # Remove user prompt echo from assistant responses
+        # Filter out lines that are just the echoed user prompt (start with >)
+        lines = cleaned.split('\n')
+        filtered_lines = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip lines that are user prompt echoes (start with >)
+            if stripped.startswith('>') and len(stripped) > 1:
+                continue
+            filtered_lines.append(line)
+
+        return '\n'.join(filtered_lines).strip()
 
     def parse(self, events: List[List]) -> List[Dict]:
         """
@@ -266,35 +320,58 @@ class ConversationParser:
                 llm_start_idx = i + 1
                 break
 
-        # Parse messages
+        # Parse messages - accumulate character-by-character input
         i = llm_start_idx
         pending_output_start = None
+        user_input_buffer = []
+        user_input_start_time = None
 
         while i < len(events):
             event = events[i]
             timestamp, event_type, data = event
 
-            # User input
-            if self.is_user_input(event):
-                # Save any pending assistant output
-                if pending_output_start is not None:
-                    assistant_text = self.group_output_lines(events, pending_output_start, i)
-                    if assistant_text:
-                        conversation.append({
-                            "role": "assistant",
-                            "content": assistant_text,
-                            "timestamp": events[pending_output_start][0]
-                        })
-                    pending_output_start = None
+            # User input (character by character from PTY)
+            if event_type == "i":
+                # Start accumulating user input
+                if user_input_start_time is None:
+                    user_input_start_time = timestamp
 
-                # Add user message
-                user_text = self.clean_text(data)
-                if user_text and user_text.lower() not in ["exit", "quit", "bye"]:
-                    conversation.append({
-                        "role": "user",
-                        "content": user_text,
-                        "timestamp": timestamp
-                    })
+                # Check if Enter was pressed
+                if data in ['\r', '\n']:
+                    # Complete line - save as user message
+                    if user_input_buffer:
+                        user_text = ''.join(user_input_buffer).strip()
+                        # Filter out commands that launched the LLM
+                        if user_text and user_text.lower() not in ["exit", "quit", "bye", "claude", "chatgpt", "gpt", "codex"]:
+                            # Save any pending assistant output first
+                            if pending_output_start is not None:
+                                assistant_text = self.group_output_lines(events, pending_output_start, i)
+                                # Skip startup messages and empty responses
+                                if assistant_text and not self._is_startup_message(assistant_text):
+                                    conversation.append({
+                                        "role": "assistant",
+                                        "content": assistant_text,
+                                        "timestamp": events[pending_output_start][0]
+                                    })
+                                pending_output_start = None
+
+                            # Add user message
+                            conversation.append({
+                                "role": "user",
+                                "content": user_text,
+                                "timestamp": user_input_start_time
+                            })
+
+                        # Reset buffer
+                        user_input_buffer = []
+                        user_input_start_time = None
+                else:
+                    # Accumulate character (handle backspace)
+                    if data == '\x7f' or data == '\b':  # Backspace
+                        if user_input_buffer:
+                            user_input_buffer.pop()
+                    elif data.isprintable() or data == ' ':
+                        user_input_buffer.append(data)
 
             # Output (potential assistant response)
             elif event_type == "o":
@@ -309,7 +386,8 @@ class ConversationParser:
         # Save any remaining assistant output
         if pending_output_start is not None:
             assistant_text = self.group_output_lines(events, pending_output_start, len(events))
-            if assistant_text:
+            # Skip startup messages and empty responses
+            if assistant_text and not self._is_startup_message(assistant_text):
                 conversation.append({
                     "role": "assistant",
                     "content": assistant_text,

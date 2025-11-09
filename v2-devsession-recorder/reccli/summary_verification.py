@@ -19,11 +19,14 @@ class SummaryVerifier:
         self.conversation = conversation
 
         # Build message ID lookup
+        # Message IDs are 1-based (msg_001, msg_002, ...)
+        # Array indices are 0-based (0, 1, 2, ...)
         self.message_lookup = {}
         for idx, msg in enumerate(conversation):
-            msg_id = f"msg_{idx+1:03d}"  # 1-based, zero-padded
+            msg_id = f"msg_{idx+1:03d}"  # 1-based, zero-padded (msg_001 for first message)
             self.message_lookup[msg_id] = {
-                "index": idx + 1,  # 1-based
+                "msg_num": idx + 1,  # 1-based message number
+                "index": idx,        # 0-based array index
                 "message": msg
             }
 
@@ -34,6 +37,9 @@ class SummaryVerifier:
     def verify_message_range(self, message_range: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """
         Verify message range is valid
+
+        Range semantics: [start_index, end_index) - inclusive-exclusive, 0-based
+        Example: msg_042 to msg_050 → start_index=41, end_index=50
 
         Args:
             message_range: Dict with start, end, start_index, end_index
@@ -58,15 +64,51 @@ class SummaryVerifier:
         if not self.verify_message_exists(end_id):
             return False, f"End message not found: {end_id}"
 
-        # Verify indices match IDs
-        if self.message_lookup[start_id]["index"] != start_idx:
-            return False, f"Start index mismatch: {start_id} should be index {self.message_lookup[start_id]['index']}, got {start_idx}"
-        if self.message_lookup[end_id]["index"] != end_idx:
-            return False, f"End index mismatch: {end_id} should be index {self.message_lookup[end_id]['index']}, got {end_idx}"
+        # Extract message numbers from IDs (1-based)
+        start_num = self.message_lookup[start_id]["msg_num"]  # e.g., 42
+        end_num = self.message_lookup[end_id]["msg_num"]      # e.g., 50
 
-        # Verify range is ordered (start <= end)
-        if start_idx > end_idx:
-            return False, f"Invalid range: start {start_idx} > end {end_idx}"
+        # Verify indices match IDs using new semantics
+        # msg_042 (42nd message) → start_index = 41 (0-based, inclusive)
+        # msg_050 (50th message) → end_index = 50 (0-based, exclusive)
+        expected_start_idx = start_num - 1
+        expected_end_idx = end_num
+
+        if start_idx != expected_start_idx:
+            return False, f"Start index mismatch: {start_id} (message {start_num}) should have start_index={expected_start_idx} (0-based inclusive), got {start_idx}"
+
+        if end_idx != expected_end_idx:
+            return False, f"End index mismatch: {end_id} (message {end_num}) should have end_index={expected_end_idx} (0-based exclusive), got {end_idx}"
+
+        # Verify non-negative range length
+        if end_idx < start_idx:
+            return False, f"Invalid range: end_index {end_idx} < start_index {start_idx} (negative length)"
+
+        # Verify indices in bounds
+        if start_idx < 0:
+            return False, f"start_index {start_idx} < 0 (out of bounds)"
+        if start_idx >= len(self.conversation):
+            return False, f"start_index {start_idx} >= conversation length {len(self.conversation)}"
+        if end_idx > len(self.conversation):
+            return False, f"end_index {end_idx} > conversation length {len(self.conversation)}"
+        if end_idx <= 0:
+            return False, f"end_index {end_idx} <= 0 (invalid)"
+
+        # Verify retrieval correctness
+        # conversation[start_idx:end_idx] should include messages from start_id to end_id
+        messages = self.conversation[start_idx:end_idx]
+        if len(messages) == 0:
+            return False, f"Range [{start_idx}, {end_idx}) is empty"
+
+        # First message should be start_id
+        first_msg_id = f"msg_{start_idx + 1:03d}"
+        if first_msg_id != start_id:
+            return False, f"First message in range is {first_msg_id}, expected {start_id}"
+
+        # Last message should be end_id (remember end_idx is exclusive)
+        last_msg_id = f"msg_{end_idx:03d}"  # end_idx is exclusive, so last is at end_idx - 1, which is message number end_idx
+        if last_msg_id != end_id:
+            return False, f"Last message in range is {last_msg_id}, expected {end_id}"
 
         return True, None
 
@@ -116,6 +158,7 @@ class SummaryVerifier:
                 errors.append(f"Invalid message_range: {error}")
 
         # Verify references fall within message range
+        # Range semantics: [start_index, end_index) - inclusive-exclusive
         if "references" in decision and "message_range" in decision:
             msg_range = decision["message_range"]
             start_idx = msg_range.get("start_index", 0)
@@ -124,8 +167,9 @@ class SummaryVerifier:
             for ref in decision["references"]:
                 if ref in self.message_lookup:
                     ref_idx = self.message_lookup[ref]["index"]
-                    if ref_idx < start_idx or ref_idx > end_idx:
-                        errors.append(f"Reference {ref} (index {ref_idx}) outside message_range [{start_idx}, {end_idx}]")
+                    # Range is [start_idx, end_idx) so ref must be >= start_idx and < end_idx
+                    if ref_idx < start_idx or ref_idx >= end_idx:
+                        errors.append(f"Reference {ref} (index {ref_idx}) outside message_range [{start_idx}, {end_idx})")
 
         return len(errors) == 0, errors
 

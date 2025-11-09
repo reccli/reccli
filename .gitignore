@@ -26,7 +26,10 @@ recordings/
 
 # Config
 .reccli/
+~/reccli/config.json
+config.json
 license.key
+*.key
 
 # Instructions (local documentation)
 instructions/

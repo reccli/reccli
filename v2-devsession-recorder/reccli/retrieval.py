@@ -34,6 +34,8 @@ class ContextRetriever:
         """
         Retrieve full conversation context for a summary item
 
+        Range semantics: [start_index, end_index) - inclusive-exclusive, 0-based
+
         Args:
             summary_item: Summary item (decision, code_change, etc.) with message_range
             expand_context: Number of messages to include before/after range for context
@@ -48,7 +50,8 @@ class ContextRetriever:
             }
 
         msg_range = summary_item["message_range"]
-        start_idx = msg_range.get("start_index", 1) - 1  # Convert to 0-based
+        # Indices are 0-based, range is [start, end) inclusive-exclusive
+        start_idx = msg_range.get("start_index", 0)
         end_idx = msg_range.get("end_index", len(self.conversation))
 
         # Expand context (include N messages before/after for better understanding)

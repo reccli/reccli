@@ -255,15 +255,19 @@ CRITICAL RULES:
         """
         Extract messages within a span
 
+        Range semantics: [start_index, end_index) - inclusive-exclusive, 0-based
+        Example: [41, 50) returns indices 41-49 (messages msg_042 to msg_050)
+
         Args:
             conversation: Full conversation
-            span: Span dict with start_index and end_index
+            span: Span dict with start_index (0-based, inclusive) and end_index (0-based, exclusive)
 
         Returns:
             Messages in span
         """
-        start_idx = span["start_index"] - 1  # Convert to 0-based
-        end_idx = span["end_index"]  # Inclusive end
+        # Indices are already 0-based, range is [start, end) inclusive-exclusive
+        start_idx = span["start_index"]
+        end_idx = span["end_index"]
 
         return conversation[start_idx:end_idx]
 
@@ -275,20 +279,25 @@ CRITICAL RULES:
         """
         Extract ISO timestamps for first and last message in a range
 
+        Range semantics: [start_index, end_index) - inclusive-exclusive, 0-based
+        Returns timestamps for INCLUSIVE range (both start and end messages)
+
         Args:
             conversation: Full conversation
-            message_range: Range with start_index and end_index
+            message_range: Range with start_index (0-based, inclusive) and end_index (0-based, exclusive)
 
         Returns:
             (t_first, t_last) as ISO timestamp strings
         """
-        start_idx = message_range.get("start_index", 1) - 1  # Convert to 0-based
-        end_idx = message_range.get("end_index", len(conversation)) - 1
+        # Indices are 0-based, range is [start, end) inclusive-exclusive
+        start_idx = message_range.get("start_index", 0)
+        end_idx = message_range.get("end_index", len(conversation))
 
         # Get timestamps
         t_first = None
         t_last = None
 
+        # Get first message timestamp (inclusive start)
         if 0 <= start_idx < len(conversation):
             first_msg = conversation[start_idx]
             if "timestamp" in first_msg:
@@ -300,8 +309,11 @@ CRITICAL RULES:
                 else:
                     t_first = ts
 
-        if 0 <= end_idx < len(conversation):
-            last_msg = conversation[end_idx]
+        # Get last message timestamp (inclusive end of range)
+        # Since end_index is exclusive, the last included message is at end_idx - 1
+        last_idx = end_idx - 1
+        if 0 <= last_idx < len(conversation):
+            last_msg = conversation[last_idx]
             if "timestamp" in last_msg:
                 ts = last_msg["timestamp"]
                 if isinstance(ts, (int, float)):
@@ -311,6 +323,82 @@ CRITICAL RULES:
                     t_last = ts
 
         return t_first, t_last
+
+    def enrich_with_temporal_data(
+        self,
+        summary: Dict[str, Any],
+        conversation: List[Dict]
+    ) -> None:
+        """
+        Enrich all summary items with temporal data (t_first, t_last)
+
+        This implements the Two-Level Linked Retrieval by adding temporal
+        bounds to each summary item, enabling O(1) lookup from summary
+        layer to full conversation layer.
+
+        Args:
+            summary: Summary dict to enrich (modified in place)
+            conversation: Full conversation for timestamp lookup
+        """
+        # Enrich decisions
+        for decision in summary.get("decisions", []):
+            if "message_range" in decision:
+                t_first, t_last = self.extract_temporal_bounds(
+                    conversation,
+                    decision["message_range"]
+                )
+                if t_first:
+                    decision["t_first"] = t_first
+                if t_last:
+                    decision["t_last"] = t_last
+
+        # Enrich code changes
+        for change in summary.get("code_changes", []):
+            if "message_range" in change:
+                t_first, t_last = self.extract_temporal_bounds(
+                    conversation,
+                    change["message_range"]
+                )
+                if t_first:
+                    change["t_first"] = t_first
+                if t_last:
+                    change["t_last"] = t_last
+
+        # Enrich problems solved
+        for problem in summary.get("problems_solved", []):
+            if "message_range" in problem:
+                t_first, t_last = self.extract_temporal_bounds(
+                    conversation,
+                    problem["message_range"]
+                )
+                if t_first:
+                    problem["t_first"] = t_first
+                if t_last:
+                    problem["t_last"] = t_last
+
+        # Enrich open issues
+        for issue in summary.get("open_issues", []):
+            if "message_range" in issue:
+                t_first, t_last = self.extract_temporal_bounds(
+                    conversation,
+                    issue["message_range"]
+                )
+                if t_first:
+                    issue["t_first"] = t_first
+                if t_last:
+                    issue["t_last"] = t_last
+
+        # Enrich next steps
+        for step in summary.get("next_steps", []):
+            if "message_range" in step:
+                t_first, t_last = self.extract_temporal_bounds(
+                    conversation,
+                    step["message_range"]
+                )
+                if t_first:
+                    step["t_first"] = t_first
+                if t_last:
+                    step["t_last"] = t_last
 
     def calculate_break_even_reduction(self) -> float:
         """
@@ -509,6 +597,9 @@ CRITICAL RULES:
             session_hash=session_hash
         )
         summary.update(llm_summary)
+
+        # Step 6.5: Enrich with temporal data (t_first, t_last) for two-level retrieval
+        self.enrich_with_temporal_data(summary, conversation)
 
         # Step 7: Verify references
         verifier = SummaryVerifier(conversation)
