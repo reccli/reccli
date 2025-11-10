@@ -3,8 +3,7 @@ import { Box, Text, useInput, useStdin } from 'ink';
 export const SmartInput = ({ onSubmit, isDisabled = false }) => {
     const [inputValue, setInputValue] = useState('');
     const [cursorPosition, setCursorPosition] = useState(0);
-    const [pasteBuffer, setPasteBuffer] = useState('');
-    const [showPasteAnnotation, setShowPasteAnnotation] = useState(false);
+    const [pasteBuffer, setPasteBuffer] = useState(''); // Hidden paste content
     const pasteAccumulatorRef = useRef('');
     const pasteTimerRef = useRef(null);
     const { stdin, setRawMode } = useStdin();
@@ -17,39 +16,39 @@ export const SmartInput = ({ onSubmit, isDisabled = false }) => {
     useInput((input, key) => {
         if (isDisabled)
             return;
-        // DEBUG: Log every input event
-        if (input || key.return) {
-            console.error(`[InputV3] input.length=${input?.length || 0}, key.return=${key.return}, pasteBuffer.length=${pasteBuffer.length}, showPasteAnnotation=${showPasteAnnotation}`);
-        }
-        // Handle paste annotation display
-        if (showPasteAnnotation && key.return) {
-            const lines = pasteBuffer.split('\n').length;
-            const chars = pasteBuffer.length;
-            console.error(`[InputV3] Submitting paste: ${chars} chars, ${lines} lines`);
-            let displayLines = lines;
-            if (lines === 1 && chars > 80) {
-                displayLines = Math.ceil(chars / 80);
+        if (key.return) {
+            // Submit: if we have pasteBuffer, check if annotation is still intact
+            if (pasteBuffer) {
+                const lines = pasteBuffer.split('\n').length;
+                const chars = pasteBuffer.length;
+                let displayLines = lines;
+                if (lines === 1 && chars > 80) {
+                    displayLines = Math.ceil(chars / 80);
+                }
+                const expectedAnnotation = `[pasted +${displayLines} lines, ${chars.toLocaleString()} chars]`;
+                // Check if the annotation is still intact in inputValue
+                if (inputValue.includes(expectedAnnotation)) {
+                    // Annotation intact - submit with pasteBuffer
+                    const fullContent = inputValue.replace(expectedAnnotation, '') + pasteBuffer;
+                    onSubmit(fullContent, expectedAnnotation);
+                }
+                else {
+                    // Annotation broken - just submit inputValue without pasteBuffer
+                    onSubmit(inputValue);
+                }
             }
-            const annotation = `[pasted +${displayLines} lines, ${chars.toLocaleString()} chars]`;
-            onSubmit(pasteBuffer, annotation);
-            setPasteBuffer('');
-            setShowPasteAnnotation(false);
+            else {
+                onSubmit(inputValue);
+            }
             setInputValue('');
             setCursorPosition(0);
-            return;
-        }
-        if (key.return) {
-            // Submit normal input
-            if (inputValue.trim()) {
-                onSubmit(inputValue);
-                setInputValue('');
-                setCursorPosition(0);
-            }
+            setPasteBuffer('');
         }
         else if (key.backspace || key.delete) {
-            // Handle backspace
+            // Delete character from inputValue
             if (cursorPosition > 0) {
-                setInputValue(prev => prev.slice(0, cursorPosition - 1) + prev.slice(cursorPosition));
+                const newValue = inputValue.slice(0, cursorPosition - 1) + inputValue.slice(cursorPosition);
+                setInputValue(newValue);
                 setCursorPosition(prev => prev - 1);
             }
         }
@@ -62,70 +61,80 @@ export const SmartInput = ({ onSubmit, isDisabled = false }) => {
         else if (input) {
             // Check if this is a paste chunk (large input)
             if (input.length > 10) {
-                console.error(`[InputV3] PASTE CHUNK: ${input.length} chars, accumulator: ${pasteAccumulatorRef.current.length}`);
                 // Accumulate paste chunks using ref
                 pasteAccumulatorRef.current += input;
                 // Clear any existing timer
                 if (pasteTimerRef.current) {
                     clearTimeout(pasteTimerRef.current);
                 }
-                // Set a new timer to finalize the paste after 300ms of no input
+                // Set a new timer to finalize the paste after 100ms of no input
                 pasteTimerRef.current = setTimeout(() => {
                     // Convert \r to \n (terminal sends \r instead of \n during paste)
-                    const normalizedContent = (inputValue + pasteAccumulatorRef.current).replace(/\r/g, '\n');
-                    const fullContent = normalizedContent;
-                    const lines = fullContent.split('\n').length;
-                    const chars = fullContent.length;
-                    // DEBUG: Check what characters are actually in the paste
-                    const hasNewlines = fullContent.includes('\n');
-                    const hasCarriageReturns = fullContent.includes('\r');
-                    const first50 = JSON.stringify(fullContent.substring(0, 50));
-                    console.error(`[InputV3] PASTE FINALIZED: ${chars} chars, ${lines} lines`);
-                    console.error(`[InputV3] Contains \\n: ${hasNewlines}, Contains \\r: ${hasCarriageReturns}`);
-                    console.error(`[InputV3] First 50 chars: ${first50}`);
+                    const normalizedContent = pasteAccumulatorRef.current.replace(/\r/g, '\n');
+                    const lines = normalizedContent.split('\n').length;
+                    const chars = normalizedContent.length;
                     if (chars > 400 || lines > 5) {
-                        // Show paste annotation
-                        setPasteBuffer(fullContent);
-                        setShowPasteAnnotation(true);
+                        // Large paste - add annotation to inputValue, store content in pasteBuffer
+                        let displayLines = lines;
+                        if (lines === 1 && chars > 80) {
+                            displayLines = Math.ceil(chars / 80);
+                        }
+                        const annotation = `[pasted +${displayLines} lines, ${chars.toLocaleString()} chars]`;
+                        setInputValue(prev => prev + annotation);
+                        setCursorPosition(prev => prev + annotation.length);
+                        setPasteBuffer(normalizedContent);
                     }
                     else {
-                        // Small paste, treat as normal input
-                        setInputValue(fullContent);
-                        setCursorPosition(fullContent.length);
+                        // Small paste, add to inputValue directly (no annotation)
+                        setInputValue(prev => prev + normalizedContent);
+                        setCursorPosition(prev => prev + normalizedContent.length);
                     }
                     // Clear accumulator
                     pasteAccumulatorRef.current = '';
                     pasteTimerRef.current = null;
-                }, 300);
+                }, 100);
                 return;
             }
             // Normal single character input
-            pasteAccumulatorRef.current = ''; // Clear accumulator on normal typing
+            // If there's an active paste timer, this might be the last char of a paste
+            if (pasteTimerRef.current) {
+                pasteAccumulatorRef.current += input;
+                clearTimeout(pasteTimerRef.current);
+                pasteTimerRef.current = setTimeout(() => {
+                    const normalizedContent = pasteAccumulatorRef.current.replace(/\r/g, '\n');
+                    const lines = normalizedContent.split('\n').length;
+                    const chars = normalizedContent.length;
+                    if (chars > 400 || lines > 5) {
+                        let displayLines = lines;
+                        if (lines === 1 && chars > 80) {
+                            displayLines = Math.ceil(chars / 80);
+                        }
+                        const annotation = `[pasted +${displayLines} lines, ${chars.toLocaleString()} chars]`;
+                        setInputValue(prev => prev + annotation);
+                        setCursorPosition(prev => prev + annotation.length);
+                        setPasteBuffer(normalizedContent);
+                    }
+                    else {
+                        setInputValue(prev => prev + normalizedContent);
+                        setCursorPosition(prev => prev + normalizedContent.length);
+                    }
+                    pasteAccumulatorRef.current = '';
+                    pasteTimerRef.current = null;
+                }, 100);
+                return;
+            }
+            // True single character input - clear accumulator and add to inputValue
+            pasteAccumulatorRef.current = '';
             const newValue = inputValue.slice(0, cursorPosition) + input + inputValue.slice(cursorPosition);
             setInputValue(newValue);
             setCursorPosition(prev => prev + input.length);
         }
     });
-    if (showPasteAnnotation) {
-        const lines = pasteBuffer.split('\n').length;
-        const chars = pasteBuffer.length;
-        let displayLines = lines;
-        if (lines === 1 && chars > 80) {
-            displayLines = Math.ceil(chars / 80);
-        }
-        return (React.createElement(Box, null,
-            React.createElement(Text, { color: "gray" }, "> "),
-            React.createElement(Text, { color: "gray", backgroundColor: "darkGray" },
-                "[pasted +",
-                displayLines,
-                " lines, ",
-                chars.toLocaleString(),
-                " chars]")));
-    }
     return (React.createElement(Box, null,
         React.createElement(Text, { color: "gray" }, "> "),
         React.createElement(Text, null,
-            inputValue,
-            !isDisabled && React.createElement(Text, { inverse: true }, " "))));
+            inputValue.slice(0, cursorPosition),
+            !isDisabled && React.createElement(Text, { inverse: true }, " "),
+            inputValue.slice(cursorPosition))));
 };
 //# sourceMappingURL=InputV3.js.map

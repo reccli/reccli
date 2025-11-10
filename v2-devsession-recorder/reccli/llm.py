@@ -8,6 +8,8 @@ import time
 import re
 import threading
 import itertools
+import os
+import glob
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -266,8 +268,158 @@ class LLMSession:
 
         return response
 
+    def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+        """Execute a tool and return the result as a string"""
+        try:
+            if tool_name == "read_file":
+                path = Path(tool_input["path"])
+                if not path.exists():
+                    return f"Error: File not found: {path}"
+                return path.read_text()
+
+            elif tool_name == "write_file":
+                path = Path(tool_input["path"])
+                content = tool_input["content"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+                return f"Successfully wrote {len(content)} characters to {path}"
+
+            elif tool_name == "list_directory":
+                path = Path(tool_input.get("path", "."))
+                if not path.exists():
+                    return f"Error: Directory not found: {path}"
+                if not path.is_dir():
+                    return f"Error: Not a directory: {path}"
+
+                items = []
+                for item in sorted(path.iterdir()):
+                    if item.is_dir():
+                        items.append(f"📁 {item.name}/")
+                    else:
+                        size = item.stat().st_size
+                        items.append(f"📄 {item.name} ({size} bytes)")
+                return "\n".join(items)
+
+            elif tool_name == "glob_files":
+                pattern = tool_input["pattern"]
+                base_path = Path(tool_input.get("path", "."))
+                matches = list(base_path.glob(pattern))
+                if not matches:
+                    return f"No files found matching pattern: {pattern}"
+                return "\n".join(str(p) for p in sorted(matches))
+
+            else:
+                return f"Error: Unknown tool: {tool_name}"
+
+        except Exception as e:
+            return f"Error executing {tool_name}: {str(e)}"
+
+    def _process_tool_response(self, response):
+        """Process API response that may contain tool use"""
+        # Check if response contains tool use
+        if response.stop_reason == "tool_use":
+            # Find all tool use blocks
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    # Execute the tool
+                    result = self._execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+
+            # Add assistant's tool use to messages
+            self.messages.append({
+                "role": "assistant",
+                "content": response.content
+            })
+
+            # Add tool results to messages
+            self.messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+
+            # Continue the conversation to get the final response
+            model_map = {
+                'claude': 'claude-sonnet-4-5-20250929',
+                'claude-sonnet': 'claude-sonnet-4-5-20250929',
+                'claude-haiku': 'claude-haiku-4-5-20251001',
+                'claude-opus': 'claude-opus-4-1-20250805',
+            }
+            model_id = model_map.get(self.model, self.model)
+
+            # Redefine tools for continuation (same as above)
+            tools = [
+                {
+                    "name": "read_file",
+                    "description": "Read the contents of a file from the filesystem. Returns the file content as a string.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "The absolute or relative path to the file to read"}
+                        },
+                        "required": ["path"]
+                    }
+                },
+                {
+                    "name": "write_file",
+                    "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "The absolute or relative path to the file to write"},
+                            "content": {"type": "string", "description": "The content to write to the file"}
+                        },
+                        "required": ["path", "content"]
+                    }
+                },
+                {
+                    "name": "list_directory",
+                    "description": "List all files and directories in the specified path.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "The directory path to list. Defaults to current directory if not specified."}
+                        },
+                        "required": []
+                    }
+                },
+                {
+                    "name": "glob_files",
+                    "description": "Find files matching a glob pattern (e.g., '**/*.py' for all Python files).",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string", "description": "The glob pattern to match files against"},
+                            "path": {"type": "string", "description": "The base directory to search from. Defaults to current directory."}
+                        },
+                        "required": ["pattern"]
+                    }
+                }
+            ]
+
+            # Get final response after tools
+            final_response = self.client.messages.create(
+                model=model_id,
+                max_tokens=4096,
+                messages=self.messages,
+                tools=tools
+            )
+
+            # Recursively process in case there are more tool uses
+            return self._process_tool_response(final_response)
+
+        # No tool use, return text response
+        for block in response.content:
+            if hasattr(block, 'text'):
+                return block.text
+        return str(response.content)
+
     def _call_anthropic(self) -> str:
-        """Call Anthropic API"""
+        """Call Anthropic API with tool support"""
         # Map model names to current Claude models
         model_map = {
             # Primary models (4.5 and 4.1)
@@ -278,18 +430,89 @@ class LLMSession:
         }
         model_id = model_map.get(self.model, self.model)
 
+        # Define available tools
+        tools = [
+            {
+                "name": "read_file",
+                "description": "Read the contents of a file from the filesystem. Returns the file content as a string.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The absolute or relative path to the file to read"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "write_file",
+                "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The absolute or relative path to the file to write"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to write to the file"
+                        }
+                    },
+                    "required": ["path", "content"]
+                }
+            },
+            {
+                "name": "list_directory",
+                "description": "List all files and directories in the specified path.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The directory path to list. Defaults to current directory if not specified."
+                        }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "glob_files",
+                "description": "Find files matching a glob pattern (e.g., '**/*.py' for all Python files).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "The glob pattern to match files against"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "The base directory to search from. Defaults to current directory."
+                        }
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        ]
+
         try:
             response = self.client.messages.create(
                 model=model_id,
                 max_tokens=4096,
-                messages=self.messages
+                messages=self.messages,
+                tools=tools
             )
-            return response.content[0].text
+
+            # Handle tool use in response
+            return self._process_tool_response(response)
         except Exception as e:
             return f"❌ Error calling Claude: {e}"
 
     def _call_openai(self) -> str:
-        """Call OpenAI API"""
+        """Call OpenAI API with tool support"""
         # Map model names
         model_map = {
             # GPT-5 (current)
@@ -305,14 +528,224 @@ class LLMSession:
         }
         model_id = model_map.get(self.model, self.model)
 
+        # Define tools in OpenAI format
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read the contents of a file from the filesystem. Returns the file content as a string.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The absolute or relative path to the file to read"
+                            }
+                        },
+                        "required": ["path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The absolute or relative path to the file to write"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "The content to write to the file"
+                            }
+                        },
+                        "required": ["path", "content"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List all files and directories in the specified path.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The directory path to list. Defaults to current directory if not specified."
+                            }
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "glob_files",
+                    "description": "Find files matching a glob pattern (e.g., '**/*.py' for all Python files).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "The glob pattern to match files against"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "The base directory to search from. Defaults to current directory."
+                            }
+                        },
+                        "required": ["pattern"]
+                    }
+                }
+            }
+        ]
+
         try:
             response = self.client.chat.completions.create(
                 model=model_id,
-                messages=self.messages
+                messages=self.messages,
+                tools=tools,
+                tool_choice="auto"
             )
-            return response.choices[0].message.content
+
+            # Handle tool calls in response
+            return self._process_openai_tool_response(response)
         except Exception as e:
             return f"❌ Error calling OpenAI: {e}"
+
+    def _process_openai_tool_response(self, response):
+        """Process OpenAI response that may contain tool calls"""
+        message = response.choices[0].message
+
+        # Check if there are tool calls
+        if message.tool_calls:
+            # Add assistant's message with tool calls
+            self.messages.append({
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in message.tool_calls
+                ]
+            })
+
+            # Execute each tool call
+            import json
+            for tool_call in message.tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+
+                # Execute the tool
+                result = self._execute_tool(function_name, function_args)
+
+                # Add tool result to messages
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": function_name,
+                    "content": result
+                })
+
+            # Redefine tools for continuation
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "description": "Read the contents of a file from the filesystem.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "The file path to read"}
+                            },
+                            "required": ["path"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "description": "Write content to a file.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "The file path to write"},
+                                "content": {"type": "string", "description": "The content to write"}
+                            },
+                            "required": ["path", "content"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "description": "List directory contents.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "The directory path"}
+                            }
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "glob_files",
+                        "description": "Find files by glob pattern.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "pattern": {"type": "string", "description": "The glob pattern"},
+                                "path": {"type": "string", "description": "Base directory"}
+                            },
+                            "required": ["pattern"]
+                        }
+                    }
+                }
+            ]
+
+            # Get final response after tools
+            model_map = {
+                'gpt5': 'gpt-5',
+                'gpt5-chat': 'gpt-5-chat-latest',
+                'gpt5-mini': 'gpt-5-mini',
+                'gpt5-nano': 'gpt-5-nano',
+                'gpt5-codex': 'gpt-5-codex',
+                'gpt4': 'gpt-4-turbo',
+                'gpt4o': 'gpt-4o',
+                'gpt4-turbo': 'gpt-4-turbo'
+            }
+            model_id = model_map.get(self.model, self.model)
+
+            final_response = self.client.chat.completions.create(
+                model=model_id,
+                messages=self.messages,
+                tools=tools,
+                tool_choice="auto"
+            )
+
+            # Recursively process in case there are more tool calls
+            return self._process_openai_tool_response(final_response)
+
+        # No tool calls, return text response
+        return message.content if message.content else ""
 
     def chat_loop(self, enable_compaction: bool = True):
         """

@@ -45,58 +45,24 @@ export const ChatApp: React.FC = () => {
       return;
     }
 
-    // For large messages, print directly to stdout instead of using Ink
-    // This bypasses Ink's rendering engine which corrupts large text blocks
-    const isLargeMessage = text.length > 1000;
-
-    if (isLargeMessage) {
-      // Print user message directly to stdout
-      process.stdout.write('\n');
-      if (annotation) {
-        process.stdout.write(`\x1b[90m${annotation}\x1b[0m\n`); // gray
-      }
-      process.stdout.write('─'.repeat(60) + '\n');
-      process.stdout.write(`\x1b[36m${text}\x1b[0m\n`); // cyan for user
-      process.stdout.write('─'.repeat(60) + '\n');
-    }
-
     // Add user message with optional annotation
     const userMessage: Message = {
       role: 'user',
       content: text,
       annotation
     };
-    // Debug: log message content length and preview
-    console.error(`[Chat.tsx] Adding user message: ${text.length} chars, ${text.split('\n').length} lines`);
-    console.error(`[Chat.tsx] First 100 chars: ${text.substring(0, 100)}`);
-    console.error(`[Chat.tsx] Last 100 chars: ${text.substring(text.length - 100)}`);
-
-    // Only add to messages state if NOT large (to avoid Ink rendering it)
-    if (!isLargeMessage) {
-      setMessages(prev => [...prev, userMessage]);
-    }
+    setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
       // Send to Python backend
       const response = await bridge.sendMessage(text);
 
-      // For large responses, print directly to stdout
-      const isLargeResponse = response.content.length > 1000;
-
-      if (isLargeResponse) {
-        process.stdout.write('\n─'.repeat(60) + '\n');
-        process.stdout.write(response.content + '\n');
-        process.stdout.write('─'.repeat(60) + '\n');
-      }
-
-      // Add assistant response (only to state if not large)
-      if (!isLargeResponse) {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: response.content
-        }]);
-      }
+      // Add assistant response
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: response.content
+      }]);
 
       // Update session info
       setSessionInfo(prev => ({
@@ -121,8 +87,8 @@ export const ChatApp: React.FC = () => {
         <Text bold>RecCli Chat</Text>
       </Box>
 
-      {/* Messages - scrollable container, doesn't recalculate on input changes */}
-      <Box flexGrow={1} flexShrink={1} flexDirection="column" paddingX={1} overflow="hidden">
+      {/* Messages - use terminal's native scrollback */}
+      <Box flexDirection="column" paddingX={1}>
         <MessageList messages={messages} isLoading={isLoading} />
       </Box>
 

@@ -58,11 +58,6 @@ const Message = memo(({message}: {message: Message}) => {
 });
 
 export const MessageList: React.FC<MessageListProps> = memo(({messages, isLoading}) => {
-  // Debug: Log message content before rendering
-  messages.forEach((msg, i) => {
-    console.error(`[MessageList] Message ${i}: ${msg.content.length} chars, ${msg.content.split('\n').length} lines, role: ${msg.role}`);
-  });
-
   return (
     <Box flexDirection="column">
       {messages.map((message, index) => (

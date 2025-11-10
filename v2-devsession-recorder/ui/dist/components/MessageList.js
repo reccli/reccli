@@ -24,10 +24,6 @@ const Message = memo(({ message }) => {
         React.createElement(Text, { color: "gray" }, '─'.repeat(60))));
 });
 export const MessageList = memo(({ messages, isLoading }) => {
-    // Debug: Log message content before rendering
-    messages.forEach((msg, i) => {
-        console.error(`[MessageList] Message ${i}: ${msg.content.length} chars, ${msg.content.split('\n').length} lines, role: ${msg.role}`);
-    });
     return (React.createElement(Box, { flexDirection: "column" },
         messages.map((message, index) => (React.createElement(Message, { key: index, message: message }))),
         isLoading && (React.createElement(Box, null,

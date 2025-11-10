@@ -8,7 +8,7 @@ We want to replicate Claude Code's behavior:
 4. **Chat history shows the FULL pasted content** (CRITICAL)
 5. LLM receives full content
 
-## CURRENT STATUS: TypeScript + Ink Implementation (PARTIALLY WORKING)
+## CURRENT STATUS: TypeScript + Ink Implementation ✅ WORKING
 
 **✅ WE ARE NOW USING TypeScript + Ink for UI, Python for Brain**
 
@@ -29,11 +29,11 @@ We want to replicate Claude Code's behavior:
   - Location: `ui/src/bridge/python.ts`
 
 ### Component Status:
-- ✅ **TypeScript + Ink UI**: Terminal UI with paste detection working
+- ✅ **TypeScript + Ink UI**: Terminal UI with paste detection working perfectly
 - ✅ **Python Backend**: .devsession management, LLM communication via JSON-RPC working
 - ✅ **Paste Detection**: Shows `[pasted +X lines, Y chars]` annotation correctly
 - ✅ **LLM Integration**: Receives full content, generates responses correctly
-- ❌ **CRITICAL BUG**: Pasted content is TRUNCATED/CORRUPTED when displayed in message history
+- ✅ **Paste Display**: Full pasted content displays cleanly after Enter (fixed with `\r` to `\n` conversion)
 
 ### File Structure:
 - **Frontend**: `ui/src/components/InputV3.tsx` - Accumulates paste chunks via `useInput` hook
@@ -42,13 +42,20 @@ We want to replicate Claude Code's behavior:
 - **Chat Logic**: `ui/src/components/Chat.tsx` - Manages messages state
 - **Display**: `ui/src/components/MessageList.tsx` - Renders messages with Ink Text components
 
-### What's Working
-1. Paste detection via chunk accumulation (1014 + 863 + 439 = 2324 chars)
-2. Annotation display: `[pasted +108 lines, 8,626 chars]`
-3. LLM receives full content and responds correctly
-4. Token counting and status bar
+### What's Working ✅ ALL FEATURES
+1. ✅ Paste detection via chunk accumulation (paste arrives in ~1KB chunks)
+2. ✅ Annotation display: `[pasted +117 lines, 8,625 chars]`
+3. ✅ Annotation is editable text - can navigate with arrow keys, delete chars breaks the paste
+4. ✅ Annotation validation - if broken, paste content is discarded on submit
+5. ✅ Full content displays cleanly after Enter (no corruption)
+6. ✅ LLM receives full content and responds correctly
+7. ✅ Token counting and status bar
+8. ✅ React.memo optimizations for performance
+9. ✅ Arrow key navigation through input text
+10. ✅ Terminal native scrollback for infinite message history
+11. ✅ Tool calling support (read_file, write_file, list_directory, glob_files)
 
-### THE CRITICAL BUG: Text Display Truncation
+### THE CRITICAL BUG: Text Display Corruption - SOLVED ✅
 
 **Symptom**: When displaying pasted content in message history:
 - Text appears corrupted: "Claude: Oh wow, that'syou think?" (merged words)
@@ -58,44 +65,97 @@ We want to replicate Claude Code's behavior:
 
 **Evidence**:
 - User pastes 8,626 chars
-- InputV3 correctly accumulates: `PASTE FINALIZED: 8,626 chars, 108 lines`
-- Chat component receives full text via `onSubmit(pasteBuffer, annotation)`
-- MessageList displays corrupted/truncated version
+- InputV3 debug shows: `PASTE FINALIZED: 8,626 chars, 1 lines` (should be 108 lines!)
+- Debug shows: `Contains \n: false, Contains \r: true`
+- Text corruption pattern matches carriage return overwrites
 
 **Root Cause Analysis** (SOLVED):
 1. ✅ InputV3 accumulation: WORKING (ref-based, debounced)
 2. ✅ Chat component storage: WORKING (stores in messages state)
-3. ✅ **ROOT CAUSE IDENTIFIED**: Ink re-rendering entire component tree on every keystroke
-4. ✅ **Symptom**: Screen jumping up/down on each key press (but not backspace)
-5. ✅ **Mechanism**: Flexible Box layout recalculates heights on every render, causing terminal buffer overflow and interleaved stdout writes
+3. ✅ **ROOT CAUSE IDENTIFIED**: macOS Terminal sends `\r` (carriage return) instead of `\n` (newline) during paste operations
+4. ✅ **Mechanism**: `\r` moves cursor to line start, causing text overlap and corruption
+5. ✅ **Initial false hypothesis**: Thought it was Ink re-rendering - actually it was character encoding
 
-### Solution Implemented
+### Solution Implemented - FINAL FIX ✅
 
-**The Fix: Prevent unnecessary re-renders and stabilize layout**
+**Key Fixes Implemented:**
 
-**Changes Made**:
+1. **Character Encoding Fix (`\r` to `\n` conversion)**:
+```typescript
+// InputV3.tsx - Normalize line endings
+const normalizedContent = pasteAccumulatorRef.current.replace(/\r/g, '\n');
+```
+- macOS Terminal sends `\r` (carriage return) instead of `\n` during paste
+- Without conversion: text overwrites itself causing corruption
+- With conversion: proper newlines → clean formatting
 
-1. **MessageList.tsx - Added React.memo**:
-   - Wrapped component in `memo()` to prevent re-renders when input state changes
-   - MessageList now only re-renders when `messages` or `isLoading` props actually change
-   - This stops the cascade of re-renders on every keystroke
+2. **Paste Accumulator Fix**:
+```typescript
+// Don't clear accumulator if paste timer is active
+if (pasteTimerRef.current) {
+  pasteAccumulatorRef.current += input;
+  // Reset timer and continue accumulating
+}
+```
+- Small chunks (like last char "m") were clearing the accumulator
+- Now checks for active timer before clearing
+- Accumulates all chunks including trailing single characters
 
-2. **Chat.tsx - Fixed Box layout with flexShrink/flexGrow**:
-   - Header: `flexShrink={0}` - fixed height, never recalculates
-   - Messages: `flexGrow={1} flexShrink={1} overflow="hidden"` - scrollable, stable container
-   - Status bar: `flexShrink={0}` - fixed height
-   - Input: `flexShrink={0}` - fixed height
-   - **Result**: Ink no longer recalculates entire layout on every keystroke
+3. **Functional setState for Current Values**:
+```typescript
+// Use functional form to get current inputValue in timeout closure
+setInputValue(currentInput => {
+  const annotation = `[pasted +${lines} lines, ${chars} chars]`;
+  return currentInput + annotation;
+});
+```
+- Fixes stale closure bug where inputValue was old in setTimeout
+- Preserves text typed before paste started
 
-**Why This Works**:
-- Before: Input state change → entire component tree re-renders → Ink recalculates all Box heights → terminal buffer overflow → corrupted output
-- After: Input state change → MessageList doesn't re-render (memo) → Box heights are fixed (flexShrink/flexGrow) → no layout recalculation → clean output
+4. **Annotation as Editable Text**:
+```typescript
+// Annotation stored in inputValue, paste content in pasteBuffer
+const annotation = `[pasted +${lines} lines, ${chars}]`;
+setInputValue(prev => prev + annotation);
+setPasteBuffer(normalizedContent);
+```
+- Annotation is regular editable text in input field
+- Arrow keys navigate through it normally
+- Deleting chars breaks the paste link
 
-**Expected Results**:
-- ✅ Screen no longer jumps on keystroke
-- ✅ Pasted content displays completely and correctly
-- ✅ No text corruption or truncation
-- ✅ Performance improvement (fewer re-renders)
+5. **Annotation Validation on Submit**:
+```typescript
+if (inputValue.includes(expectedAnnotation)) {
+  // Intact - submit with pasteBuffer
+  const fullContent = inputValue.replace(expectedAnnotation, '') + pasteBuffer;
+} else {
+  // Broken - just submit inputValue
+  onSubmit(inputValue);
+}
+```
+- Checks if annotation text is still intact
+- If broken, paste content is discarded
+- Matches Claude Code behavior
+
+6. **Terminal Native Scrollback**:
+```typescript
+// Remove overflow="hidden" and flexGrow constraints
+<Box flexDirection="column" paddingX={1}>
+  <MessageList messages={messages} isLoading={isLoading} />
+</Box>
+```
+- Let terminal handle scrolling naturally
+- Supports infinite message history
+- Uses terminal's native scroll buffer
+
+**Results**:
+- ✅ Paste detection: Shows `[pasted +117 lines, 8,625 chars]`
+- ✅ Annotation is navigable and editable
+- ✅ Breaking annotation discards paste
+- ✅ Full content displays correctly after Enter
+- ✅ LLM receives complete, properly formatted text
+- ✅ Arrow keys work for navigation
+- ✅ Infinite message history via terminal scrollback
 
 ### Architecture Decision Rationale
 1. **Best tool for each job**: Ink for UI, Python for existing middleware
@@ -103,27 +163,32 @@ We want to replicate Claude Code's behavior:
 3. **Match Claude Code capabilities**: Same UI framework = same capabilities
 4. **Clear separation**: UI and business logic in different layers
 
-## Current Reality Check
+## Debugging Journey - Lessons Learned
 
-### What We're Using
-- **Python**: 3.14
-- **prompt_toolkit**: For terminal input
-- **Terminal**: macOS Terminal.app
-- **Input modes tried**:
+### Initial Approaches (Abandoned)
+- **Python prompt_toolkit**: Couldn't intercept paste before display
   - `multiline=False`: Strips newlines, can't detect multi-line pastes
   - `multiline=True`: Preserves newlines but requires Esc+Enter to submit
+  - Fundamental limitation: `prompt()` is blocking, no pre-display control
 
-### The Fundamental Issue
-**prompt_toolkit's `prompt()` function is a blocking call that:**
-1. Displays user input in real-time as it's typed/pasted
-2. Returns the complete string only AFTER user submits
-3. Does NOT give us control during input display
+### Critical Insights That Led to Success
 
-**This means:**
-- When user pastes, prompt_toolkit IMMEDIATELY displays it
-- We can't intercept and replace with `[pasted +115 lines]` during input
-- We only get control AFTER Enter is pressed
-- By then, the full paste has already been displayed
+**1. Terminal Character Encoding Issue**
+- macOS Terminal sends `\r` (carriage return) instead of `\n` (newline) during paste
+- Without conversion, `\r` causes cursor to return to start of line
+- Text overwrites itself → appears corrupted/merged/split
+- **Solution**: Single line `replace(/\r/g, '\n')` fixes everything
+
+**2. Systematic Debugging Approach**
+- Don't assume - verify with debug logging
+- Check actual character content: `JSON.stringify()`, `includes('\n')`, `includes('\r')`
+- Trace data through each layer: InputV3 → Chat → MessageList
+- Found issue when we checked: `Contains \n: false, Contains \r: true`
+
+**3. Ink Can Handle Large Text (When Done Right)**
+- Initial hypothesis: Ink has character limits or rendering bugs
+- Reality: Ink works fine, we had character encoding bug
+- React.memo and fixed layouts help performance but weren't the core fix
 
 ## Architecture Options
 
@@ -218,35 +283,27 @@ class RecCliApp:
         # Process text...
 ```
 
-## Decision Matrix
+## Final Implementation Summary
 
-| Approach | Complexity | Control | Features | Claude-like |
-|----------|-----------|---------|----------|-------------|
-| Current (post-detect) | Low | Poor | Good | No |
-| Custom char loop | Medium | Full | Poor | Yes |
-| Application mode | High | Full | Full | Yes |
-| Accept limitation | Zero | N/A | Good | No |
+### Architecture Choice: TypeScript + Ink + Python
+- **UI Layer**: TypeScript with React and Ink framework
+- **Business Logic**: Python (LLM API, .devsession management)
+- **Communication**: JSON-RPC over subprocess stdio
 
-## Key Insight
+### Key Technical Details
+1. **Paste Detection**: Chunks > 10 chars accumulated in ref with 300ms debounce
+2. **Character Normalization**: `replace(/\r/g, '\n')` converts terminal paste encoding
+3. **Performance**: React.memo on MessageList, fixed Box layouts
+4. **Raw Mode**: `setRawMode(true)` for direct stdin access
 
-**The paste has to display somewhere**. Our options are:
-1. Let it display in prompt (current) - easiest but ugly
-2. Prevent display entirely - requires low-level control
-3. Display in separate area - requires Application mode
+### Code Locations
+- **InputV3.tsx**: Paste detection and accumulation
+- **Chat.tsx**: Message state management and Python bridge
+- **MessageList.tsx**: Memoized message rendering
+- **backend/server.py**: Python JSON-RPC server
 
-## Recommendation
-
-1. **Short term**: Document current behavior as design choice
-2. **Long term**: Implement Application mode for full control
-3. **Alternative**: Research if newer terminals (iTerm2, Warp) have better bracketed paste support
-
-## Testing Checklist
-
-- [ ] Does bracketed paste work in iTerm2?
-- [ ] Can we detect paste via timing (chars arriving <10ms apart)?
-- [ ] Would Application mode actually solve this?
-- [ ] Is the UX improvement worth the complexity?
-
-## The Truth
-
-**Claude Code is not using simple prompt() calls**. They have a custom application architecture that gives them full control over the display layer. To match their behavior exactly, we need to move beyond simple prompt() to a full Application architecture.
+### Matches Claude Code Behavior
+- ✅ Shows `[pasted +X lines]` during input
+- ✅ Expands full content after Enter
+- ✅ Clean text display without corruption
+- ✅ Works with large pastes (8,000+ characters)
