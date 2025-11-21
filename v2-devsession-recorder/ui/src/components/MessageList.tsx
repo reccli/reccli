@@ -1,6 +1,7 @@
 import React, {memo} from 'react';
 import {Box, Text} from 'ink';
 import Spinner from 'ink-spinner';
+import {StreamingMessage, ToolCall} from './Chat.js';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -11,6 +12,7 @@ interface Message {
 interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
+  streamingContent?: StreamingMessage | null;
 }
 
 // Memoized message component to prevent re-renders
@@ -57,15 +59,59 @@ const Message = memo(({message}: {message: Message}) => {
   );
 });
 
-export const MessageList: React.FC<MessageListProps> = memo(({messages, isLoading}) => {
+// Streaming message component
+const StreamingMessageComponent = memo(({content}: {content: StreamingMessage}) => {
+  return (
+    <Box flexDirection="column">
+      {/* Show separator */}
+      <Text color="gray">{'─'.repeat(60)}</Text>
+
+      {/* Show text chunks */}
+      <Box paddingLeft={2} flexDirection="column">
+        {content.textChunks.map((chunk, i) => (
+          <Text key={`text-${i}`}>{chunk}</Text>
+        ))}
+      </Box>
+
+      {/* Show tool calls */}
+      {content.toolCalls.map((call, i) => (
+        <Box key={`tool-${i}`} flexDirection="column" marginY={1} paddingLeft={2}>
+          <Text color="cyan">[Tool Use: {call.name}]</Text>
+          <Text color="gray">{JSON.stringify(call.input, null, 2)}</Text>
+          {call.result && (
+            <>
+              <Text color="cyan">[Tool Result]</Text>
+              <Text color="gray">{call.result}</Text>
+            </>
+          )}
+          {!call.result && (
+            <Text color="yellow">
+              <Spinner type="dots" /> Executing...
+            </Text>
+          )}
+        </Box>
+      ))}
+
+      {/* Bottom separator */}
+      <Text color="gray">{'─'.repeat(60)}</Text>
+    </Box>
+  );
+});
+
+export const MessageList: React.FC<MessageListProps> = memo(({messages, isLoading, streamingContent}) => {
   return (
     <Box flexDirection="column">
       {messages.map((message, index) => (
         <Message key={index} message={message} />
       ))}
 
-      {/* Loading indicator */}
-      {isLoading && (
+      {/* Show streaming content */}
+      {streamingContent && (
+        <StreamingMessageComponent content={streamingContent} />
+      )}
+
+      {/* Loading indicator (only show if not streaming) */}
+      {isLoading && !streamingContent && (
         <Box>
           <Text color="blue">
             <Spinner type="dots" />

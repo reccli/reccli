@@ -68,6 +68,30 @@ class RecCliBackend:
             "tokenCount": token_count
         }
 
+    def process_message_streaming(self, content: str, request_id: str):
+        """Process message and emit streaming events via stdout."""
+        if not self.session:
+            self.initialize_session()
+
+        def emit_event(event_type: str, data: Dict[str, Any]):
+            """Emit a streaming event to stdout"""
+            event = {
+                "id": request_id,
+                "type": event_type,
+                **data
+            }
+            print(json.dumps(event), flush=True)
+
+        try:
+            # Send message with streaming callback
+            self.session.send_message_streaming(content, on_event=emit_event)
+
+            # Emit final event
+            emit_event("final_response", {"complete": True})
+
+        except Exception as e:
+            emit_event("error", {"message": str(e)})
+
     def get_session_info(self) -> Dict[str, Any]:
         """Get current session information."""
         if not self.session:
@@ -93,6 +117,10 @@ class RecCliBackend:
                 result = {"status": "ready"}
             elif method == 'chat':
                 result = self.process_message(params.get('content', ''))
+            elif method == 'chat_streaming':
+                # Handle streaming - emit events directly, don't return here
+                self.process_message_streaming(params.get('content', ''), request_id)
+                return None  # Streaming already handled
             elif method == 'getSessionInfo':
                 result = self.get_session_info()
             else:
@@ -119,9 +147,10 @@ class RecCliBackend:
                 request = json.loads(line.strip())
                 response = self.handle_request(request)
 
-                # Write response to stdout
-                print(json.dumps(response))
-                sys.stdout.flush()
+                # Write response to stdout (if not None - streaming methods handle their own output)
+                if response is not None:
+                    print(json.dumps(response))
+                    sys.stdout.flush()
 
             except json.JSONDecodeError as e:
                 error_response = {

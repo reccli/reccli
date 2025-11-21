@@ -6,6 +6,7 @@ export class PythonBridge {
     static instance;
     pythonProcess = null;
     messageQueue = new Map();
+    streamHandlers = new Map();
     messageId = 0;
     buffer = '';
     constructor() { }
@@ -50,15 +51,37 @@ export class PythonBridge {
         for (const line of lines) {
             if (line.trim()) {
                 try {
-                    const response = JSON.parse(line);
-                    const promise = this.messageQueue.get(response.id);
-                    if (promise) {
-                        this.messageQueue.delete(response.id);
-                        if (response.error) {
-                            promise.reject(new Error(response.error));
+                    const data = JSON.parse(line);
+                    // Check if it's a streaming event
+                    if (data.type) {
+                        const event = data;
+                        const handler = this.streamHandlers.get(event.id);
+                        if (handler) {
+                            if (event.type === 'final_response') {
+                                handler.resolve();
+                                this.streamHandlers.delete(event.id);
+                            }
+                            else if (event.type === 'error') {
+                                handler.reject(new Error(event.message));
+                                this.streamHandlers.delete(event.id);
+                            }
+                            else {
+                                handler.onEvent(event);
+                            }
                         }
-                        else {
-                            promise.resolve(response.result);
+                    }
+                    else {
+                        // Regular non-streaming response
+                        const response = data;
+                        const promise = this.messageQueue.get(response.id);
+                        if (promise) {
+                            this.messageQueue.delete(response.id);
+                            if (response.error) {
+                                promise.reject(new Error(response.error));
+                            }
+                            else {
+                                promise.resolve(response.result);
+                            }
                         }
                     }
                 }
@@ -109,6 +132,34 @@ export class PythonBridge {
             id,
             method: 'getSessionInfo',
             params: {}
+        });
+    }
+    async sendMessageStreaming(content, onEvent) {
+        const id = `msg_${++this.messageId}`;
+        return new Promise((resolve, reject) => {
+            if (!this.pythonProcess || !this.pythonProcess.stdin) {
+                reject(new Error('Python process not initialized'));
+                return;
+            }
+            // Set up streaming handler
+            this.streamHandlers.set(id, {
+                onEvent,
+                resolve,
+                reject
+            });
+            // Send request
+            this.pythonProcess.stdin.write(JSON.stringify({
+                id,
+                method: 'chat_streaming',
+                params: { content }
+            }) + '\n');
+            // Timeout after 60 seconds
+            setTimeout(() => {
+                if (this.streamHandlers.has(id)) {
+                    this.streamHandlers.delete(id);
+                    reject(new Error('Request timeout'));
+                }
+            }, 60000);
         });
     }
     close() {

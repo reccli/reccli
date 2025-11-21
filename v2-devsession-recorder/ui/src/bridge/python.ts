@@ -15,10 +15,28 @@ interface Response {
   error?: string;
 }
 
+interface StreamEvent {
+  id: string;
+  type: 'text_chunk' | 'tool_call_start' | 'tool_call_result' | 'final_response' | 'error';
+  content?: string;
+  tool_name?: string;
+  tool_input?: any;
+  result?: string;
+  message?: string;
+  complete?: boolean;
+}
+
+interface StreamHandler {
+  onEvent: (event: StreamEvent) => void;
+  resolve: Function;
+  reject: Function;
+}
+
 export class PythonBridge {
   private static instance: PythonBridge;
   private pythonProcess: ChildProcess | null = null;
   private messageQueue: Map<string, {resolve: Function, reject: Function}> = new Map();
+  private streamHandlers: Map<string, StreamHandler> = new Map();
   private messageId = 0;
   private buffer = '';
 
@@ -73,14 +91,35 @@ export class PythonBridge {
     for (const line of lines) {
       if (line.trim()) {
         try {
-          const response: Response = JSON.parse(line);
-          const promise = this.messageQueue.get(response.id);
-          if (promise) {
-            this.messageQueue.delete(response.id);
-            if (response.error) {
-              promise.reject(new Error(response.error));
-            } else {
-              promise.resolve(response.result);
+          const data = JSON.parse(line);
+
+          // Check if it's a streaming event
+          if (data.type) {
+            const event = data as StreamEvent;
+            const handler = this.streamHandlers.get(event.id);
+
+            if (handler) {
+              if (event.type === 'final_response') {
+                handler.resolve();
+                this.streamHandlers.delete(event.id);
+              } else if (event.type === 'error') {
+                handler.reject(new Error(event.message));
+                this.streamHandlers.delete(event.id);
+              } else {
+                handler.onEvent(event);
+              }
+            }
+          } else {
+            // Regular non-streaming response
+            const response = data as Response;
+            const promise = this.messageQueue.get(response.id);
+            if (promise) {
+              this.messageQueue.delete(response.id);
+              if (response.error) {
+                promise.reject(new Error(response.error));
+              } else {
+                promise.resolve(response.result);
+              }
             }
           }
         } catch (e) {
@@ -139,6 +178,42 @@ export class PythonBridge {
     });
   }
 
+  async sendMessageStreaming(
+    content: string,
+    onEvent: (event: StreamEvent) => void
+  ): Promise<void> {
+    const id = `msg_${++this.messageId}`;
+
+    return new Promise((resolve, reject) => {
+      if (!this.pythonProcess || !this.pythonProcess.stdin) {
+        reject(new Error('Python process not initialized'));
+        return;
+      }
+
+      // Set up streaming handler
+      this.streamHandlers.set(id, {
+        onEvent,
+        resolve,
+        reject
+      });
+
+      // Send request
+      this.pythonProcess.stdin.write(JSON.stringify({
+        id,
+        method: 'chat_streaming',
+        params: {content}
+      }) + '\n');
+
+      // Timeout after 60 seconds
+      setTimeout(() => {
+        if (this.streamHandlers.has(id)) {
+          this.streamHandlers.delete(id);
+          reject(new Error('Request timeout'));
+        }
+      }, 60000);
+    });
+  }
+
   close() {
     if (this.pythonProcess) {
       this.pythonProcess.kill();
@@ -146,3 +221,6 @@ export class PythonBridge {
     }
   }
 }
+
+// Export StreamEvent type for use in other components
+export type {StreamEvent};

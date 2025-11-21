@@ -1,4 +1,5 @@
 import React from 'react';
+import { StreamingMessage } from './Chat.js';
 interface Message {
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -7,6 +8,7 @@ interface Message {
 interface MessageListProps {
     messages: Message[];
     isLoading: boolean;
+    streamingContent?: StreamingMessage | null;
 }
 declare const Message: React.MemoExoticComponent<({ message }: {
     message: Message;

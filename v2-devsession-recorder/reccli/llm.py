@@ -24,6 +24,41 @@ from .devsession import DevSession
 from .config import Config
 
 
+# Phase 8: Retrieval System Prompt
+RETRIEVAL_SYSTEM_PROMPT = """
+# Context Retrieval System
+
+You have access to conversation history through retrieval tools:
+
+## Available Context Layers
+
+**Layer 1: Project Overview** (if relevant) - Macro context about the project
+**Layer 2: Session Summary** - What happened in this session
+**Layer 3: Recent Messages** - Current conversation context
+**Layer 4: Vector Search Results** - Relevant historical context
+
+## Retrieval Tools
+
+### retrieve_context
+Fetch specific message ranges from the conversation:
+```
+retrieve_context({"ranges": [{"start": "msg_042", "end": "msg_050", "reason": "need full decision details"}]})
+```
+
+### search_history
+Search semantically across the session:
+```
+search_history({"query": "authentication bug fix", "max_results": 5})
+```
+
+## Strategy
+1. Check summary first for high-level overview
+2. Use search_history for broad queries across session
+3. Use retrieve_context for specific details when summary references message ranges
+4. Be token-conscious: small(~3K), medium(~7K), large(~20K) tokens per range
+"""
+
+
 class LLMSession:
     """Native LLM interface with automatic .devsession recording"""
 
@@ -268,6 +303,43 @@ class LLMSession:
 
         return response
 
+    def send_message_streaming(self, user_message: str, on_event):
+        """
+        Send message to LLM and stream events
+
+        Args:
+            user_message: User's message
+            on_event: Callback function(event_type, data)
+        """
+        # Record user message
+        timestamp = time.time() - self.start_time
+        self.session.conversation.append({
+            'role': 'user',
+            'content': user_message,
+            'timestamp': timestamp
+        })
+        self.messages.append({'role': 'user', 'content': user_message})
+
+        # Call LLM with streaming
+        if self.provider == 'anthropic':
+            response = self._call_anthropic_streaming(on_event)
+        else:
+            response = self._call_openai_streaming(on_event)
+
+        # Record assistant response
+        timestamp = time.time() - self.start_time
+        self.session.conversation.append({
+            'role': 'assistant',
+            'content': response,
+            'timestamp': timestamp
+        })
+        self.messages.append({'role': 'assistant', 'content': response})
+
+        # Auto-save
+        self.session.save(self.session_path)
+
+        return response
+
     def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         """Execute a tool and return the result as a string"""
         try:
@@ -308,11 +380,207 @@ class LLMSession:
                     return f"No files found matching pattern: {pattern}"
                 return "\n".join(str(p) for p in sorted(matches))
 
+            elif tool_name == "retrieve_context":
+                # Phase 8: Retrieval tool
+                result = self._execute_retrieve_context(tool_input)
+                return f"Retrieved {result['retrieved_ranges']} context ranges with {result['total_messages']} messages:\n\n" + \
+                       "\n\n".join([ctx['text'] for ctx in result['contexts']])
+
+            elif tool_name == "search_history":
+                # Phase 8: Search tool
+                result = self._execute_search_history(tool_input)
+                if result.get('error'):
+                    return result['error']
+
+                output = [f"Found {result['results_found']} results:\n"]
+                for i, res in enumerate(result['results'], 1):
+                    msg_range = res.get('message_range', {})
+                    output.append(f"{i}. [{res['category']}] {res['summary']}")
+                    output.append(f"   Range: {msg_range.get('start', '?')} to {msg_range.get('end', '?')}")
+                    output.append(f"   Relevance: {res['relevance_score']:.2f}")
+                    output.append(f"   Preview: {res['preview']}...\n")
+
+                return "\n".join(output)
+
             else:
                 return f"Error: Unknown tool: {tool_name}"
 
         except Exception as e:
             return f"Error executing {tool_name}: {str(e)}"
+
+    # Phase 8: Retrieval tool helpers
+    def _msg_id_to_index(self, msg_id: str) -> int:
+        """Convert message ID to 0-based index (msg_042 -> 41)"""
+        try:
+            msg_num = int(msg_id.split("_")[1])
+            return msg_num - 1
+        except (IndexError, ValueError):
+            return 0
+
+    def _execute_retrieve_context(self, tool_input: Dict[str, Any]) -> Dict:
+        """
+        Execute context retrieval tool
+
+        Args:
+            tool_input: {
+                "ranges": [{"start": "msg_042", "end": "msg_050", "reason": "..."}],
+                "expand_context": 5
+            }
+
+        Returns:
+            Retrieved contexts formatted for LLM
+        """
+        from .retrieval import ContextRetriever
+
+        retriever = ContextRetriever(self.session)
+        results = []
+
+        for range_spec in tool_input.get("ranges", []):
+            # Build mock summary item with message_range
+            summary_item = {
+                "message_range": {
+                    "start": range_spec["start"],
+                    "end": range_spec["end"],
+                    "start_index": self._msg_id_to_index(range_spec["start"]),
+                    "end_index": self._msg_id_to_index(range_spec["end"])
+                }
+            }
+
+            expand = tool_input.get("expand_context", 5)
+            context = retriever.retrieve_full_context(summary_item, expand_context=expand)
+
+            # Format for LLM
+            formatted = self._format_retrieved_context(context, range_spec.get("reason"))
+            results.append(formatted)
+
+        return {
+            "retrieved_ranges": len(results),
+            "total_messages": sum(r.get("message_count", 0) for r in results),
+            "contexts": results
+        }
+
+    def _execute_search_history(self, tool_input: Dict[str, Any]) -> Dict:
+        """
+        Execute history search tool
+
+        Args:
+            tool_input: {
+                "query": "authentication bug",
+                "max_results": 5,
+                "category": "problems_solved"
+            }
+
+        Returns:
+            Search results with message_range links
+        """
+        from .search import search
+
+        # Get sessions_dir from session path
+        sessions_dir = self.session_path.parent if hasattr(self, 'session_path') else Path.cwd()
+
+        try:
+            results = search(
+                sessions_dir=sessions_dir,
+                query=tool_input["query"],
+                top_k=tool_input.get("max_results", 5),
+                scope={'session': self.session.session_id}
+            )
+
+            # Format for LLM
+            formatted_results = []
+            for result in results[:tool_input.get("max_results", 5)]:
+                formatted_results.append({
+                    "category": result.get("category", "unknown"),
+                    "summary": result.get("description", result.get("decision", result.get("problem", ""))),
+                    "message_range": result.get("message_range"),
+                    "relevance_score": result.get("score", 0.0),
+                    "preview": str(result.get("content", ""))[:200]
+                })
+
+            return {
+                "results_found": len(formatted_results),
+                "results": formatted_results
+            }
+        except Exception as e:
+            return {
+                "error": f"Search failed: {str(e)}",
+                "results_found": 0,
+                "results": []
+            }
+
+    def _format_retrieved_context(self, context: Dict, reason: Optional[str] = None) -> Dict:
+        """Format retrieved context for LLM readability"""
+        messages = context.get("messages", [])
+
+        formatted_lines = []
+        if reason:
+            formatted_lines.append(f"## Retrieved Context: {reason}\n")
+
+        core_range = context.get("core_range", {})
+        formatted_lines.append(f"Messages {core_range.get('start', '?')}-{core_range.get('end', '?')}:\n")
+
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")[:500]  # Limit to 500 chars per message
+            msg_id = msg.get("_message_id", "")
+            is_core = msg.get("_in_core_range", False)
+
+            marker = ">>> " if is_core else "    "
+            formatted_lines.append(f"{marker}{msg_id} ({role}): {content}\n")
+
+        return {
+            "text": "".join(formatted_lines),
+            "message_count": len(messages)
+        }
+
+    def _build_minimal_initial_context(self, user_message: str) -> Dict:
+        """Build minimal initial context (summary + recent only, ~8K tokens)"""
+        context = {
+            'summary': self.session.summary if self.session.summary else {},
+            'recent': self.session.conversation[-20:] if len(self.session.conversation) > 20 else self.session.conversation,
+            'user_query': user_message
+        }
+        return context
+
+    def _merge_contexts(self, base: Dict, retrieved: List[Dict]) -> Dict:
+        """Merge retrieved contexts into base context"""
+        merged = base.copy()
+
+        if retrieved:
+            merged['retrieved'] = {
+                'count': len(retrieved),
+                'contexts': retrieved
+            }
+
+        return merged
+
+    def chat_with_retrieval(self, user_message: str, max_rounds: int = 3) -> str:
+        """
+        Chat loop with multi-round retrieval support
+
+        Args:
+            user_message: User query
+            max_rounds: Max retrieval rounds (default: 3)
+
+        Returns:
+            Final response after all retrievals
+        """
+        # Build minimal initial context
+        context = self._build_minimal_initial_context(user_message)
+        retrieved_contexts = []
+
+        for round_num in range(max_rounds):
+            # Send message (this will handle tool calls)
+            response_text = self.send_message(user_message)
+
+            # Check if we're done (no pending tool calls)
+            # In the current implementation, send_message handles tools automatically
+            # So if we get here, all tool calls have been processed
+
+            # For now, return after first round since send_message handles the loop
+            return response_text
+
+        return response_text
 
     def _process_tool_response(self, response):
         """Process API response that may contain tool use"""
@@ -397,6 +665,42 @@ class LLMSession:
                             "path": {"type": "string", "description": "The base directory to search from. Defaults to current directory."}
                         },
                         "required": ["pattern"]
+                    }
+                },
+                {
+                    "name": "retrieve_context",
+                    "description": "Retrieve specific message ranges from conversation history.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "ranges": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "start": {"type": "string"},
+                                        "end": {"type": "string"},
+                                        "reason": {"type": "string"}
+                                    },
+                                    "required": ["start", "end"]
+                                }
+                            },
+                            "expand_context": {"type": "integer", "default": 5}
+                        },
+                        "required": ["ranges"]
+                    }
+                },
+                {
+                    "name": "search_history",
+                    "description": "Search conversation history semantically.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "max_results": {"type": "integer", "default": 5},
+                            "category": {"type": "string", "enum": ["decisions", "code_changes", "problems_solved", "open_issues", "all"], "default": "all"}
+                        },
+                        "required": ["query"]
                     }
                 }
             ]
@@ -495,13 +799,60 @@ class LLMSession:
                     },
                     "required": ["pattern"]
                 }
+            },
+            {
+                "name": "retrieve_context",
+                "description": "Retrieve specific message ranges from conversation history. Use when summary mentions something and you need full details. The summary has message_range fields showing where discussions occurred.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "ranges": {
+                            "type": "array",
+                            "description": "Message ranges to retrieve",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start": {"type": "string", "description": "Start message ID (e.g., 'msg_042')"},
+                                    "end": {"type": "string", "description": "End message ID (e.g., 'msg_050')"},
+                                    "reason": {"type": "string", "description": "Why retrieving this"}
+                                },
+                                "required": ["start", "end"]
+                            }
+                        },
+                        "expand_context": {"type": "integer", "description": "Messages before/after for context (default: 5)", "default": 5}
+                    },
+                    "required": ["ranges"]
+                }
+            },
+            {
+                "name": "search_history",
+                "description": "Search conversation history semantically. Use to find all mentions of a topic across the session.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "max_results": {"type": "integer", "description": "Max results (default: 5)", "default": 5},
+                        "category": {"type": "string", "description": "Filter by: decisions, code_changes, problems_solved, open_issues, or all", "enum": ["decisions", "code_changes", "problems_solved", "open_issues", "all"], "default": "all"}
+                    },
+                    "required": ["query"]
+                }
             }
         ]
+
+        # Build system message with retrieval instructions
+        base_system_message = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
+
+        # Add retrieval prompt if session has enough history
+        if len(self.session.conversation) > 10:
+            system_message = RETRIEVAL_SYSTEM_PROMPT + "\n\n" + base_system_message
+        else:
+            system_message = base_system_message
 
         try:
             response = self.client.messages.create(
                 model=model_id,
                 max_tokens=4096,
+                system=system_message,
                 messages=self.messages,
                 tools=tools
             )
@@ -510,6 +861,200 @@ class LLMSession:
             return self._process_tool_response(response)
         except Exception as e:
             return f"❌ Error calling Claude: {e}"
+
+    def _call_anthropic_streaming(self, on_event) -> str:
+        """Call Anthropic API with streaming events for tool use"""
+        # Map model names to current Claude models
+        model_map = {
+            'claude': 'claude-sonnet-4-5-20250929',
+            'claude-sonnet': 'claude-sonnet-4-5-20250929',
+            'claude-haiku': 'claude-haiku-4-5-20251001',
+            'claude-opus': 'claude-opus-4-1-20250805',
+        }
+        model_id = model_map.get(self.model, self.model)
+
+        # Define available tools (same as non-streaming)
+        tools = [
+            {
+                "name": "read_file",
+                "description": "Read the contents of a file from the filesystem. Returns the file content as a string.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The absolute or relative path to the file to read"}
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "write_file",
+                "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The absolute or relative path to the file to write"},
+                        "content": {"type": "string", "description": "The content to write to the file"}
+                    },
+                    "required": ["path", "content"]
+                }
+            },
+            {
+                "name": "list_directory",
+                "description": "List all files and directories in the specified path.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "The directory path to list. Defaults to current directory if not specified."}
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "glob_files",
+                "description": "Find files matching a glob pattern (e.g., '**/*.py' for all Python files).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "The glob pattern to match files against"},
+                        "path": {"type": "string", "description": "The base directory to search from. Defaults to current directory."}
+                    },
+                    "required": ["pattern"]
+                }
+            },
+            {
+                "name": "retrieve_context",
+                "description": "Retrieve specific message ranges from conversation history.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "ranges": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start": {"type": "string"},
+                                    "end": {"type": "string"},
+                                    "reason": {"type": "string"}
+                                },
+                                "required": ["start", "end"]
+                            }
+                        },
+                        "expand_context": {"type": "integer", "default": 5}
+                    },
+                    "required": ["ranges"]
+                }
+            },
+            {
+                "name": "search_history",
+                "description": "Search conversation history semantically.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "max_results": {"type": "integer", "default": 5},
+                        "category": {"type": "string", "enum": ["decisions", "code_changes", "problems_solved", "open_issues", "all"], "default": "all"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+
+        # Build system message with retrieval instructions
+        base_system_message = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
+
+        # Add retrieval prompt if session has enough history
+        if len(self.session.conversation) > 10:
+            system_message = RETRIEVAL_SYSTEM_PROMPT + "\n\n" + base_system_message
+        else:
+            system_message = base_system_message
+
+        try:
+            response = self.client.messages.create(
+                model=model_id,
+                max_tokens=4096,
+                system=system_message,
+                messages=self.messages,
+                tools=tools
+            )
+
+            # Process response and emit streaming events
+            collected_text = []
+
+            # Check if response contains tool use
+            if response.stop_reason == "tool_use":
+                # Emit text chunks first
+                for block in response.content:
+                    if block.type == "text":
+                        on_event("text_chunk", {"content": block.text})
+                        collected_text.append(block.text)
+                    elif block.type == "tool_use":
+                        # Emit tool call start
+                        on_event("tool_call_start", {
+                            "tool_name": block.name,
+                            "tool_input": block.input
+                        })
+
+                        # Execute tool
+                        result = self._execute_tool(block.name, block.input)
+
+                        # Emit tool result
+                        on_event("tool_call_result", {
+                            "tool_name": block.name,
+                            "result": result
+                        })
+
+                # Now continue conversation with tool results
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = self._execute_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result
+                        })
+
+                # Add assistant's tool use to messages
+                self.messages.append({
+                    "role": "assistant",
+                    "content": response.content
+                })
+
+                # Add tool results to messages
+                self.messages.append({
+                    "role": "user",
+                    "content": tool_results
+                })
+
+                # Continue the conversation to get final text response
+                continue_response = self.client.messages.create(
+                    model=model_id,
+                    max_tokens=4096,
+                    messages=self.messages,
+                    tools=tools
+                )
+
+                # Emit final text chunks
+                for block in continue_response.content:
+                    if block.type == "text":
+                        on_event("text_chunk", {"content": block.text})
+                        collected_text.append(block.text)
+
+                return "\n".join(collected_text)
+
+            else:
+                # No tool use, just text
+                for block in response.content:
+                    if block.type == "text":
+                        on_event("text_chunk", {"content": block.text})
+                        collected_text.append(block.text)
+
+                return "\n".join(collected_text)
+
+        except Exception as e:
+            error_msg = f"❌ Error calling Claude: {e}"
+            on_event("text_chunk", {"content": error_msg})
+            return error_msg
 
     def _call_openai(self) -> str:
         """Call OpenAI API with tool support"""
@@ -605,13 +1150,68 @@ class LLMSession:
                         "required": ["pattern"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "retrieve_context",
+                    "description": "Retrieve specific message ranges from conversation history.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "ranges": {
+                                "type": "array",
+                                "description": "Message ranges to retrieve",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "start": {"type": "string"},
+                                        "end": {"type": "string"},
+                                        "reason": {"type": "string"}
+                                    },
+                                    "required": ["start", "end"]
+                                }
+                            },
+                            "expand_context": {"type": "integer", "default": 5}
+                        },
+                        "required": ["ranges"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_history",
+                    "description": "Search conversation history semantically.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "max_results": {"type": "integer", "default": 5},
+                            "category": {"type": "string", "enum": ["decisions", "code_changes", "problems_solved", "open_issues", "all"], "default": "all"}
+                        },
+                        "required": ["query"]
+                    }
+                }
             }
         ]
+
+        # Build system message with retrieval instructions
+        base_system_message = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
+
+        # Add retrieval prompt if session has enough history
+        if len(self.session.conversation) > 10:
+            system_message = RETRIEVAL_SYSTEM_PROMPT + "\n\n" + base_system_message
+        else:
+            system_message = base_system_message
+
+        # OpenAI uses system message as first message in array
+        messages_with_system = [{"role": "system", "content": system_message}] + self.messages
 
         try:
             response = self.client.chat.completions.create(
                 model=model_id,
-                messages=self.messages,
+                messages=messages_with_system,
                 tools=tools,
                 tool_choice="auto"
             )
@@ -620,6 +1220,13 @@ class LLMSession:
             return self._process_openai_tool_response(response)
         except Exception as e:
             return f"❌ Error calling OpenAI: {e}"
+
+    def _call_openai_streaming(self, on_event) -> str:
+        """Call OpenAI API with streaming events for tool use (stub for now)"""
+        # For now, just call the non-streaming version and emit as chunks
+        result = self._call_openai()
+        on_event("text_chunk", {"content": result})
+        return result
 
     def _process_openai_tool_response(self, response):
         """Process OpenAI response that may contain tool calls"""
@@ -718,6 +1325,48 @@ class LLMSession:
                             "required": ["pattern"]
                         }
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "retrieve_context",
+                        "description": "Retrieve specific message ranges from conversation history.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "ranges": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "start": {"type": "string"},
+                                            "end": {"type": "string"},
+                                            "reason": {"type": "string"}
+                                        },
+                                        "required": ["start", "end"]
+                                    }
+                                },
+                                "expand_context": {"type": "integer", "default": 5}
+                            },
+                            "required": ["ranges"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_history",
+                        "description": "Search conversation history semantically.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string"},
+                                "max_results": {"type": "integer", "default": 5},
+                                "category": {"type": "string", "enum": ["decisions", "code_changes", "problems_solved", "open_issues", "all"], "default": "all"}
+                            },
+                            "required": ["query"]
+                        }
+                    }
                 }
             ]
 
@@ -747,12 +1396,13 @@ class LLMSession:
         # No tool calls, return text response
         return message.content if message.content else ""
 
-    def chat_loop(self, enable_compaction: bool = True):
+    def chat_loop(self, enable_compaction: bool = True, enable_retrieval: bool = True):
         """
-        Interactive chat loop with optional preemptive compaction
+        Interactive chat loop with optional preemptive compaction and retrieval
 
         Args:
             enable_compaction: Enable automatic compaction at 190K tokens
+            enable_retrieval: Enable LLM retrieval tools (Phase 8)
         """
         # Welcome header with spacing
         print("\n" + "═" * 60)

@@ -108,9 +108,30 @@ Retrieve full context from old session
 - **READY FOR PRODUCTION TESTING**
 
 ### Next Steps
-**Phase 8** (Optional): LLM Adapters - Better provider abstraction
-**Phase 9** (Optional): CLI Polish - Better UX, colors, progress indicators
-**OR**: Start using Phase 7 in production and iterate based on real feedback
+
+**CRITICAL BEFORE SHIP**: Episode Detection (2.5 hours)
+- Current: `episode_id` hardcoded to 0 (all messages in one episode)
+- Impact: Context pollution (auth work mixed with navbar work in searches)
+- Solution: User-triggered episodes with `/new-episode` command
+
+**Implementation Tasks** (2.5 hours total):
+1. Add episode tracking to `reccli/devsession.py` (1 hour)
+   - `start_episode(goal)` method
+   - Track `current_episode_id` and episodes list
+   - Auto-close previous episode when starting new one
+2. Update `reccli/vector_index.py` to use current episode (30 min)
+   - Replace hardcoded `episode_id: 0` with `session.current_episode_id`
+3. Default search to current episode in `reccli/search.py` (30 min)
+   - Filter to `scope={'episode_id': current_episode_id}` by default
+4. Add `--all-episodes` flag for cross-episode search (15 min)
+5. Add `/new-episode` CLI command (15 min)
+
+**Why Episodes Matter**: This is THE differentiator vs Claude Projects. Without it: irrelevant context pollution. With it: clean task segmentation.
+
+**After Episodes**:
+- **Phase 8** (Optional): LLM Adapters - Better provider abstraction
+- **Phase 9** (Optional): CLI Polish - Better UX, colors, progress indicators
+- **OR**: Start using in production and iterate based on real feedback
 
 ---
 
@@ -547,7 +568,7 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
   - Message classification (decision/code/problem/note/log/doc)
 
 - ✅ `reccli/search.py` (549 lines) - Hybrid retrieval engine
-  - `dense_search()` - Cosine similarity ANN
+  - `dense_search()` - Cosine similarity ANN with binary .npy loading
   - `bm25_search()` - Keyword sparse search
   - `reciprocal_rank_fusion()` - RRF combination
   - `apply_temporal_filter()` - Time-based filtering
@@ -560,6 +581,69 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
 - ✅ `reccli/devsession.py` - Added `generate_embeddings()` method
 - ✅ `reccli/cli.py` - Added 6 new CLI commands
 - ✅ `requirements.txt` - Added rank-bm25, blake3 dependencies
+
+#### Vector Search Performance Optimization (November 20, 2025)
+
+**Critical Infrastructure Update**: Multi-session semantic search with binary storage
+
+**The Challenge**: Original implementation used O(n) linear search through Python lists, which would break at scale:
+- Searching 1,000 messages: ~50ms
+- Searching 10,000 messages (multi-session): ~500ms (unusable for interactive search)
+
+**The Solution**: Binary .npy file storage with memory-mapped numpy vectorization
+
+**Architecture Changes**:
+1. **Binary Storage** (`vector_index.py`):
+   - Embeddings exported as `.index_embeddings.npy` (binary numpy format)
+   - Separate from `index.json` (metadata only)
+   - Industry-standard format used by TensorFlow, PyTorch, scikit-learn
+
+2. **Three-Path Loading** (`search.py`):
+   - **PATH 1**: Binary .npy file (production - fastest)
+   - **PATH 2**: In-memory numpy array (testing/benchmarks)
+   - **PATH 3**: Extract from vectors (legacy - backward compatible)
+
+3. **Memory-Mapped Loading**:
+   - `np.load(embeddings_path, mmap_mode='r')` - instant loading, no RAM copy
+   - OS handles caching automatically
+   - Scales to millions of vectors
+
+**Performance Results** (All benchmarks exceeded targets):
+```
+Size      Time      Target     Speedup
+100       0.13ms    <1.0ms     7.7x faster than target
+500       0.23ms    <2.0ms     8.7x faster than target
+1,000     0.34ms    <3.0ms     8.8x faster than target
+5,000     1.88ms    <10.0ms    5.3x faster than target
+10,000    3.67ms    <15.0ms    4.1x faster than target
+```
+
+**Real-World Impact**:
+- **Multi-session search** (20 sessions, 4,000 vectors): 1.5ms (was 200ms) - 133x faster
+- **Phase 10 scale** (50 sessions, 10,000 vectors): 3.7ms (was 500ms) - 135x faster
+- **Large projects** (100,000 vectors): ~50ms (was 5 seconds) - 100x faster
+
+**Storage**:
+- Binary .npy files are 50% smaller than JSON embeddings (4 bytes vs 8 bytes per float)
+- 1,000 messages: ~6MB total (120KB index.json + 6MB .npy)
+- 10,000 messages: ~61MB total (1.1MB index.json + 60MB .npy)
+
+**File Structure**:
+```
+sessions/
+  ├── index.json                  # Metadata only (~100KB/1000 msgs)
+  ├── .index_embeddings.npy       # Binary embeddings (~6MB/1000 msgs)
+  ├── session1.devsession
+  └── session2.devsession
+```
+
+**Queries per second**: Up to 7,409 QPS for small indices
+
+**Status**: ✅ Production-ready for multi-session search at scale
+
+**Additional Documentation:**
+- Technical analysis: `v2-devsession-recorder/VECTOR_SEARCH_FINAL.md`
+- Binary storage solution: `v2-devsession-recorder/VECTOR_SEARCH_COMPLETION.md`
 
 #### CLI Commands (All Implemented):
 - ✅ `reccli embed <session>` - Generate embeddings for a session
