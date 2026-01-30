@@ -88,3 +88,10 @@ dev-debug.log
 # tasks/ 
 .taskmaster/
 .cursor/
+apps/web/.next/
+apps/web/out/
+apps/web/node_modules/
+apps/web/build/
+apps/web/.vercel/
+packages/reccli-core/ui/node_modules/
+packages/reccli-core/ui/package-lock.json
