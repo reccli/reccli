@@ -1,0 +1,359 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://reccli.com/schemas/devsession.schema.json",
+  "title": "DevSession Format",
+  "description": "Schema for .devsession files - AI-assisted development session format",
+  "type": "object",
+  "required": ["format", "version", "metadata", "conversation"],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "devsession",
+      "description": "File format identifier"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the format specification"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["session_id", "created_at"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Unique identifier for this session"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when session started"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when session was last modified"
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total session duration in seconds"
+        },
+        "tool": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the AI coding tool used"
+            },
+            "version": {
+              "type": "string",
+              "description": "Version of the tool"
+            }
+          }
+        },
+        "project": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "git_repo": {
+              "type": "string",
+              "format": "uri"
+            },
+            "git_branch": {
+              "type": "string"
+            },
+            "git_commit": {
+              "type": "string"
+            }
+          }
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Searchable tags for categorization"
+        },
+        "related_sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Related .devsession file paths"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "model": {
+          "type": "string",
+          "description": "AI model used to generate summary"
+        },
+        "token_count": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Approximate token count of summary"
+        },
+        "overview": {
+          "type": "string",
+          "description": "High-level summary of the session"
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/decision"
+          }
+        },
+        "code_changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/code_change"
+          }
+        },
+        "problems_solved": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/problem_solved"
+          }
+        },
+        "open_issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/open_issue"
+          }
+        },
+        "next_steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/next_step"
+          }
+        }
+      }
+    },
+    "conversation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/message"
+      },
+      "description": "Complete message history"
+    },
+    "artifacts": {
+      "type": "object",
+      "description": "Additional files or resources",
+      "additionalProperties": true
+    }
+  },
+  "definitions": {
+    "decision": {
+      "type": "object",
+      "required": ["id", "timestamp", "decision", "reasoning"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "impact": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "code_change": {
+      "type": "object",
+      "required": ["id", "timestamp", "files", "description", "type"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["feature", "bugfix", "refactor", "test", "docs"]
+        },
+        "lines_added": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lines_removed": {
+          "type": "number",
+          "minimum": 0
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "problem_solved": {
+      "type": "object",
+      "required": ["id", "timestamp", "problem", "solution"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "problem": {
+          "type": "string"
+        },
+        "solution": {
+          "type": "string"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "open_issue": {
+      "type": "object",
+      "required": ["id", "created_at", "issue", "severity"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "issue": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "context": {
+          "type": "string"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "next_step": {
+      "type": "object",
+      "required": ["id", "priority", "action"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "number",
+          "minimum": 1
+        },
+        "action": {
+          "type": "string"
+        },
+        "estimated_time": {
+          "type": "string"
+        },
+        "details": {
+          "type": "string"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": ["id", "timestamp", "role", "content"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant", "system", "tool"]
+        },
+        "content": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string",
+          "description": "Required if role is 'tool'"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "if": {
+        "properties": {
+          "role": {
+            "const": "tool"
+          }
+        }
+      },
+      "then": {
+        "required": ["tool_name"]
+      }
+    }
+  }
+}

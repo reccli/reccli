@@ -366,12 +366,30 @@ def cmd_search(args):
 
     # Build scope filter
     scope_filter = None
-    if args.section or args.session:
+    if args.section or args.session or args.episode:
         scope_filter = {}
         if args.section:
             scope_filter['section'] = args.section
         if args.session:
             scope_filter['session_id'] = args.session
+        if getattr(args, 'episode', None):
+            scope_filter['episode_id'] = args.episode
+        elif args.session and not getattr(args, 'all_episodes', False):
+            from .devsession import DevSession
+            session_path = Path(args.session)
+            if not session_path.is_absolute():
+                sessions_dir_cfg = config.get_sessions_dir()
+                if not session_path.suffix:
+                    session_path = sessions_dir_cfg / f"{session_path}.devsession"
+                else:
+                    session_path = sessions_dir_cfg / session_path
+            if session_path.exists():
+                try:
+                    session = DevSession.load(session_path)
+                    if getattr(session, 'current_episode_id', None):
+                        scope_filter['episode_id'] = session.current_episode_id
+                except Exception:
+                    pass
 
     # Search
     try:
@@ -1011,6 +1029,46 @@ def cmd_checkpoint_diff(args):
         return 1
 
 
+def cmd_episode_new(args):
+    from .devsession import DevSession
+    from .config import Config
+    if args.session:
+        session_path = Path(args.session)
+    else:
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
+        sessions = sorted(sessions_dir.glob('*.devsession'), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not sessions:
+            print("❌ No sessions found", file=sys.stderr)
+            return 1
+        session_path = sessions[0]
+
+    if not session_path.is_absolute():
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
+        if not session_path.suffix:
+            session_path = sessions_dir / f"{session_path}.devsession"
+        else:
+            session_path = sessions_dir / session_path
+
+    if not session_path.exists():
+        print(f"❌ Session not found: {session_path}", file=sys.stderr)
+        return 1
+
+    try:
+        session = DevSession.load(session_path)
+        eid = session.start_episode(args.goal)
+        session.save(session_path)
+        print(f"\n✅ New episode started: {eid}")
+        print(f"   Goal: {args.goal}")
+        print(f"   Session: {session.session_id}")
+        print()
+        return 0
+    except Exception as e:
+        print(f"❌ Error starting episode: {e}", file=sys.stderr)
+        return 1
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -1138,6 +1196,8 @@ Examples:
     search_parser.add_argument('--last-hours', type=int, help='Filter to last N hours')
     search_parser.add_argument('--section', help='Filter to specific section')
     search_parser.add_argument('--session', help='Filter to specific session')
+    search_parser.add_argument('--episode', help='Filter to specific episode ID (e.g., ep_003)')
+    search_parser.add_argument('--all-episodes', action='store_true', help='Do not scope to current episode when --session is provided')
     search_parser.set_defaults(func=cmd_search)
 
     # Expand command (NEW - Phase 5: Expand search result)
@@ -1196,6 +1256,15 @@ Examples:
     checkpoint_diff_parser.add_argument('checkpoint_id', help='Checkpoint ID (e.g., "CP_12")')
     checkpoint_diff_parser.add_argument('-s', '--session', help='Session name or path (defaults to current)')
     checkpoint_diff_parser.set_defaults(func=cmd_checkpoint_diff)
+
+    # Episode commands (NEW - Phase 7: Manual episode control)
+    episode_parser = subparsers.add_parser('episode', help='Manage episodes')
+    episode_subparsers = episode_parser.add_subparsers(dest='episode_command')
+
+    episode_new_parser = episode_subparsers.add_parser('new', help='Start a new episode with a goal')
+    episode_new_parser.add_argument('goal', help='Episode goal/description (e.g., "Refactor search scoping")')
+    episode_new_parser.add_argument('-s', '--session', help='Session name or path (defaults to most recent)')
+    episode_new_parser.set_defaults(func=cmd_episode_new)
 
     # Parse arguments
     args = parser.parse_args()

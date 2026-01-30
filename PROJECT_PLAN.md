@@ -5,7 +5,7 @@
 **Started**: 2025-11-01
 **Current Phase**: Phase 8 - LLM Adapters (Optional)
 **Completed**: Phase 0 (Terminal Recording), Phase 0.5 (Native LLM + GUI), Phase 1 (Data Integrity), Phase 2 (Conversation Parsing), Phase 3 (Token Counting), Phase 4 (Summary Generation), Phase 5 (Vector Embeddings & Search), Phase 6 (Memory Middleware), Phase 7 (Preemptive Compaction)
-**Last Updated**: 2025-11-07
+**Last Updated**: 2026-01-29
 
 ---
 
@@ -107,24 +107,25 @@ Retrieve full context from old session
 - CLI commands added: `compact`, `check-tokens`, `checkpoint`
 - **READY FOR PRODUCTION TESTING**
 
+### New Findings (2026-01-29)
+- **Recorder decision**: Pure Python PTY only; asciinema is not part of the stack. Confirmed in `v2-devsession-recorder/reccli/recorder.py` and used across the CLI.
+- **Code layout**: Core implementation under `v2-devsession-recorder/reccli/` (`episodes.py`, `vector_index.py`, `search.py`, `devsession.py`, `cli.py`).
+- **Episodes integration**: Implemented. `DevSession` persists `episodes` and `current_episode_id`; `vector_index.py` assigns `episode_id` per message; `cli.py` adds `episode new`, `--episode`, `--all-episodes`, and defaults search to the session’s `current_episode_id` when `--session` is provided.
+- **Immediate priority**: Rebuild the unified index, run acceptance tests, and update CLI/docs to reflect episode features.
+- **Status drift note**: Minor inconsistencies between header/timeline; will be reconciled after episode integration lands.
+
 ### Next Steps
 
-**CRITICAL BEFORE SHIP**: Episode Detection (2.5 hours)
-- Current: `episode_id` hardcoded to 0 (all messages in one episode)
-- Impact: Context pollution (auth work mixed with navbar work in searches)
-- Solution: User-triggered episodes with `/new-episode` command
+**Immediate (Post-episodes)**
+- **Rebuild index**: `reccli index build` to persist `episode_id` across vectors; validate via `reccli index validate` and inspect with `reccli index stats`.
+- **Acceptance tests**: Compaction invariants and `message_range` integrity under episode scoping; ensure `expand` returns full spans correctly.
+- **CLI/docs**: Update help text and README snippets for `episode new`, `--episode`, `--all-episodes`, and default scoping behavior.
+- **DX/packaging**: Ensure installability, version bump, and basic release notes.
 
-**Implementation Tasks** (2.5 hours total):
-1. Add episode tracking to `reccli/devsession.py` (1 hour)
-   - `start_episode(goal)` method
-   - Track `current_episode_id` and episodes list
-   - Auto-close previous episode when starting new one
-2. Update `reccli/vector_index.py` to use current episode (30 min)
-   - Replace hardcoded `episode_id: 0` with `session.current_episode_id`
-3. Default search to current episode in `reccli/search.py` (30 min)
-   - Filter to `scope={'episode_id': current_episode_id}` by default
-4. Add `--all-episodes` flag for cross-episode search (15 min)
-5. Add `/new-episode` CLI command (15 min)
+**Optional**
+- **Heuristic episodes**: Integrate `EpisodeDetector` to suggest boundaries; keep manual override as source of truth.
+- **Phase 8**: LLM adapters unification and provider abstraction.
+- **Phase 9**: CLI polish (colors, progress bars, UX tweaks).
 
 **Why Episodes Matter**: This is THE differentiator vs Claude Projects. Without it: irrelevant context pollution. With it: clean task segmentation.
 

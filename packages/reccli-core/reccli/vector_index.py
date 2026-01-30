@@ -267,7 +267,8 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
 
                 # Temporal
                 'section': session.metadata.get('section', 'default') if session.metadata else 'default',
-                'episode_id': 0,  # TODO: Implement episode detection
+                'episode_id': (session.get_episode_id_for_message_index(msg_idx)
+                                if hasattr(session, 'get_episode_id_for_message_index') else session.current_episode_id),
                 't_start': timestamp,
                 't_end': timestamp,
                 't_day': t_day,
@@ -472,7 +473,8 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
 
             # Temporal
             'section': session.metadata.get('section', 'default') if session.metadata else 'default',
-            'episode_id': 0,
+            'episode_id': (session.get_episode_id_for_message_index(msg_idx)
+                            if hasattr(session, 'get_episode_id_for_message_index') else session.current_episode_id),
             't_start': timestamp,
             't_end': timestamp,
             't_day': t_day,

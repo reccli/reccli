@@ -59,6 +59,9 @@ class DevSession:
         # Compaction history
         self.compaction_history = []
 
+        self.episodes = []
+        self.current_episode_id = None
+
     def append_event(self, timestamp: float, event_type: str, data: str) -> str:
         """
         Append a terminal event
@@ -159,7 +162,9 @@ class DevSession:
             "vector_index": self.vector_index,
             "token_counts": self.token_counts,
             "checksums": self.checksums,
-            "compaction_history": self.compaction_history
+            "compaction_history": self.compaction_history,
+            "episodes": self.episodes,
+            "current_episode_id": self.current_episode_id
         }
 
     def save(self, path: Path, skip_validation: bool = False) -> None:
@@ -333,6 +338,8 @@ class DevSession:
         session.token_counts = data.get("token_counts", session.token_counts)
         session.checksums = data.get("checksums", {})
         session.compaction_history = data.get("compaction_history", [])
+        session.episodes = data.get("episodes", [])
+        session.current_episode_id = data.get("current_episode_id")
 
         # Verify checksums
         if verify_checksums and not session.verify_checksums():
@@ -645,6 +652,55 @@ class DevSession:
                     return True
 
         return False
+
+    def start_episode(self, goal: str) -> str:
+        # Close previous episode if open
+        if self.current_episode_id and self.episodes:
+            for ep in reversed(self.episodes):
+                if ep.get('id') == self.current_episode_id and ep.get('end_index') is None:
+                    ep['end_index'] = max(0, len(self.conversation) - 1) if self.conversation else -1
+                    ep['ended_at'] = datetime.now().isoformat()
+                    break
+
+        # Compute next episode number
+        next_num = 1
+        for ep in self.episodes:
+            eid = ep.get('id', '')
+            if isinstance(eid, str) and eid.startswith('ep_'):
+                try:
+                    n = int(eid.split('_')[-1])
+                    next_num = max(next_num, n + 1)
+                except Exception:
+                    pass
+
+        eid = f"ep_{next_num:03d}"
+        new_ep = {
+            'id': eid,
+            'goal': goal,
+            'start_index': len(self.conversation) if self.conversation else 0,
+            'end_index': None,
+            'started_at': datetime.now().isoformat(),
+        }
+        self.episodes.append(new_ep)
+        self.current_episode_id = eid
+        return eid
+
+    def get_episode_id_for_message_index(self, index: int) -> Optional[str]:
+        if not isinstance(index, int) or index < 0:
+            return None
+
+        # Prefer explicit episodes with ranges
+        for ep in self.episodes:
+            start = ep.get('start_index', 0)
+            end = ep.get('end_index')
+            if end is None:
+                if index >= start:
+                    return ep.get('id')
+            else:
+                if start <= index <= end:
+                    return ep.get('id')
+
+        return None
 
     def __repr__(self) -> str:
         duration = self.get_duration()
