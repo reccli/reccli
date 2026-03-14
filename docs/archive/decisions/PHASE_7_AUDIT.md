@@ -141,7 +141,7 @@ from .embeddings import OpenAIEmbeddings
 
 #### Question #1: Single-Stage vs Two-Stage
 
-**From DESIGN_DECISIONS.md**:
+**From [DESIGN_DECISIONS.md](/Users/will/coding-projects/RecCli/docs/archive/decisions/DESIGN_DECISIONS.md)**:
 > We built **both** but default to single-stage
 
 **My Implementation**:
@@ -284,7 +284,7 @@ except ImportError:
 2. **Verify API signatures** against actual code
 3. **Test end-to-end** with a real session
 4. **Document limitations** (e.g., requires LLM API key)
-5. **Update `PHASE_7_IMPLEMENTATION.md`** with fixes
+5. **Update `docs/archive/progress/phases/PHASE_7_IMPLEMENTATION.md`** with fixes
 
 ---
 

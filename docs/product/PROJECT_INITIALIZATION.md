@@ -1,8 +1,12 @@
 # Project Initialization & Context Loading
 
+**Status:** Product/design document for an optional future project-selection and initialization flow.
+
+The current mainline CLI does not implement the project dropdown or `.devproject` initialization flow described here. Read this as intended UX for an optional project layer, not a required startup dependency. The intended product shape is that users can attach RecCli to an existing repo first and only create `.devproject` if and when project-level memory becomes useful.
+
 ## Overview
 
-RecCli needs to know **which project** you're working on to load the right context. This document describes the complete UX flow for project detection, selection, and initialization.
+RecCli benefits from knowing **which project** you're working on so it can load richer project context. This document describes one possible UX flow for project detection, selection, and optional initialization on top of the baseline `.devsession` workflow.
 
 ## UI Design: Project Dropdown
 
@@ -43,7 +47,7 @@ RecCli needs to know **which project** you're working on to load the right conte
 └─────────────────────────────────────┘
 ```
 
-## Project Cache: ~/.reccli/projects.json
+## Project Cache: ~/reccli/projects.json
 
 ### Structure
 
@@ -204,7 +208,7 @@ Shows initialization dialog (see below).
 
 ## Project Initialization: Branching Logic
 
-When RecCli detects a project without .devproject, it branches based on whether the project is **empty** or has **existing code**:
+When RecCli detects a project without `.devproject`, it can branch based on whether the project is **empty** or has **existing code**. This should be treated as optional enhancement logic rather than a hard gate before use:
 
 ```python
 def prompt_initialize_project(project):
@@ -669,7 +673,7 @@ def run_conversational_onboarding(project, prefill_from_scan=False):
 
 ### Strategy C: Minimal Setup (Lazy Initialization)
 
-**Start recording without .devproject, build context from session:**
+**Start recording without `.devproject`, then build project context from the session itself:**
 
 ```python
 def lazy_initialize_project(project_path):
@@ -810,7 +814,7 @@ Check current directory
 ## Key Design Decisions
 
 **Q: Where to store project cache?**
-A: `~/.reccli/projects.json` - Centralized, survives repo deletion
+A: `~/reccli/projects.json` - Centralized, survives repo deletion
 
 **Q: How to detect current project?**
 A: Git repo root first, then project markers (package.json, etc.)

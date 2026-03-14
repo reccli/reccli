@@ -57,8 +57,8 @@ const RecCliLandingPage: NextPage = () => {
       a: "Same reason you don't use Print Screen for screenshots. Sure, it works, but CleanShot X is a $30M business because reducing friction changes behavior. You'll never remember to type 'script' before that debugging session. You will click a red button that's always visible."
     },
     {
-      q: "What about asciinema?",
-      a: "asciinema is great! We actually use it under the hood. But it's still command-line based. reccli is about the UI/UX layer - the floating button that makes you actually USE recording instead of forgetting about it."
+      q: "How is this different from script or manual terminal logs?",
+      a: "RecCli uses native recording and session capture, but the bigger difference is workflow. The point is to make recording and continuity easy enough that you actually use it when the important debugging session happens."
     },
     {
       q: "Why $5/month with no free tier?",
@@ -66,7 +66,7 @@ const RecCliLandingPage: NextPage = () => {
     },
     {
       q: "Where are recordings stored?",
-      a: "Locally on your machine in ~/.reccli/recordings/. Your data, your control. Cloud backup is coming soon as an option, but will never be required."
+      a: "Locally on your machine in ~/reccli/sessions/. RecCli keeps session data local by default."
     }
   ]
   

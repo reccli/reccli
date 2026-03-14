@@ -97,6 +97,9 @@ class TokenCounter:
         Returns:
             Number of tokens
         """
+        if message.get("deleted"):
+            return 0
+
         # Format: {"role": "user", "content": "text"}
         # Count both role and content
         role = message.get("role", "")

@@ -1,8 +1,12 @@
 # .devproject File
 
+**Status:** Design spec for an optional project-layer companion format.
+
+The current RecCli codebase does not yet create or persist `.devproject` in the main CLI path, though middleware can opportunistically read one if present. Treat this document as a forward-looking contract for an optional project-outline layer, not as a description of required startup behavior.
+
 ## Overview
 
-The `.devproject` file is the **single source of truth** for project-level context in the .devsession ecosystem. It lives at the root of your git repository and contains automatically-maintained documentation that evolves with each session.
+The `.devproject` file is the intended optional container for project-level context in the RecCli ecosystem. It would typically live at the root of a git repository and contain structured project memory that can be created manually, inferred from repo state, or incrementally refined from session history.
 
 ## Location
 
@@ -25,7 +29,7 @@ The `.devproject` file serves multiple purposes:
 
 1. **Automatic Documentation** - Self-writing project overview that updates each session
 2. **Context Persistence** - Carries project context across sessions
-3. **Single Source of Truth** - One file that always has current project state
+3. **Project Outline Cache** - A compact project-level layer above individual sessions
 4. **Team Sharing** - Optional git tracking for team-wide context (if not gitignored)
 5. **Onboarding** - Instant project understanding for new contributors or after breaks
 
@@ -42,34 +46,34 @@ The `.devproject` file serves multiple purposes:
 
   "project": {
     "name": "RecCli",
-    "description": "CLI terminal recorder with AI-powered session management",
-    "purpose": "Enable developers to record, summarize, and intelligently continue terminal sessions",
-    "value_proposition": "Solves AI context loss by automatically building living project documentation that eliminates the need to re-explain project context",
+    "description": "Temporal memory engine for coding agents",
+    "purpose": "Enable developers and coding agents to preserve reasoning history across sessions",
+    "value_proposition": "Keeps active context small while preserving exact recoverability from summary and full conversation history",
     "repository": "https://github.com/willluecke/RecCli",
     "license": "MIT",
     "status": "active_development"
   },
 
   "tech_stack": {
-    "languages": ["Python"],
-    "frameworks": ["tkinter"],
-    "key_dependencies": ["asciinema", "anthropic"],
+    "languages": ["Python", "TypeScript"],
+    "frameworks": ["Ink"],
+    "key_dependencies": ["anthropic", "openai", "sentence-transformers"],
     "embedding_model": "text-embedding-3-small",
     "llm_model": "claude-sonnet-4.5"
   },
 
   "architecture": {
-    "overview": "Two-component system: RecCli (recording UI) + .devsession (intelligent format)",
+    "overview": "Memory engine built around .devsession, retrieval, compaction, and an optional project-outline layer",
     "components": [
       {
         "name": "RecCli",
-        "purpose": "Terminal recording with 2-button UI (REC/STOP + Settings)",
-        "tech": "Python, tkinter, asciinema"
+        "purpose": "Session ingestion, recording, retrieval, and compaction",
+        "tech": "Python, native PTY/WAL recording, memory middleware"
       },
       {
         "name": ".devsession Format",
-        "purpose": "Three-layer context: project overview + session summary + full conversation with vectors",
-        "tech": "JSON, vector embeddings, semantic search"
+        "purpose": "Time-linked memory: optional project outline + session summary + full conversation with vectors",
+        "tech": "JSON, vector embeddings, hybrid retrieval"
       }
     ],
     "key_patterns": [
@@ -95,8 +99,8 @@ The `.devproject` file serves multiple purposes:
       "id": "decision_002",
       "date": "2024-10-27",
       "session": "session-002",
-      "decision": "Use three-layer .devsession format (project + summary + conversation)",
-      "reasoning": "Better than compaction algorithms, maintains all context with semantic search",
+      "decision": "Use linked memory layers with summary-to-source recovery",
+      "reasoning": "Better than flat compaction or flat retrieval because it preserves exact drill-down paths",
       "impact": "high",
       "alternatives_considered": ["Simple markdown logs", "Use Claude Code's built-in compaction"],
       "current_status": "implemented"
@@ -174,24 +178,21 @@ The `.devproject` file serves multiple purposes:
 
 ### Session Start
 
-When starting a new recording session:
+When starting a new recording session, RecCli should be able to operate even if no `.devproject` exists:
 
 ```python
 def start_recording(project_dir):
-    # 1. Load .devproject from repo root
+    # 1. Try to load .devproject from repo root
     devproject_path = project_dir / '.devproject'
 
     if devproject_path.exists():
         # Load existing project overview
         project_overview = load_devproject(devproject_path)
     else:
-        # Initialize new project (first session)
-        project_overview = initialize_new_project(project_dir)
+        # Continue without project overview for now
+        project_overview = None
 
-        # Auto-add .devproject to .gitignore (privacy by default)
-        auto_update_gitignore(project_dir)
-
-    # 2. Create new session with current project overview
+    # 2. Create new session with whatever project overview is available
     session = create_session(project_overview)
 
     return session
@@ -199,7 +200,7 @@ def start_recording(project_dir):
 
 ### During Session
 
-The project overview is **carried along** in the session but not modified during recording. It's read-only during the session.
+If present, the project overview is **carried along** in the session but not modified during recording. It remains optional enrichment rather than a prerequisite.
 
 ### Session End
 

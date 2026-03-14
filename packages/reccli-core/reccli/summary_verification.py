@@ -7,9 +7,9 @@ from typing import Dict, List, Optional, Tuple, Any
 
 
 class SummaryVerifier:
-    """Verify summary item references against actual conversation"""
+    """Verify summary item references against actual conversation and spans."""
 
-    def __init__(self, conversation: List[Dict]):
+    def __init__(self, conversation: List[Dict], spans: Optional[List[Dict]] = None):
         """
         Initialize verifier with conversation
 
@@ -29,6 +29,11 @@ class SummaryVerifier:
                 "index": idx,        # 0-based array index
                 "message": msg
             }
+        self.spans = spans or []
+        self.span_lookup = {
+            span["id"]: span for span in self.spans
+            if isinstance(span, dict) and span.get("id")
+        }
 
     def verify_message_exists(self, msg_id: str) -> bool:
         """Check if message ID exists"""
@@ -136,6 +141,115 @@ class SummaryVerifier:
 
         return len(missing) == 0, missing
 
+    def verify_span(self, span: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Verify a span points to a valid conversation region."""
+        required = ["id", "kind", "start_message_id", "start_index"]
+        for field in required:
+            if field not in span:
+                return False, f"Missing field: {field}"
+
+        status = span.get("status", "closed")
+        start_id = span["start_message_id"]
+        start_idx = span["start_index"]
+
+        if not self.verify_message_exists(start_id):
+            return False, f"Span start message not found: {start_id}"
+
+        if status == "open":
+            latest_message_id = span.get("latest_message_id")
+            latest_index = span.get("latest_index")
+            if latest_message_id is not None and not self.verify_message_exists(latest_message_id):
+                return False, f"Open span latest message not found: {latest_message_id}"
+            if latest_index is not None and (not isinstance(latest_index, int) or latest_index < start_idx):
+                return False, f"Invalid open span latest_index: {latest_index}"
+
+            end_id = span.get("end_message_id")
+            end_idx = span.get("end_index")
+            if end_id is None and end_idx is None:
+                return True, None
+        else:
+            end_id = span.get("end_message_id")
+            end_idx = span.get("end_index")
+
+        if end_id is None or end_idx is None:
+            return False, "Closed span missing end_message_id or end_index"
+        if not self.verify_message_exists(end_id):
+            return False, f"Span end message not found: {end_id}"
+
+        expected_range = {
+            "start": start_id,
+            "end": end_id,
+            "start_index": start_idx,
+            "end_index": end_idx,
+        }
+        return self.verify_message_range(expected_range)
+
+    def _resolved_spans(self, span_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        spans = []
+        missing = []
+        for span_id in span_ids:
+            span = self.span_lookup.get(span_id)
+            if span is None:
+                missing.append(span_id)
+            else:
+                spans.append(span)
+        return spans, missing
+
+    def _span_contains_index(self, span: Dict[str, Any], index: int) -> bool:
+        start_index = span.get("start_index", 0)
+        end_index = span.get("end_index")
+        if not isinstance(end_index, int):
+            latest_index = span.get("latest_index")
+            if isinstance(latest_index, int):
+                end_index = latest_index + 1
+        if not isinstance(end_index, int):
+            return index >= start_index
+        return start_index <= index < end_index
+
+    def verify_item_links(self, item: Dict[str, Any]) -> List[str]:
+        """Verify span IDs, ranges, and references agree with each other."""
+        errors = []
+        span_ids = item.get("span_ids")
+
+        if span_ids is None:
+            errors.append("Missing span_ids")
+            return errors
+        if not isinstance(span_ids, list):
+            errors.append("Invalid span_ids: expected list")
+            return errors
+
+        spans, missing = self._resolved_spans(span_ids)
+        if missing:
+            errors.append(f"Missing span_ids: {missing}")
+
+        if spans and "message_range" in item:
+            start_idx = item["message_range"].get("start_index")
+            end_idx = item["message_range"].get("end_index")
+            if isinstance(start_idx, int) and isinstance(end_idx, int):
+                union_start = min(span.get("start_index", start_idx) for span in spans)
+                union_end = max(
+                    (
+                        span.get("end_index")
+                        if isinstance(span.get("end_index"), int)
+                        else (span.get("latest_index") + 1 if isinstance(span.get("latest_index"), int) else end_idx)
+                    )
+                    for span in spans
+                )
+                if start_idx < union_start or end_idx > union_end:
+                    errors.append(
+                        f"message_range [{start_idx}, {end_idx}) not contained within linked spans "
+                        f"[{union_start}, {union_end})"
+                    )
+
+        if spans and "references" in item:
+            for ref in item["references"]:
+                if ref in self.message_lookup:
+                    ref_idx = self.message_lookup[ref]["index"]
+                    if not any(self._span_contains_index(span, ref_idx) for span in spans):
+                        errors.append(f"Reference {ref} (index {ref_idx}) outside linked spans")
+
+        return errors
+
     def verify_decision(self, decision: Dict) -> Tuple[bool, List[str]]:
         """
         Verify a decision item
@@ -156,6 +270,8 @@ class SummaryVerifier:
             valid, error = self.verify_message_range(decision["message_range"])
             if not valid:
                 errors.append(f"Invalid message_range: {error}")
+
+        errors.extend(self.verify_item_links(decision))
 
         # Verify references fall within message range
         # Range semantics: [start_index, end_index) - inclusive-exclusive
@@ -188,6 +304,8 @@ class SummaryVerifier:
             if not valid:
                 errors.append(f"Invalid message_range: {error}")
 
+        errors.extend(self.verify_item_links(change))
+
         return len(errors) == 0, errors
 
     def verify_summary(self, summary: Dict) -> Tuple[bool, Dict[str, List[str]]]:
@@ -201,12 +319,18 @@ class SummaryVerifier:
             (is_valid, errors_by_category)
         """
         all_errors = {
+            "spans": [],
             "decisions": [],
             "code_changes": [],
             "problems_solved": [],
             "open_issues": [],
             "next_steps": []
         }
+
+        for span in self.spans:
+            valid, error = self.verify_span(span)
+            if not valid:
+                all_errors["spans"].append(f"Span {span.get('id', 'no-id')}: {error}")
 
         # Verify decisions
         for i, decision in enumerate(summary.get("decisions", [])):
@@ -281,6 +405,13 @@ class SummaryVerifier:
         """
         warnings = []
         fixed = summary.copy()
+        from .summary_schema import ensure_summary_span_links
+
+        self.spans = ensure_summary_span_links(fixed, self.spans)
+        self.span_lookup = {
+            span["id"]: span for span in self.spans
+            if isinstance(span, dict) and span.get("id")
+        }
 
         # Remove items with invalid references
         for category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:

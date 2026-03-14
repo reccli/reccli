@@ -1,10 +1,8 @@
 """
-Export formats for RecCli Phase 1 MVP
-Converts asciinema recordings to various formats
+Export helpers for RecCli session files.
 """
 
 import json
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional
@@ -18,13 +16,13 @@ class SessionExporter:
         Initialize exporter
 
         Args:
-            session_file: Path to asciinema .cast file
+            session_file: Path to session capture file
             metadata: Optional metadata (session_id, duration, etc.)
         """
         self.session_file = Path(session_file)
         self.metadata = metadata or {}
 
-        # Try to extract terminal output from .cast file
+        # Extract terminal output from the source session file
         self.terminal_output = self._extract_terminal_output()
 
     def _clean_incremental_typing(self, content: str) -> str:
@@ -142,11 +140,11 @@ class SessionExporter:
         return '\n'.join(cleaned_lines)
 
     def _extract_terminal_output(self) -> str:
-        """Extract plain text output from session file (.cast or .txt)"""
+        """Extract plain text output from a session file."""
         if not self.session_file.exists():
             return ""
 
-        # Check if it's a plain text file from script command
+        # Plain text export file
         if self.session_file.suffix == '.txt':
             try:
                 with open(self.session_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -163,29 +161,30 @@ class SessionExporter:
                 print(f"Error reading txt file: {e}")
                 return ""
 
-        # Handle .cast files
-        try:
-            # Use asciinema convert to get plain text output (asciinema 3.x)
-            result = subprocess.run(
-                ['asciinema', 'convert', '-f', 'raw', str(self.session_file), '-'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                # Apply the same cleaning as for .txt files
+        # Current raw session format
+        if self.session_file.suffix == '.devsession':
+            try:
+                with open(self.session_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                output = []
+                terminal = data.get('terminal_recording', {})
+                for event in terminal.get('events', []):
+                    if len(event) >= 3 and event[1] == 'o':
+                        output.append(event[2])
+
+                content = ''.join(output)
+
                 import re
-                content = result.stdout
-                # Remove ANSI escape sequences
                 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
                 cleaned = ansi_escape.sub('', content)
-                # Remove incremental typing artifacts
                 cleaned = self._clean_incremental_typing(cleaned)
                 return cleaned
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
+            except Exception as e:
+                print(f"Error reading devsession file: {e}")
+                return ""
 
-        # Fallback: parse .cast file manually
+        # Legacy cast export fallback
         try:
             with open(self.session_file, 'r') as f:
                 lines = f.readlines()
@@ -425,31 +424,13 @@ Terminal Output
             print(f"Error exporting to html: {e}")
             return False
 
-    def export_cast(self, output_file: Path) -> bool:
-        """
-        Export as asciinema .cast (just copy the file)
-
-        Args:
-            output_file: Path to save .cast file
-
-        Returns:
-            True if successful
-        """
-        try:
-            import shutil
-            shutil.copy2(self.session_file, output_file)
-            return True
-        except Exception as e:
-            print(f"Error exporting to cast: {e}")
-            return False
-
     def export(self, output_file: Path, format: str) -> bool:
         """
         Export to specified format
 
         Args:
             output_file: Path to save file
-            format: Format type ('txt', 'md', 'json', 'html', 'cast')
+            format: Format type ('txt', 'md', 'json', 'html')
 
         Returns:
             True if successful
@@ -461,7 +442,6 @@ Terminal Output
             'md': self.export_md,
             'json': self.export_json,
             'html': self.export_html,
-            'cast': self.export_cast
         }
 
         if format not in exporters:

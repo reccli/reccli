@@ -5,6 +5,7 @@ Stage 2: Reasoned summary (better model)
 """
 
 import json
+from copy import deepcopy
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -16,6 +17,7 @@ from .summary_schema import (
     create_open_issue_item,
     create_next_step_item,
     add_causal_edge,
+    ensure_summary_span_links,
 )
 from .summary_verification import SummaryVerifier
 from .redaction import redact_for_summarization
@@ -47,7 +49,7 @@ Output JSON array of spans:
     "category": "decision",
     "start": "msg_042",
     "end": "msg_050",
-    "start_index": 42,
+    "start_index": 41,
     "end_index": 50,
     "topic": "choosing modal vs sidebar for export dialog"
   },
@@ -83,7 +85,7 @@ Output a JSON object with this structure:
       "message_range": {
         "start": "msg_042",
         "end": "msg_050",
-        "start_index": 42,
+        "start_index": 41,
         "end_index": 50
       },
       "confidence": "low" | "medium" | "high",
@@ -224,7 +226,7 @@ CRITICAL RULES:
                 "category": "general",
                 "start": "msg_001",
                 "end": f"msg_{len(conversation):03d}",
-                "start_index": 1,
+                "start_index": 0,
                 "end_index": len(conversation),
                 "topic": "full session"
             }]
@@ -242,7 +244,7 @@ CRITICAL RULES:
             "category": "general",
             "start": "msg_001",
             "end": f"msg_{len(conversation):03d}",
-            "start_index": 1,
+            "start_index": 0,
             "end_index": len(conversation),
             "topic": "full session"
         }]
@@ -532,6 +534,190 @@ CRITICAL RULES:
             "next_steps": []
         }
 
+    def _message_id_for_index(self, index: int) -> str:
+        return f"msg_{index + 1:03d}"
+
+    def _shift_message_id(self, message_id: str, offset: int) -> str:
+        try:
+            number = int(message_id.split("_")[1])
+        except (IndexError, ValueError):
+            return message_id
+        return f"msg_{number + offset:03d}"
+
+    def _shift_message_range(self, message_range: Dict[str, Any], offset: int) -> Dict[str, Any]:
+        shifted = dict(message_range)
+        if isinstance(shifted.get("start"), str):
+            shifted["start"] = self._shift_message_id(shifted["start"], offset)
+        if isinstance(shifted.get("end"), str):
+            shifted["end"] = self._shift_message_id(shifted["end"], offset)
+        if isinstance(shifted.get("start_index"), int):
+            shifted["start_index"] = shifted["start_index"] + offset
+        if isinstance(shifted.get("end_index"), int):
+            shifted["end_index"] = shifted["end_index"] + offset
+        return shifted
+
+    def _shift_summary_item_links(self, item: Dict[str, Any], offset: int) -> Dict[str, Any]:
+        shifted = deepcopy(item)
+        shifted["references"] = [
+            self._shift_message_id(ref, offset) if isinstance(ref, str) else ref
+            for ref in shifted.get("references", [])
+        ]
+        if "message_range" in shifted:
+            shifted["message_range"] = self._shift_message_range(shifted["message_range"], offset)
+        shifted.pop("span_ids", None)
+        return shifted
+
+    def _merge_summary_items(self, existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: Dict[str, Dict[str, Any]] = {}
+        ordered_ids: List[str] = []
+
+        for item in existing + incoming:
+            item_id = item.get("id")
+            if not item_id:
+                continue
+            if item_id not in merged:
+                ordered_ids.append(item_id)
+                merged[item_id] = deepcopy(item)
+                continue
+
+            prior = merged[item_id]
+            updated = deepcopy(prior)
+            updated.update(item)
+
+            # Preserve manual protections unless explicitly changed.
+            if prior.get("pinned") and "pinned" not in item:
+                updated["pinned"] = True
+            if prior.get("locked") and "locked" not in item:
+                updated["locked"] = True
+            merged[item_id] = updated
+
+        return [merged[item_id] for item_id in ordered_ids]
+
+    def _apply_summary_patch(self, summary: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+        updated = deepcopy(summary)
+        if patch.get("overview"):
+            existing_overview = updated.get("overview", "").strip()
+            new_overview = patch["overview"].strip()
+            if not existing_overview:
+                updated["overview"] = new_overview
+            elif new_overview and new_overview not in existing_overview:
+                updated["overview"] = f"{existing_overview} {new_overview}".strip()
+
+        for category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:
+            updated[category] = self._merge_summary_items(
+                updated.get(category, []),
+                patch.get(category, []),
+            )
+
+        updated["created_at"] = datetime.now().isoformat()
+        return updated
+
+    def _build_summary_patch(
+        self,
+        conversation: List[Dict],
+        base_index: int = 0,
+        redact_secrets: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Build a patch describing only the supplied conversation slice.
+        The patch can be safely merged into an existing summary without dropping older items.
+        """
+        working = deepcopy(conversation)
+        if redact_secrets:
+            working, redaction_stats = redact_for_summarization(working)
+            if redaction_stats:
+                print(f"🔒 Redacted {sum(redaction_stats.values())} secrets: {redaction_stats}")
+
+        detector = CodeChangeDetector()
+        ground_truth = detector.analyze_conversation(working)
+        ground_truth_changes = detector.build_code_changes_from_ground_truth(working)
+
+        if self.use_two_stage:
+            spans = self.stage1_detect_spans(working)
+            print(f"📍 Detected {len(spans)} discussion spans")
+            llm_summary = self.stage2_generate_summary(working, spans)
+        else:
+            print(f"📝 Single-stage summarization of {len(working)} messages")
+            spans = [{
+                "category": "full_session",
+                "start": "msg_001",
+                "end": f"msg_{len(working):03d}",
+                "start_index": 0,
+                "end_index": len(working),
+                "topic": "complete session slice"
+            }]
+            llm_summary = self.stage2_generate_summary(working, spans)
+
+        if llm_summary.get("code_changes"):
+            llm_summary["code_changes"] = detector.augment_llm_code_changes(
+                llm_summary["code_changes"],
+                ground_truth
+            )
+        if ground_truth_changes and not llm_summary.get("code_changes"):
+            llm_summary["code_changes"] = ground_truth_changes
+
+        patch = {
+            "overview": llm_summary.get("overview") or "",
+            "decisions": [],
+            "code_changes": [],
+            "problems_solved": [],
+            "open_issues": [],
+            "next_steps": [],
+        }
+        for category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:
+            patch[category] = [
+                self._shift_summary_item_links(item, base_index)
+                for item in llm_summary.get(category, [])
+            ]
+        return patch
+
+    def update_summary_incrementally(
+        self,
+        conversation: List[Dict],
+        existing_summary: Optional[Dict[str, Any]],
+        start_index: int,
+        end_index: Optional[int] = None,
+        session_hash: Optional[str] = None,
+        redact_secrets: bool = True,
+    ) -> Dict[str, Any]:
+        """Update an existing summary using only messages beyond the summary frontier."""
+        end_index = len(conversation) if end_index is None else min(end_index, len(conversation))
+        start_index = max(0, min(start_index, end_index))
+
+        if existing_summary is None:
+            return self.summarize_session(
+                conversation[:end_index],
+                session_hash=session_hash,
+                redact_secrets=redact_secrets,
+            )
+
+        if start_index >= end_index:
+            return deepcopy(existing_summary)
+
+        patch = self._build_summary_patch(
+            conversation[start_index:end_index],
+            base_index=start_index,
+            redact_secrets=redact_secrets,
+        )
+        updated_summary = self._apply_summary_patch(existing_summary, patch)
+        self.enrich_with_temporal_data(updated_summary, conversation)
+        spans = ensure_summary_span_links(updated_summary)
+        verifier = SummaryVerifier(conversation, spans)
+        is_valid, errors = verifier.verify_summary(updated_summary)
+        if not is_valid:
+            print("⚠️  Incremental summary validation errors:")
+            for category, errs in errors.items():
+                if errs:
+                    print(f"  {category}:")
+                    for err in errs:
+                        print(f"    - {err}")
+            updated_summary, warnings = verifier.auto_fix_summary(updated_summary)
+            if warnings:
+                print("🔧 Auto-fixed incremental summary issues:")
+                for warning in warnings:
+                    print(f"  - {warning}")
+        return updated_summary
+
     def summarize_session(
         self,
         conversation: List[Dict],
@@ -549,60 +735,25 @@ CRITICAL RULES:
         Returns:
             Complete summary with metadata
         """
-        # Step 1: Redact secrets
-        if redact_secrets:
-            conversation, redaction_stats = redact_for_summarization(conversation)
-            if redaction_stats:
-                print(f"🔒 Redacted {sum(redaction_stats.values())} secrets: {redaction_stats}")
-
-        # Step 2: Detect ground truth code changes
-        detector = CodeChangeDetector()
-        ground_truth = detector.analyze_conversation(conversation)
-        ground_truth_changes = detector.build_code_changes_from_ground_truth(conversation)
-
-        # Step 3: Choose pipeline based on use_two_stage flag
-        if self.use_two_stage:
-            # Two-stage: Span detection → Reasoned summary
-            spans = self.stage1_detect_spans(conversation)
-            print(f"📍 Detected {len(spans)} discussion spans")
-            llm_summary = self.stage2_generate_summary(conversation, spans)
-        else:
-            # Single-stage: Direct summarization (default, simpler, more reliable)
-            print(f"📝 Single-stage summarization of {len(conversation)} messages")
-            spans = [{
-                "category": "full_session",
-                "start": "msg_001",
-                "end": f"msg_{len(conversation):03d}",
-                "start_index": 1,
-                "end_index": len(conversation),
-                "topic": "complete session"
-            }]
-            llm_summary = self.stage2_generate_summary(conversation, spans)
-
-        # Step 4: Augment LLM code changes with ground truth
-        if llm_summary.get("code_changes"):
-            llm_summary["code_changes"] = detector.augment_llm_code_changes(
-                llm_summary["code_changes"],
-                ground_truth
-            )
-
-        # Step 5: Merge ground truth changes with LLM summary
-        # Prefer ground truth for code changes
-        if ground_truth_changes and not llm_summary.get("code_changes"):
-            llm_summary["code_changes"] = ground_truth_changes
-
-        # Step 6: Create full summary with metadata
         summary = create_summary_skeleton(
             model=self.model,
             session_hash=session_hash
         )
-        summary.update(llm_summary)
+        patch = self._build_summary_patch(
+            conversation,
+            base_index=0,
+            redact_secrets=redact_secrets,
+        )
+        summary = self._apply_summary_patch(summary, patch)
 
         # Step 6.5: Enrich with temporal data (t_first, t_last) for two-level retrieval
         self.enrich_with_temporal_data(summary, conversation)
 
+        # Step 6.6: Ensure summary items are linked to first-class semantic spans
+        spans = ensure_summary_span_links(summary)
+
         # Step 7: Verify references
-        verifier = SummaryVerifier(conversation)
+        verifier = SummaryVerifier(conversation, spans)
         is_valid, errors = verifier.verify_summary(summary)
 
         if not is_valid:

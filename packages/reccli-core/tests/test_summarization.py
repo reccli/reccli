@@ -8,8 +8,8 @@ import sys
 import json
 from pathlib import Path
 
-# Add reccli to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add package root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from reccli.devsession import DevSession
 from reccli.summary_schema import (
@@ -50,7 +50,7 @@ def test_summary_schema():
         message_range={
             "start": "msg_042",
             "end": "msg_050",
-            "start_index": 42,
+            "start_index": 41,
             "end_index": 50
         },
         confidence="high",
@@ -107,7 +107,7 @@ def test_reference_verification():
     valid, error = verifier.verify_message_range({
         "start": "msg_002",
         "end": "msg_005",
-        "start_index": 2,
+        "start_index": 1,
         "end_index": 5
     })
     print(f"\n3. Message range [2-5] valid: {valid}")
@@ -118,7 +118,7 @@ def test_reference_verification():
     valid, error = verifier.verify_message_range({
         "start": "msg_005",
         "end": "msg_002",
-        "start_index": 5,
+        "start_index": 4,
         "end_index": 2
     })
     print(f"\n4. Invalid range [5-2] valid: {valid}")

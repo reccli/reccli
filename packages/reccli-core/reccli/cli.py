@@ -23,6 +23,8 @@ from .search import search, expand_result
 
 def cmd_record(args):
     """Record a new terminal session"""
+    config = Config()
+
     # Determine output path
     if args.output:
         output_path = Path(args.output)
@@ -30,7 +32,7 @@ def cmd_record(args):
         # Auto-generate filename
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         name = args.name or f"session_{timestamp}"
-        output_dir = Path.home() / 'reccli' / 'sessions'
+        output_dir = config.get_sessions_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{name}.devsession"
 
@@ -41,7 +43,8 @@ def cmd_record(args):
 
 def cmd_list(args):
     """List recorded sessions"""
-    sessions_dir = Path.home() / 'reccli' / 'sessions'
+    config = Config()
+    sessions_dir = config.get_sessions_dir()
 
     if not sessions_dir.exists():
         print("No sessions found. Record your first session with: reccli record")
@@ -87,7 +90,8 @@ def cmd_show(args):
 
     # If not absolute path, look in sessions directory
     if not session_path.is_absolute():
-        sessions_dir = Path.home() / 'reccli' / 'sessions'
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
         if not session_path.suffix:
             session_path = sessions_dir / f"{session_path}.devsession"
         else:
@@ -136,7 +140,8 @@ def cmd_export(args):
 
     # If not absolute path, look in sessions directory
     if not session_path.is_absolute():
-        sessions_dir = Path.home() / 'reccli' / 'sessions'
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
         if not session_path.suffix:
             session_path = sessions_dir / f"{session_path}.devsession"
         else:
@@ -1080,7 +1085,6 @@ Examples:
   reccli chat                      # Start interactive chat (uses default model)
   reccli chat --model claude       # Chat with Claude
   reccli chat --model gpt5         # Chat with GPT-5
-  reccli chat --model gpt5-codex   # Chat with GPT-5 Codex (coding optimized)
   reccli ask "explain .devsession" # One-shot question
 
   # Configuration
@@ -1142,7 +1146,8 @@ Examples:
     config_parser.add_argument('--anthropic-key', help='Set Anthropic API key')
     config_parser.add_argument('--openai-key', help='Set OpenAI API key')
     config_parser.add_argument('--default-model', choices=[
-        'claude', 'gpt5', 'gpt5-chat', 'gpt5-codex', 'gpt4', 'gpt4o'
+        'claude', 'claude-sonnet', 'claude-opus', 'claude-haiku',
+        'gpt5', 'gpt5-mini', 'gpt5-nano', 'gpt4o'
     ], help='Set default model')
     config_parser.set_defaults(func=cmd_config)
 

@@ -1,17 +1,21 @@
 # Project Onboarding & Scoping
 
+**Status:** Product/design document for an optional future onboarding flow.
+
+The current RecCli CLI does not implement `.devproject` onboarding. This document describes one possible future flow for creating a project-outline file, not a required first-run path. The intended product behavior is that RecCli can start working from `.devsession` alone and add `.devproject` later if the user wants a project-level outline.
+
 ## Overview
 
 Conversational onboarding uses an **AI-guided project scoping interview** to capture intent, goals, and requirements that can't be inferred from code alone.
 
-This creates a strong foundation for the .devproject file with strategic context (purpose, users, goals) that code scanning can't reveal.
+This creates a strong foundation for an optional `.devproject` file with strategic context (purpose, users, goals) that code scanning can't reveal.
 
 ## When Onboarding is Triggered
 
 Conversational onboarding is used in two scenarios:
 
 ### 1. Empty Projects (Automatic)
-When RecCli detects a project with **no code files** (< 3 files excluding README, LICENSE, .git):
+When RecCli detects a project with **no code files** (< 3 files excluding README, LICENSE, .git), onboarding is the clearest path because there is little existing project evidence to infer from:
 ```
 Reason: No code to scan, so capture intent upfront
 Flow: Conversational interview → Creates .devproject → User starts coding
@@ -19,10 +23,10 @@ Benefit: AI has full strategic context from first line of code
 ```
 
 ### 2. Existing Codebases (User Choice)
-When RecCli detects a project with **existing code**, user chooses:
+When RecCli detects a project with **existing code**, the preferred product behavior is that RecCli can still start immediately, then let the user choose whether to add project-level structure:
 - **Option A:** Scan codebase (fast, technical context only)
 - **Option B:** Answer questions (slower, strategic context too) ← Onboarding
-- **Option C:** Minimal setup (skip both)
+- **Option C:** Minimal setup (skip both and start recording)
 
 ```
 Reason: User wants business/product context captured, not just tech stack
@@ -42,7 +46,7 @@ Benefit: .devproject has both technical AND strategic context
 - What success looks like (goals, metrics)
 - Strategic decisions (not just technical ones)
 
-**Solution:** Ask upfront in natural conversation, store in .devproject, reference throughout development.
+**Solution:** When useful, ask for strategic context in natural conversation, store it in `.devproject`, and reference it throughout development. But do not make that a prerequisite for using RecCli on an existing repo.
 
 ---
 
@@ -50,12 +54,13 @@ Benefit: .devproject has both technical AND strategic context
 
 **When to trigger:**
 - ✅ RecCli starts in directory without .devproject
-- ✅ User runs `reccli init`
+- ✅ User runs a future `reccli init`-style command
 - ✅ User selects "Create New Project" from dropdown
 
 **Skip if:**
 - ❌ .devproject already exists
 - ❌ User explicitly skips: "just start recording"
+- ❌ RecCli already has enough session history to generate it later
 
 ---
 
@@ -169,7 +174,7 @@ Full project scoping, best for serious projects
 🤖: What are your core features? (List 3-5 main features you plan to build)
 
 👤: [AI helps format as bullet list]
-   • Record terminal sessions (asciinema integration)
+   • Record terminal sessions (native PTY/WAL recording)
    • AI-powered session summarization
    • Smart context loading with vector search
    • .devsession format for portable context
@@ -265,13 +270,13 @@ Full project scoping, best for serious projects
     "platform": "cli",
     "languages": ["Python"],
     "frameworks": [],
-    "key_dependencies": ["anthropic", "sentence-transformers", "asciinema"],
+    "key_dependencies": ["anthropic", "sentence-transformers"],
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
     "llm_model": "claude-sonnet-4.5"
   },
 
   "core_features": [
-    "Record terminal sessions (asciinema integration)",
+    "Record terminal sessions (native PTY/WAL recording)",
     "AI-powered session summarization",
     "Smart context loading with vector search",
     ".devsession format for portable context",
@@ -391,7 +396,7 @@ Includes everything from Standard Setup, plus:
    UI/UX:
    - Design philosophy: [e.g., "Minimal, unobtrusive"]
    - Key UX principles: [e.g., "Zero friction, automatic everything"]
-   - Inspiration: [e.g., "Inspired by asciinema simplicity"]
+   - Inspiration: [e.g., "Inspired by terminal-native session capture"]
 
    Branding:
    - Color scheme: [e.g., "Terminal-friendly (green/black)"]

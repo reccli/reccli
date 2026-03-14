@@ -6,8 +6,8 @@ Test token counting functionality
 import sys
 from pathlib import Path
 
-# Add reccli to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add package root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from reccli.devsession import DevSession
 from reccli.tokens import TokenCounter

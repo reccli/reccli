@@ -1,41 +1,27 @@
 #!/bin/bash
-# RecCli Installation Script
+# RecCli local development install helper
 
 set -e
 
-echo "🚀 Installing RecCli..."
-
-# Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
-LAUNCH_AGENT_PLIST="com.reccli.watcher.plist"
 
-# Create LaunchAgents directory if it doesn't exist
-mkdir -p "$LAUNCH_AGENT_DIR"
+echo "Installing RecCli local dependencies..."
+echo
 
-# Copy the plist file and update the paths
-echo "📝 Installing LaunchAgent..."
-cat "$SCRIPT_DIR/$LAUNCH_AGENT_PLIST" | \
-    sed "s|/Users/will/coding-projects/reccli/reccli.py|$SCRIPT_DIR/reccli.py|g" | \
-    sed "s|/usr/local/bin/python3|$(which python3)|g" > "$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST"
+cd "$SCRIPT_DIR"
 
-# Load the LaunchAgent
-echo "🔄 Loading LaunchAgent..."
-launchctl unload "$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-launchctl load "$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST"
+echo "1. Installing Python dependencies"
+python3 -m pip install -r requirements.txt
 
-echo ""
-echo "✅ RecCli installed successfully!"
-echo ""
-echo "🎉 The watcher is now running in the background"
-echo "   - Opens a popup automatically when you open a Terminal window"
-echo "   - Will auto-start on system login"
-echo ""
-echo "Commands:"
-echo "  python3 $SCRIPT_DIR/reccli.py watch     - Start watcher (already running)"
-echo "  python3 $SCRIPT_DIR/reccli.py launch    - Launch for current terminals only"
-echo "  python3 $SCRIPT_DIR/reccli.py killall   - Stop all reccli popups"
-echo "  python3 $SCRIPT_DIR/reccli.py status    - View recording stats"
-echo ""
-echo "📂 Recordings saved to: ~/.reccli/recordings"
-echo "📝 Logs: /tmp/reccli_watcher.log"
+echo
+echo "2. Installing and building TypeScript UI"
+cd "$SCRIPT_DIR/packages/reccli-core/ui"
+npm install
+npm run build
+
+echo
+echo "RecCli local install complete."
+echo
+echo "Run commands from the repo root like:"
+echo "  PYTHONPATH=packages/reccli-core python3 -m reccli.cli --help"
+echo "  PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat"

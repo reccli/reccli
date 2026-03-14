@@ -1,5 +1,9 @@
 # RecCli v2 Design Decisions
 
+**Status:** Historical design-decision log.
+
+This file captures decision-making during earlier implementation phases. It is useful for rationale, but [PROJECT_PLAN.md](/Users/will/coding-projects/RecCli/PROJECT_PLAN.md) and the current architecture/spec docs are the canonical description of the project now.
+
 ## Phase 4: Single-Stage vs Two-Stage Summarization
 
 ### The Question
@@ -712,14 +716,14 @@ def format_duration(seconds: float) -> str:
 ## Format Standardization: .devsession Only
 
 ### The Question
-Should we support .cast (asciinema) format for exports?
+Should we support .cast format for exports?
 
 ### The Answer: **No - .devsession Only**
 
 ### Reasoning
 
 **Use cases for .cast format:**
-1. ~~Replay in asciinema player~~ → Not a use case (conversation matters, not playback)
+1. ~~Replay in a terminal cast player~~ → Not a use case (conversation matters, not playback)
 2. ~~Compatibility with existing tools~~ → We're not a terminal recorder, we're a conversation recorder
 3. ~~Standard format~~ → .devsession is our standard
 

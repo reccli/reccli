@@ -1,5 +1,9 @@
 # Session Storage Strategy
 
+**Status:** Design document for an optional future project-layer storage model.
+
+The live CLI currently defaults to the configured sessions directory under `~/reccli/sessions`. This document describes a richer project-root storage strategy centered on `.devproject` and `.devsessions/`, which is not yet the mainline implementation and should be treated as optional, not required for basic RecCli use.
+
 ## Overview
 
 Where should .devsession files be stored? How should they be named? When should .devproject be updated? This document defines the complete storage strategy for session continuity.
@@ -38,10 +42,10 @@ Where should .devsession files be stored? How should they be named? When should 
 - When portability matters
 - When you might want to commit sessions (open source)
 
-### Option B: Home Directory `~/.reccli/sessions/{project-name}/`
+### Option B: Home Directory `~/reccli/sessions/{project-name}/`
 
 ```
-~/.reccli/
+~/reccli/
 ├── config.json
 ├── projects.json
 └── sessions/
@@ -88,7 +92,7 @@ Where should .devsession files be stored? How should they be named? When should 
 - Network drives / cloud sync
 - Specific backup strategy
 
-## Recommended Default: Option A (`.devsessions/` in project root)
+## Proposed Future Default: Option A (`.devsessions/` in project root)
 
 **Why:**
 - Natural organization (sessions with project)
@@ -743,7 +747,7 @@ allow_manual_steering(session)
 ├────────────────────────────────────────────┤
 │  Storage Location:                         │
 │  ● Project root (.devsessions/ folder)     │
-│  ○ Home directory (~/.reccli/sessions/)    │
+│  ○ Home directory (~/reccli/sessions/)     │
 │  ○ Custom location: [Browse...]            │
 │                                            │
 │  Naming Format:                            │
@@ -795,7 +799,7 @@ allow_manual_steering(session)
 ### For Sensitive Projects
 
 **Recommended:**
-- Storage: Home directory (`~/.reccli/sessions/`)
+- Storage: Home directory (`~/reccli/sessions/`)
 - Naming: Timestamp format
 - Gitignore: N/A (not in project)
 - Encryption: Yes (optional password)
@@ -808,10 +812,10 @@ allow_manual_steering(session)
 
 ## Summary
 
-**Storage Location:** `.devsessions/` in project root (default)
+**Storage Location:** Current CLI uses `~/reccli/sessions/`; proposed project-root strategy uses `.devsessions/`
 **Naming:** `session-{timestamp}-{id}.devsession`
-**.gitignore:** Auto-added (privacy by default)
-**.devproject updates:** Session end AND compaction (190K)
+**.gitignore:** Project-root strategy would manage this explicitly or by user confirmation
+**.devproject updates:** Planned project-layer behavior, not current CLI default
 **Continuation:** Load most recent session, compact intelligently
 
 **Result:** Frictionless continuation with intelligent context management.

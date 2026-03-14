@@ -10,7 +10,6 @@ from .recorder import DevsessionRecorder
 from .devsession import DevSession
 from .llm import LLMSession, chat_session, one_shot_query
 from .config import Config
-from .cli import main
 
 __all__ = [
     'DevsessionRecorder',
@@ -18,6 +17,5 @@ __all__ = [
     'LLMSession',
     'chat_session',
     'one_shot_query',
-    'Config',
-    'main'
+    'Config'
 ]

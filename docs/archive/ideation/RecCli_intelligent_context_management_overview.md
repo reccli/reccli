@@ -929,9 +929,9 @@ The "What is this project?" layer**
   "project_overview": {
     "name": "RecCli",
     "description": "CLI terminal recorder with AI-powered session management",
-    "tech_stack": ["Python", "tkinter", "asciinema", "Claude API"],
+    "tech_stack": ["Python", "tkinter", "Claude API"],
     "architecture": {
-      "recording": "asciinema-based terminal capture",
+      "recording": "native terminal capture",
       "ui": "2-button overlay (REC/STOP + Settings)",
       "storage": "Dual-layer .devsession format with vector embeddings"
     },

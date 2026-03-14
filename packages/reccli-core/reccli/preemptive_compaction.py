@@ -10,6 +10,7 @@ The breakthrough: Beat Claude Code to compaction, use OUR custom prompt.
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from pathlib import Path
+import hashlib
 import json
 
 from .tokens import TokenCounter
@@ -39,6 +40,9 @@ class PreemptiveCompactor:
     WARN_THRESHOLD = 180_000
     COMPACT_THRESHOLD = 190_000
     TARGET_POST_COMPACTION = 28_000  # ~25-30K target
+    DELTA_COMPACT_THRESHOLD = 12_000
+    MIN_PENDING_MESSAGES = 12
+    OPEN_TAIL_MESSAGES = 20
 
     def __init__(
         self,
@@ -72,6 +76,7 @@ class PreemptiveCompactor:
         self.compaction_triggered = False
         self.last_warning_at = 0
         self.compaction_count = 0
+        self.last_compacted_frontier = None
 
     def check_and_compact(self) -> Optional[Dict]:
         """
@@ -82,6 +87,9 @@ class PreemptiveCompactor:
         """
         # Calculate current token count
         tokens = self._calculate_total_tokens()
+        frontier_index = self.session.get_summary_frontier_index()
+        pending_messages = len(self.session.get_pending_conversation(frontier_index))
+        pending_tokens = self.session.get_pending_token_count(frontier_index, self.model)
 
         # Update session token_counts
         self.session.token_counts = {
@@ -92,10 +100,24 @@ class PreemptiveCompactor:
             "last_updated": datetime.now().isoformat()
         }
 
-        # Check thresholds
+        should_compact = False
+        reason = "token_limit"
+
         if tokens >= self.COMPACT_THRESHOLD:
-            if not self.compaction_triggered:
-                return self.trigger_compaction(tokens)
+            should_compact = True
+            reason = "token_limit"
+        elif (
+            pending_messages >= self.MIN_PENDING_MESSAGES
+            and pending_tokens >= self.DELTA_COMPACT_THRESHOLD
+        ):
+            should_compact = True
+            reason = "frontier_budget"
+
+        if should_compact:
+            close_until = self._determine_compaction_boundary(frontier_index)
+            frontier_target = close_until - 1 if close_until > 0 else None
+            if frontier_target != self.last_compacted_frontier:
+                return self.trigger_compaction(tokens, reason=reason, close_until=close_until)
 
         elif tokens >= self.WARN_THRESHOLD:
             # Warn every 5K tokens to avoid spam
@@ -105,7 +127,7 @@ class PreemptiveCompactor:
 
         return None
 
-    def trigger_compaction(self, tokens_before: int) -> Dict:
+    def trigger_compaction(self, tokens_before: int, reason: str = "token_limit", close_until: Optional[int] = None) -> Dict:
         """
         Execute preemptive compaction
 
@@ -122,13 +144,19 @@ class PreemptiveCompactor:
         print("📦 Compacting with .devsession strategy...")
         print()
 
+        if close_until is None:
+            close_until = self._determine_compaction_boundary(self.session.get_summary_frontier_index())
+        frontier_start = self.session.get_summary_frontier_index()
+
         # Log compaction start
         operation_id = self.compaction_log.log_compaction_start(
             session_data_before=self.session.to_dict(),
             metadata={
-                'reason': 'token_limit',
+                'reason': reason,
                 'tokens_before': tokens_before,
-                'threshold': self.COMPACT_THRESHOLD
+                'threshold': self.COMPACT_THRESHOLD,
+                'frontier_start': frontier_start,
+                'close_until': close_until,
             }
         )
 
@@ -139,10 +167,14 @@ class PreemptiveCompactor:
         try:
             # Step 1: Generate fresh summary with custom prompt
             print("📝 Generating summary with custom prompt...")
-            summary = self._generate_summary()
+            summary = self._generate_summary(close_until)
 
             if summary:
                 self.session.summary = summary
+                from .summary_schema import ensure_summary_span_links
+
+                self.session.spans = ensure_summary_span_links(summary, self.session.spans)
+                self.session.replace_open_tail_span(close_until)
                 print(f"   ✓ Summary generated ({len(summary.get('decisions', []))} decisions, "
                       f"{len(summary.get('code_changes', []))} code changes)")
             else:
@@ -187,6 +219,8 @@ class PreemptiveCompactor:
                 'tokens_before': tokens_before,
                 'tokens_after': tokens_after,
                 'summary_id': summary.get('id'),
+                'summary_frontier_start': frontier_start,
+                'summary_frontier_end': close_until - 1 if close_until > 0 else None,
                 'retained_spans': [s['id'] for s in relevant_spans],
                 'wpc_predictions': [p['id'] for p in wpc_predictions],
                 'compaction_number': self.compaction_count + 1
@@ -215,6 +249,7 @@ class PreemptiveCompactor:
             # Update state
             self.compaction_triggered = True
             self.compaction_count += 1
+            self.last_compacted_frontier = self.session.summary_sync.get("last_synced_msg_index")
 
             # Print summary
             print()
@@ -262,15 +297,46 @@ class PreemptiveCompactor:
         print(f"   Compaction will trigger at {self.COMPACT_THRESHOLD:,} tokens ({remaining:,} remaining)")
         print()
 
-    def _generate_summary(self) -> Dict:
-        """Generate summary using custom prompt"""
-        if not self.llm_client:
-            print("⚠️  No LLM client available - cannot generate summary")
-            print("   Compaction will proceed without AI-generated summary")
-            return None
+    def _determine_compaction_boundary(self, frontier_index: int) -> int:
+        """Choose an exclusive end index for the next closed compaction window."""
+        if not self.session.conversation:
+            return 0
+
+        conversation_length = len(self.session.conversation)
+        if frontier_index >= conversation_length:
+            return conversation_length
+
+        tail_size = min(self.OPEN_TAIL_MESSAGES, max(0, conversation_length - frontier_index - 1))
+        close_until = conversation_length - tail_size
+        if close_until <= frontier_index:
+            close_until = conversation_length
+        return max(frontier_index, min(close_until, conversation_length))
+
+    def _generate_summary(self, close_until: int) -> Optional[Dict]:
+        """Generate or update summary up to the closed frontier."""
+        frontier_index = self.session.get_summary_frontier_index()
+        if close_until <= 0:
+            return self.session.summary
+
+        closed_conversation = self.session.conversation[:close_until]
+        if not closed_conversation:
+            return self.session.summary
+
+        session_str = json.dumps(closed_conversation, sort_keys=True)
+        session_hash = hashlib.blake2b(session_str.encode(), digest_size=16).hexdigest()
+
+        if self.session.summary and frontier_index < close_until:
+            return self.summarizer.update_summary_incrementally(
+                conversation=self.session.conversation,
+                existing_summary=self.session.summary,
+                start_index=frontier_index,
+                end_index=close_until,
+                session_hash=session_hash,
+            )
 
         return self.summarizer.summarize_session(
-            conversation=self.session.conversation
+            conversation=closed_conversation,
+            session_hash=session_hash,
         )
 
     def _ensure_embeddings(self):
@@ -395,6 +461,8 @@ class PreemptiveCompactor:
 
         return {
             'current_tokens': tokens,
+            'pending_tokens': self.session.get_pending_token_count(model=self.model),
+            'pending_messages': len(self.session.get_pending_conversation()),
             'warn_threshold': self.WARN_THRESHOLD,
             'compact_threshold': self.COMPACT_THRESHOLD,
             'percentage': (tokens / self.COMPACT_THRESHOLD) * 100,

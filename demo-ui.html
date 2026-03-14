@@ -209,15 +209,15 @@
         <div class="recordings">
             <h3 style="margin-top: 0;">📁 Recent Recordings</h3>
             <div class="recording-item">
-                <span class="filename">session_20251014_143022.cast</span>
+                <span class="filename">session_20251014_143022.devsession</span>
                 <span class="duration">2:34</span>
             </div>
             <div class="recording-item">
-                <span class="filename">debug_session.cast</span>
+                <span class="filename">debug_session.devsession</span>
                 <span class="duration">5:12</span>
             </div>
             <div class="recording-item">
-                <span class="filename">deployment_log.cast</span>
+                <span class="filename">deployment_log.devsession</span>
                 <span class="duration">1:45</span>
             </div>
         </div>
@@ -268,7 +268,7 @@
                 stopBtn.classList.add('hidden');
                 floatingBtn.classList.remove('recording');
                 btnText.textContent = 'Start Recording';
-                showNotification('✅ Saved: session_' + Date.now() + '.cast');
+                showNotification('✅ Saved: session_' + Date.now() + '.devsession');
 
                 // Stop timer
                 clearInterval(timerInterval);
@@ -297,7 +297,7 @@
         }
 
         function showExport() {
-            const formats = ['asciinema (.cast)', 'Markdown (.md)', 'HTML (.html)'];
+            const formats = ['DevSession (.devsession)', 'Markdown (.md)', 'Plain Text (.txt)'];
             const format = formats[Math.floor(Math.random() * formats.length)];
             showNotification(`📦 Exported to ${format}`);
         }

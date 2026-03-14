@@ -732,7 +732,7 @@ packages/reccli-core/
 │   ├── test_embeddings.py      # NEW - Test embedding providers
 │   ├── test_vector_index.py    # NEW - Test index building
 │   └── test_search.py          # NEW - Test hybrid search
-└── docs/progress/phases/PHASE_5_IMPLEMENTATION.md  # This file
+└── docs/archive/progress/phases/PHASE_5_IMPLEMENTATION.md  # This file
 ```
 
 ---

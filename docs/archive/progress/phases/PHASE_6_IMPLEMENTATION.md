@@ -737,7 +737,7 @@ packages/reccli-core/
 │   ├── test_memory_middleware.py  # NEW
 │   ├── test_wpc.py               # NEW
 │   └── test_post_answer.py       # NEW
-└── docs/progress/phases/PHASE_6_IMPLEMENTATION.md  # This file
+└── docs/archive/progress/phases/PHASE_6_IMPLEMENTATION.md  # This file
 ```
 
 ---
