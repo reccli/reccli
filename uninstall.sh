@@ -1,34 +1,17 @@
 #!/bin/bash
-# RecCli Uninstallation Script
+# RecCli local development cleanup helper
 
 set -e
 
-echo "🗑️  Uninstalling RecCli..."
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
-LAUNCH_AGENT_PLIST="com.reccli.watcher.plist"
+echo "Cleaning local RecCli build artifacts..."
 
-# Stop and unload the LaunchAgent
-if [ -f "$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST" ]; then
-    echo "🛑 Stopping watcher..."
-    launchctl unload "$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-    rm "$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST"
-    echo "✅ LaunchAgent removed"
-fi
+rm -rf "$SCRIPT_DIR/packages/reccli-core/ui/node_modules"
+rm -rf "$SCRIPT_DIR/packages/reccli-core/ui/dist"
 
-# Kill any running instances
-echo "🔪 Killing running instances..."
-pkill -f "reccli.py" || true
-
-# Clean up temp files
-echo "🧹 Cleaning up..."
-rm -f /tmp/reccli_processes.json
-rm -f /tmp/reccli_debug.log
-rm -f /tmp/reccli_watcher.log
-rm -f /tmp/reccli_watcher_error.log
-
-echo ""
-echo "✅ RecCli uninstalled successfully!"
-echo ""
-echo "Note: Your recordings in ~/.reccli/recordings were NOT deleted"
-echo "To remove them: rm -rf ~/.reccli"
+echo
+echo "Removed UI build artifacts."
+echo "User data under ~/reccli/ was not modified."
+echo "To remove local RecCli data manually, run:"
+echo "  rm -rf ~/reccli"

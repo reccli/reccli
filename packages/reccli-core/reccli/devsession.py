@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Any
 class DevSession:
     """Manages .devsession file format"""
 
-    FORMAT_VERSION = "1.0"
+    FORMAT_VERSION = "1.1"
 
     def __init__(self, session_id: Optional[str] = None):
         """
@@ -25,6 +25,11 @@ class DevSession:
         self.session_id = session_id or f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.created = datetime.now().isoformat()
         self.updated = self.created
+        self.metadata = {
+            "session_id": self.session_id,
+            "created_at": self.created,
+            "updated_at": self.updated,
+        }
 
         # Terminal recording layer
         self.terminal_recording = {
@@ -41,6 +46,9 @@ class DevSession:
         # Summary layer (AI-generated)
         self.summary = None
 
+        # Semantic spans linking summary items back to conversation ranges
+        self.spans = []
+
         # Vector index (for semantic search)
         self.vector_index = None
 
@@ -53,6 +61,25 @@ class DevSession:
             "last_updated": None
         }
 
+        # Summary synchronization frontier for rolling compaction/update flows
+        self.summary_sync = {
+            "status": "not_started",
+            "last_synced_msg_id": None,
+            "last_synced_msg_index": None,
+            "updated_at": None,
+            "pending_messages": 0,
+            "pending_tokens": 0,
+        }
+
+        # Embeddings can remain inline for prototyping or be externalized to a sidecar
+        self.embedding_storage = {
+            "mode": "inline",
+            "messages_file": None,
+            "format": None,
+            "external_message_count": 0,
+            "loaded": True,
+        }
+
         # Checksums for event integrity
         self.checksums = {}
 
@@ -61,6 +88,8 @@ class DevSession:
 
         self.episodes = []
         self.current_episode_id = None
+        self.checkpoints = []
+        self.path: Optional[Path] = None
 
     def append_event(self, timestamp: float, event_type: str, data: str) -> str:
         """
@@ -115,6 +144,10 @@ class DevSession:
         if self.summary:
             checksums["summary"] = self._hash_data(self.summary)
 
+        # Hash of spans (if exists)
+        if self.spans:
+            checksums["spans"] = self._hash_data(self.spans)
+
         # Hash of vector index (if exists)
         if self.vector_index:
             checksums["vector_index"] = self._hash_data(self.vector_index)
@@ -147,6 +180,12 @@ class DevSession:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
         # Calculate fresh checksums before saving
+        now = datetime.now().isoformat()
+        self.updated = now
+        self.metadata["session_id"] = self.session_id
+        self.metadata["created_at"] = self.created
+        self.metadata["updated_at"] = now
+        self.refresh_summary_sync()
         self.checksums = self._calculate_checksums()
 
         return {
@@ -154,30 +193,41 @@ class DevSession:
             "version": self.FORMAT_VERSION,
             "session_id": self.session_id,
             "created": self.created,
-            "updated": datetime.now().isoformat(),
+            "updated": now,
+            "metadata": self.metadata,
 
             "terminal_recording": self.terminal_recording,
             "conversation": self.conversation,
             "summary": self.summary,
+            "spans": self.spans,
             "vector_index": self.vector_index,
+            "summary_sync": self.summary_sync,
+            "embedding_storage": self.embedding_storage,
             "token_counts": self.token_counts,
             "checksums": self.checksums,
             "compaction_history": self.compaction_history,
+            "checkpoints": self.checkpoints,
             "episodes": self.episodes,
             "current_episode_id": self.current_episode_id
         }
 
-    def save(self, path: Path, skip_validation: bool = False) -> None:
+    def save(self, path: Optional[Path] = None, skip_validation: bool = False) -> None:
         """
         Save .devsession file with validation
 
         Args:
-            path: Output file path (.devsession extension)
+            path: Output file path (.devsession extension). If omitted, uses the
+                path the session was loaded from or last saved to.
             skip_validation: Skip validation (use with caution)
 
         Raises:
             ValueError: If validation fails and auto-fix cannot repair
         """
+        if path is None:
+            if self.path is None:
+                raise ValueError("Cannot save DevSession without a path")
+            path = self.path
+
         path = Path(path)
 
         # Ensure .devsession extension (but don't add if already present or if it's a .tmp file)
@@ -185,15 +235,19 @@ class DevSession:
         if not (path_str.endswith('.devsession') or path_str.endswith('.devsession.tmp')):
             path = path.with_suffix('.devsession')
 
+        self.path = path
+
         # Validate summary before writing (Safeguard #7)
         if not skip_validation and self.summary and self.conversation:
             from .summary_verification import SummaryVerifier
+            from .summary_schema import ensure_summary_span_links
             from .reindexing import tag_messages_with_ids
 
             # Ensure messages have IDs (needed for validation)
             tag_messages_with_ids(self.conversation)
+            self.spans = ensure_summary_span_links(self.summary, self.spans)
 
-            verifier = SummaryVerifier(self.conversation)
+            verifier = SummaryVerifier(self.conversation, self.spans)
             is_valid, errors = verifier.verify_summary(self.summary)
 
             if not is_valid:
@@ -300,6 +354,15 @@ class DevSession:
                 if "role" not in msg or "content" not in msg:
                     raise ValueError("Conversation messages must have 'role' and 'content'")
 
+        if "metadata" in data and data["metadata"] is not None and not isinstance(data["metadata"], dict):
+            raise ValueError(f"metadata must be object, got {type(data['metadata'])}")
+        if "spans" in data and data["spans"] is not None and not isinstance(data["spans"], list):
+            raise ValueError(f"spans must be array, got {type(data['spans'])}")
+        if "summary_sync" in data and data["summary_sync"] is not None and not isinstance(data["summary_sync"], dict):
+            raise ValueError(f"summary_sync must be object, got {type(data['summary_sync'])}")
+        if "embedding_storage" in data and data["embedding_storage"] is not None and not isinstance(data["embedding_storage"], dict):
+            raise ValueError(f"embedding_storage must be object, got {type(data['embedding_storage'])}")
+
     @classmethod
     def load(cls, path: Path, verify_checksums: bool = True) -> 'DevSession':
         """
@@ -331,15 +394,21 @@ class DevSession:
         session = cls(session_id=data.get("session_id"))
         session.created = data.get("created", session.created)
         session.updated = data.get("updated", session.updated)
+        session.metadata = data.get("metadata", session.metadata)
         session.terminal_recording = data.get("terminal_recording", session.terminal_recording)
         session.conversation = data.get("conversation", [])
         session.summary = data.get("summary")
+        session.spans = data.get("spans", [])
         session.vector_index = data.get("vector_index")
+        session.summary_sync = data.get("summary_sync", session.summary_sync)
+        session.embedding_storage = data.get("embedding_storage", session.embedding_storage)
         session.token_counts = data.get("token_counts", session.token_counts)
         session.checksums = data.get("checksums", {})
         session.compaction_history = data.get("compaction_history", [])
+        session.checkpoints = data.get("checkpoints", [])
         session.episodes = data.get("episodes", [])
         session.current_episode_id = data.get("current_episode_id")
+        session.path = path
 
         # Verify checksums
         if verify_checksums and not session.verify_checksums():
@@ -358,6 +427,189 @@ class DevSession:
     def get_event_count(self) -> int:
         """Get total number of events"""
         return len(self.terminal_recording["events"])
+
+    def _resolve_message_index(self, message_id: str) -> Optional[int]:
+        for idx, msg in enumerate(self.conversation):
+            if msg.get("_message_id") == message_id or msg.get("id") == message_id or msg.get("_id") == message_id:
+                return idx
+        return None
+
+    def refresh_summary_sync(self) -> Dict[str, Any]:
+        """
+        Update the summary frontier metadata.
+
+        The frontier marks the last message safely represented in summary/span form.
+        It enables rolling summary updates without re-summarizing the entire session.
+        """
+        frontier_end = None
+
+        if self.spans:
+            frontier_end = max(
+                (
+                    span.get("end_index")
+                    for span in self.spans
+                    if span.get("status", "closed") != "open" and isinstance(span.get("end_index"), int)
+                ),
+                default=None,
+            )
+
+        if frontier_end is None and self.summary:
+            categories = ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]
+            frontier_end = max(
+                (
+                    item.get("message_range", {}).get("end_index")
+                    for category in categories
+                    for item in self.summary.get(category, [])
+                    if isinstance(item.get("message_range", {}).get("end_index"), int)
+                ),
+                default=None,
+            )
+
+        if frontier_end is None:
+            self.summary_sync = {
+                "status": "not_started" if not self.summary else "pending",
+                "last_synced_msg_id": None,
+                "last_synced_msg_index": None,
+                "updated_at": datetime.now().isoformat(),
+                "pending_messages": sum(1 for msg in self.conversation if not msg.get("deleted")),
+                "pending_tokens": self.get_pending_token_count(0),
+            }
+            return self.summary_sync
+
+        frontier_end = max(0, min(frontier_end, len(self.conversation)))
+        last_synced_idx = frontier_end - 1 if frontier_end > 0 else None
+        last_synced_id = None
+        if last_synced_idx is not None and last_synced_idx < len(self.conversation):
+            msg = self.conversation[last_synced_idx]
+            last_synced_id = msg.get("_message_id") or msg.get("id") or msg.get("_id") or f"msg_{last_synced_idx + 1:03d}"
+
+        pending_messages = sum(
+            1
+            for idx, msg in enumerate(self.conversation)
+            if idx >= frontier_end and not msg.get("deleted")
+        )
+        status = "synced" if pending_messages == 0 else "pending"
+        self.summary_sync = {
+            "status": status,
+            "last_synced_msg_id": last_synced_id,
+            "last_synced_msg_index": last_synced_idx,
+            "updated_at": datetime.now().isoformat(),
+            "pending_messages": pending_messages,
+            "pending_tokens": self.get_pending_token_count(frontier_end),
+        }
+        return self.summary_sync
+
+    def get_summary_frontier_index(self) -> int:
+        """Return the exclusive frontier index already represented in closed summary/span form."""
+        self.refresh_summary_sync()
+        last_synced = self.summary_sync.get("last_synced_msg_index")
+        if isinstance(last_synced, int):
+            return last_synced + 1
+        return 0
+
+    def get_pending_conversation(self, start_index: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Return non-deleted messages beyond the current summary frontier."""
+        frontier = self.get_summary_frontier_index() if start_index is None else start_index
+        return [
+            msg for idx, msg in enumerate(self.conversation)
+            if idx >= frontier and not msg.get("deleted")
+        ]
+
+    def get_pending_token_count(self, start_index: Optional[int] = None, model: str = "claude-3-5-sonnet-20241022") -> int:
+        """Estimate token count for uncompacted messages beyond the frontier."""
+        from .tokens import TokenCounter
+
+        frontier = self.get_summary_frontier_index() if start_index is None else start_index
+        pending = [
+            msg for idx, msg in enumerate(self.conversation)
+            if idx >= frontier and not msg.get("deleted")
+        ]
+        if not pending:
+            return 0
+        return TokenCounter(model).count_conversation(pending)
+
+    def replace_open_tail_span(self, start_index: int, topic: str = "active conversation tail") -> Optional[Dict[str, Any]]:
+        """
+        Replace any existing open tail span with a new one starting at `start_index`.
+        Returns the new open span or None if no tail exists.
+        """
+        from .summary_schema import create_span, sort_spans
+
+        self.spans = [span for span in self.spans if span.get("status") != "open"]
+
+        if start_index >= len(self.conversation):
+            self.spans = sort_spans(self.spans)
+            return None
+
+        start_msg = self.conversation[start_index]
+        latest_index = len(self.conversation) - 1
+        latest_msg = self.conversation[latest_index]
+        open_span = create_span(
+            kind="active_context",
+            start_message_id=start_msg.get("_message_id") or start_msg.get("id") or start_msg.get("_id") or f"msg_{start_index + 1:03d}",
+            start_index=start_index,
+            topic=topic,
+            status="open",
+            latest_message_id=latest_msg.get("_message_id") or latest_msg.get("id") or latest_msg.get("_id") or f"msg_{latest_index + 1:03d}",
+            latest_index=latest_index,
+            t_first=start_msg.get("timestamp"),
+            t_last=latest_msg.get("timestamp"),
+        )
+        self.spans.append(open_span)
+        self.spans = sort_spans(self.spans)
+        return open_span
+
+    def tombstone_message(self, message_id: str, reason: str = "redacted") -> bool:
+        """
+        Tombstone a message instead of deleting it.
+
+        This preserves array indices and message IDs so span and summary references
+        remain stable even when content must be removed from active use.
+        """
+        idx = self._resolve_message_index(message_id)
+        if idx is None:
+            return False
+
+        message = self.conversation[idx]
+        if message.get("deleted"):
+            return True
+
+        content = message.get("content", "")
+        if content:
+            message["content_hash_before_delete"] = hashlib.blake2b(
+                content.encode("utf-8"), digest_size=16
+            ).hexdigest()
+        message["content"] = "[TOMBSTONED]"
+        message["deleted"] = True
+        message["deleted_at"] = datetime.now().isoformat()
+        message["delete_reason"] = reason
+        message.pop("embedding", None)
+        message.pop("embedding_ref", None)
+        self.refresh_summary_sync()
+        return True
+
+    def redact_message(self, message_id: str, redacted_content: str, reason: str = "manual_redaction") -> bool:
+        """
+        Redact a message in place without deleting its identity.
+        """
+        idx = self._resolve_message_index(message_id)
+        if idx is None:
+            return False
+
+        message = self.conversation[idx]
+        original = message.get("content", "")
+        message["content"] = redacted_content
+        message["redacted"] = True
+        message["redacted_at"] = datetime.now().isoformat()
+        message["redaction_reason"] = reason
+        if original:
+            message["content_hash_before_redaction"] = hashlib.blake2b(
+                original.encode("utf-8"), digest_size=16
+            ).hexdigest()
+        message.pop("embedding", None)
+        message.pop("embedding_ref", None)
+        self.refresh_summary_sync()
+        return True
 
     def parse_conversation(self) -> List[Dict]:
         """
@@ -489,11 +741,15 @@ class DevSession:
             session_hash=session_hash,
             redact_secrets=redact_secrets
         )
+        from .summary_schema import ensure_summary_span_links
+
+        self.spans = ensure_summary_span_links(self.summary, self.spans)
+        self.refresh_summary_sync()
 
         print("✅ Summary generated successfully")
         return True
 
-    def generate_embeddings(self, provider=None, force: bool = False) -> int:
+    def generate_embeddings(self, provider=None, force: bool = False, storage_mode: Optional[str] = None) -> int:
         """
         Generate embeddings for all messages in conversation
 
@@ -537,6 +793,8 @@ class DevSession:
         indices_to_embed = []
 
         for i, msg in enumerate(self.conversation):
+            if msg.get("deleted"):
+                continue
             if force or 'embedding' not in msg:
                 messages_to_embed.append(msg)
                 indices_to_embed.append(i)
@@ -565,8 +823,86 @@ class DevSession:
             msg['embed_ts'] = embed_ts
             msg['text_hash'] = provider.compute_text_hash(msg['content'])
 
+        requested_mode = storage_mode or self.embedding_storage.get("mode", "inline")
+        if requested_mode == "external" and self.path is not None:
+            self.externalize_message_embeddings()
+
         print(f"✓ Generated {len(embeddings)} embeddings ({provider.dimensions}D)")
         return len(embeddings)
+
+    def externalize_message_embeddings(self, sidecar_path: Optional[Path] = None) -> Optional[Path]:
+        """
+        Move inline message embeddings to a sidecar `.npy` file to keep `.devsession`
+        JSON lightweight. Embeddings can be rehydrated on demand later.
+        """
+        if sidecar_path is None:
+            if self.path is None:
+                return None
+            sidecar_path = self.path.with_suffix(".embeddings.npy")
+
+        rows = []
+        refs = []
+        for idx, msg in enumerate(self.conversation):
+            if msg.get("deleted"):
+                msg.pop("embedding", None)
+                msg.pop("embedding_ref", None)
+                continue
+            embedding = msg.get("embedding")
+            if embedding:
+                rows.append(embedding)
+                refs.append(idx)
+
+        if not rows:
+            return None
+
+        import numpy as np
+
+        matrix = np.array(rows, dtype=np.float32)
+        np.save(sidecar_path, matrix)
+
+        for ref_index, msg_index in enumerate(refs):
+            msg = self.conversation[msg_index]
+            msg["embedding_ref"] = ref_index
+            msg.pop("embedding", None)
+
+        self.embedding_storage = {
+            "mode": "external",
+            "messages_file": str(sidecar_path.name if self.path else sidecar_path),
+            "format": "npy",
+            "external_message_count": len(refs),
+            "loaded": False,
+        }
+        return sidecar_path
+
+    def load_external_message_embeddings(self) -> int:
+        """Hydrate message embeddings from sidecar storage on demand."""
+        if self.embedding_storage.get("mode") != "external":
+            return 0
+
+        messages_file = self.embedding_storage.get("messages_file")
+        if not messages_file:
+            return 0
+
+        path = Path(messages_file)
+        if not path.is_absolute() and self.path is not None:
+            path = self.path.parent / path
+        if not path.exists():
+            return 0
+
+        import numpy as np
+
+        matrix = np.load(path, mmap_mode="r")
+        hydrated = 0
+        for msg in self.conversation:
+            ref = msg.get("embedding_ref")
+            if msg.get("deleted"):
+                continue
+            if isinstance(ref, int) and 0 <= ref < len(matrix) and "embedding" not in msg:
+                msg["embedding"] = matrix[ref].tolist()
+                hydrated += 1
+
+        self.embedding_storage["loaded"] = True
+        return hydrated
 
     def pin_summary_item(self, item_id: str) -> bool:
         """

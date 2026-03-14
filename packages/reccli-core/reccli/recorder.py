@@ -292,7 +292,7 @@ class BackgroundRecorder:
 
         if sys.platform == 'darwin':  # macOS
             # Use AppleScript to type the reccli command into the terminal
-            # This creates a nested recording session (like asciinema rec)
+            # This creates a nested recording session in a new terminal shell
             # Find the reccli-v2.py entry point
             reccli_script = Path(__file__).parent.parent / 'reccli-v2.py'
 

@@ -1,5 +1,7 @@
 # Streaming Hybrid Retrieval
 
+**Status:** Implementation note for the live progressive retrieval path in `memory_middleware.py` and `streaming_retrieval.py`.
+
 **Progressive enhancement for intelligent context loading**
 
 ## Overview

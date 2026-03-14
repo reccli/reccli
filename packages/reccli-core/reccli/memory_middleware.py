@@ -450,7 +450,12 @@ class MemoryMiddleware:
 
         results = []
 
+        if getattr(self.session, "embedding_storage", {}).get("mode") == "external" and not getattr(self.session, "embedding_storage", {}).get("loaded"):
+            self.session.load_external_message_embeddings()
+
         for msg in messages:
+            if msg.get("deleted"):
+                continue
             if 'embedding' not in msg:
                 continue
 
@@ -522,26 +527,29 @@ class MemoryMiddleware:
 
     def _is_in_summary(self, msg: Dict) -> bool:
         """Check if message is referenced in summary"""
-        msg_id = msg.get('message_id', msg.get('id', ''))
+        msg_id = (
+            msg.get('message_id')
+            or msg.get('id')
+            or msg.get('_message_id')
+            or msg.get('_id')
+            or ''
+        )
         if not msg_id or not self.session.summary:
             return False
 
         # Check decisions
         for dec in self.session.summary.get('decisions', []):
-            message_ids = dec.get('message_ids', [])
-            if msg_id in message_ids:
+            if msg_id in dec.get('references', []):
                 return True
 
         # Check problems
         for prob in self.session.summary.get('problems_solved', []):
-            message_ids = prob.get('message_ids', [])
-            if msg_id in message_ids:
+            if msg_id in prob.get('references', []):
                 return True
 
         # Check code changes
         for change in self.session.summary.get('code_changes', []):
-            message_ids = change.get('message_ids', [])
-            if msg_id in message_ids:
+            if msg_id in change.get('references', []):
                 return True
 
         return False

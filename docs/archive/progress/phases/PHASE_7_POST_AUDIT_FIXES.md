@@ -68,9 +68,9 @@
 
 ### New Files (3)
 
-1. **`PHASE_7_AUDIT.md`** - Self-audit report
-2. **`PHASE_7_TESTING.md`** - How to test with API key
-3. **`PHASE_7_POST_AUDIT_FIXES.md`** - This file
+1. **`docs/archive/decisions/PHASE_7_AUDIT.md`** - Self-audit report
+2. **`docs/archive/progress/phases/PHASE_7_TESTING.md`** - How to test with API key
+3. **`docs/archive/progress/phases/PHASE_7_POST_AUDIT_FIXES.md`** - This file
 
 ---
 
@@ -83,7 +83,7 @@
 
 ### ⏳ Functional Tests (Requires API Key)
 - Need Anthropic or OpenAI API key to test fully
-- See `PHASE_7_TESTING.md` for testing instructions
+- See `docs/archive/progress/phases/PHASE_7_TESTING.md` for testing instructions
 - Can test basic CLI commands without API key
 
 ---
@@ -125,7 +125,7 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 ./reccli-v2.py checkpoint list
 ```
 
-**See `PHASE_7_TESTING.md` for detailed testing instructions.**
+**See `docs/archive/progress/phases/PHASE_7_TESTING.md` for detailed testing instructions.**
 
 ---
 
@@ -177,11 +177,11 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 - `reccli/cli.py` ✅ Fixed
 
 **Documentation**:
-- `PHASE_7_IMPLEMENTATION.md` - Original implementation report
-- `PHASE_7_WALKTHROUGH.md` - User guide
-- `PHASE_7_AUDIT.md` - Self-audit report
-- `PHASE_7_TESTING.md` - Testing instructions
-- `PHASE_7_POST_AUDIT_FIXES.md` - This file
+- `docs/archive/progress/phases/PHASE_7_IMPLEMENTATION.md` - Original implementation report
+- `docs/archive/progress/phases/PHASE_7_WALKTHROUGH.md` - User guide
+- `docs/archive/decisions/PHASE_7_AUDIT.md` - Self-audit report
+- `docs/archive/progress/phases/PHASE_7_TESTING.md` - Testing instructions
+- `docs/archive/progress/phases/PHASE_7_POST_AUDIT_FIXES.md` - This file
 
 ---
 
@@ -209,7 +209,7 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 ## Next Steps
 
 ### For You (User)
-1. Read `PHASE_7_TESTING.md`
+1. Read `docs/archive/progress/phases/PHASE_7_TESTING.md`
 2. Install dependencies (`pip3 install anthropic tiktoken ...`)
 3. Configure API key (`./reccli-v2.py config --anthropic-key ...`)
 4. Run Level 1 tests (5 minutes)

@@ -10,6 +10,8 @@ Its core idea is a tri-layer memory system:
 
 with temporal links between the layers so an agent can recover exact prior reasoning instead of relying on lossy compaction or flat retrieval.
 
+Today, the repo fully implements the session-summary and full-conversation layers. The project-outline layer exists today as an optional augmentation path: the middleware can read a `.devproject` file if one exists, but the main CLI does not require it and can operate entirely from `.devsession`.
+
 ## What Exists Today
 
 The current repo contains a working implementation of the core memory stack:
@@ -21,21 +23,22 @@ The current repo contains a working implementation of the core memory stack:
 - unified vector indexing and hybrid retrieval
 - memory middleware and streaming retrieval
 - preemptive compaction, checkpoints, and episodes
-- a TypeScript + Ink terminal UI layered over the Python core
+- a TypeScript + Ink terminal UI layered over the Python core through a packaged JSON-RPC backend
 
 ## Current Repo Status
 
-This repository has evolved significantly and the packaging surface is still being normalized.
+This repository has evolved significantly, but the current docs and plan now treat the live codebase rather than the historical phase notes as the source of truth.
 
 The canonical code now lives under [packages/reccli-core](/Users/will/coding-projects/RecCli/packages/reccli-core), and the documentation has been reorganized under [docs](/Users/will/coding-projects/RecCli/docs).
 
-If you are evaluating the project, start with the docs rather than older install scripts or marketing pages.
+If you are evaluating the project, start with [PROJECT_PLAN.md](/Users/will/coding-projects/RecCli/PROJECT_PLAN.md) and the docs index rather than older install scripts or historical progress notes.
 
 ## Quick Start
 
 If your environment already has the needed Python dependencies installed, you can invoke the CLI directly:
 
 ```bash
+pip3 install -r requirements.txt
 PYTHONPATH=packages/reccli-core python3 -m reccli.cli --help
 PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat --help
 ```
@@ -62,13 +65,13 @@ RecCli/
 ├── packages/
 │   └── reccli-core/
 │       ├── reccli/              # Python core
+│       ├── backend/             # Python backend for the TypeScript UI bridge
 │       ├── tests/               # Python tests and benchmarks
 │       └── ui/                  # TypeScript + Ink terminal UI
 ├── docs/                        # Architecture, specs, product, reference, history
 ├── apps/                        # Ancillary app surfaces
 ├── examples/
-├── PROJECT_PLAN.md
-└── MVP.md
+└── PROJECT_PLAN.md
 ```
 
 ## Documentation
@@ -81,6 +84,7 @@ Start here:
 - [`.devsession` Format](docs/specs/DEVSESSION_FORMAT.md)
 - [Unified Vector Index](docs/specs/UNIFIED_VECTOR_INDEX.md)
 - [Project Plan](PROJECT_PLAN.md)
+- [Terminal UI Architecture](docs/architecture/RECCLI_CLI_UI.md)
 
 ## Positioning
 
@@ -89,7 +93,7 @@ RecCli should be thought of as memory infrastructure, not primarily as a standal
 The strongest product direction is likely:
 
 - RecCli as the canonical memory engine
-- `.devsession` and `.devproject` as the source-of-truth formats
+- `.devsession` as the required source-of-truth format, with `.devproject` as an optional project-outline companion that can be generated later
 - host integrations, such as an OpenClaw plugin/context engine, as the main distribution surface
 
 ## License

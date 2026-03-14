@@ -101,11 +101,11 @@ summary = detector.assign_episode_ids_to_summary(summary, episodes)
 
 ### 4. Documentation Created
 
-- `PHASE_7_IMPLEMENTATION.md` - Technical completion report
-- `PHASE_7_WALKTHROUGH.md` - User-facing feature walkthrough
-- `PHASE_7_TESTING.md` - How to test with API key
-- `PHASE_7_AUDIT.md` - Self-audit findings
-- `PHASE_7_POST_AUDIT_FIXES.md` - Bug fix summary
+- `docs/archive/progress/phases/PHASE_7_IMPLEMENTATION.md` - Technical completion report
+- `docs/archive/progress/phases/PHASE_7_WALKTHROUGH.md` - User-facing feature walkthrough
+- `docs/archive/progress/phases/PHASE_7_TESTING.md` - How to test with API key
+- `docs/archive/decisions/PHASE_7_AUDIT.md` - Self-audit findings
+- `docs/archive/progress/phases/PHASE_7_POST_AUDIT_FIXES.md` - Bug fix summary
 - `API_KEY_SECURITY.md` - Security analysis and verification
 - `SESSION_2025_11_07_SUMMARY.md` - This file
 - Updated `PROJECT_PLAN.md` - Marked Phase 7 complete
@@ -169,7 +169,7 @@ summary = detector.assign_episode_ids_to_summary(summary, episodes)
 3. Start chat: `./reccli-v2.py chat --model claude`
 4. Have a long conversation (or manually compact with `./reccli-v2.py compact`)
 
-See `PHASE_7_TESTING.md` for detailed instructions.
+See `docs/archive/progress/phases/PHASE_7_TESTING.md` for detailed instructions.
 
 ---
 
@@ -181,7 +181,7 @@ See `PHASE_7_TESTING.md` for detailed instructions.
 **User agreed**: "Go with option A" (fix and test)
 
 ### 2. Single-Stage Summarization by Default
-**Already decided in DESIGN_DECISIONS.md**
+**Already decided in [DESIGN_DECISIONS.md](/Users/will/coding-projects/RecCli/docs/archive/decisions/DESIGN_DECISIONS.md)**
 **Used**: Single-stage Sonnet for simplicity and reliability
 **Cost**: ~$0.52 per compaction (acceptable for infrequent operation)
 
@@ -203,11 +203,11 @@ See `PHASE_7_TESTING.md` for detailed instructions.
 1. `packages/reccli-core/reccli/preemptive_compaction.py`
 2. `packages/reccli-core/reccli/checkpoints.py`
 3. `packages/reccli-core/reccli/episodes.py`
-4. `docs/progress/phases/PHASE_7_IMPLEMENTATION.md`
-5. `docs/progress/phases/PHASE_7_WALKTHROUGH.md`
-6. `docs/progress/phases/PHASE_7_TESTING.md`
-7. `docs/decisions/PHASE_7_AUDIT.md`
-8. `docs/progress/phases/PHASE_7_POST_AUDIT_FIXES.md`
+4. `docs/archive/progress/phases/PHASE_7_IMPLEMENTATION.md`
+5. `docs/archive/progress/phases/PHASE_7_WALKTHROUGH.md`
+6. `docs/archive/progress/phases/PHASE_7_TESTING.md`
+7. `docs/archive/decisions/PHASE_7_AUDIT.md`
+8. `docs/archive/progress/phases/PHASE_7_POST_AUDIT_FIXES.md`
 9. `docs/reference/API_KEY_SECURITY.md`
 10. `docs/progress/session-notes/SESSION_2025_11_07_SUMMARY.md`
 11. Updated `/PROJECT_PLAN.md`
@@ -319,7 +319,7 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 ```
 
 ### Full Testing
-See `PHASE_7_TESTING.md` for complete instructions.
+See `docs/archive/progress/phases/PHASE_7_TESTING.md` for complete instructions.
 
 ---
 

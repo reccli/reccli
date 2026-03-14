@@ -13,6 +13,16 @@ import hashlib
 import numpy as np
 
 
+def get_message_id(msg: Dict, fallback_index: Optional[int] = None) -> Optional[str]:
+    """Resolve the canonical message ID used across summary links and indexes."""
+    return (
+        msg.get("id")
+        or msg.get("_message_id")
+        or msg.get("_id")
+        or (f"msg_{fallback_index + 1:03d}" if fallback_index is not None else None)
+    )
+
+
 def classify_message_type(msg: Dict, summary: Optional[Dict]) -> str:
     """
     Classify message type based on content and summary linkage
@@ -25,19 +35,20 @@ def classify_message_type(msg: Dict, summary: Optional[Dict]) -> str:
 
     # Check if linked to summary
     if summary:
+        msg_id = get_message_id(msg)
         # Check if message is referenced in decisions
         for dec in summary.get('decisions', []):
-            if msg.get('id') in dec.get('message_ids', []):
+            if msg_id and msg_id in dec.get('references', []):
                 return 'decision'
 
         # Check if in problems_solved
         for prob in summary.get('problems_solved', []):
-            if msg.get('id') in prob.get('message_ids', []):
+            if msg_id and msg_id in prob.get('references', []):
                 return 'problem'
 
         # Check if in code_changes
         for change in summary.get('code_changes', []):
-            if msg.get('id') in change.get('message_ids', []):
+            if msg_id and msg_id in change.get('references', []):
                 return 'code'
 
     # Heuristic classification
@@ -72,29 +83,20 @@ def find_summary_ref(msg: Dict, summary: Optional[Dict]) -> Optional[str]:
     Find summary item reference for this message
 
     Returns:
-        Summary item ID (e.g., "dec_001") or None
+        Summary item ID (e.g., "dec_7a1e3f4c") or None
     """
     if not summary:
         return None
 
-    msg_id = msg.get('id')
+    msg_id = get_message_id(msg)
     if not msg_id:
         return None
 
-    # Check decisions
-    for i, dec in enumerate(summary.get('decisions', [])):
-        if msg_id in dec.get('message_ids', []):
-            return f"dec_{i:03d}"
-
-    # Check problems
-    for i, prob in enumerate(summary.get('problems_solved', [])):
-        if msg_id in prob.get('message_ids', []):
-            return f"prob_{i:03d}"
-
-    # Check code changes
-    for i, change in enumerate(summary.get('code_changes', [])):
-        if msg_id in change.get('message_ids', []):
-            return f"code_{i:03d}"
+    # Check summary references
+    for category in ["decisions", "problems_solved", "code_changes", "open_issues", "next_steps"]:
+        for item in summary.get(category, []):
+            if msg_id in item.get("references", []):
+                return item.get("id")
 
     return None
 
@@ -214,6 +216,8 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         from .devsession import DevSession
         try:
             session = DevSession.load(session_file)
+            if getattr(session, "embedding_storage", {}).get("mode") == "external" and not getattr(session, "embedding_storage", {}).get("loaded"):
+                session.load_external_message_embeddings()
         except Exception as e:
             if verbose:
                 print(f"    ⚠️  Failed to load: {e}")
@@ -241,6 +245,8 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         # Extract vectors from conversation
         message_count = 0
         for msg_idx, msg in enumerate(session.conversation):
+            if msg.get("deleted"):
+                continue
             if 'embedding' not in msg:
                 continue
 
@@ -259,9 +265,9 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
 
             # Add to unified index
             index['unified_vectors'].append({
-                'id': f"{session_id}_{msg.get('id', msg_idx)}",
+                'id': f"{session_id}_{get_message_id(msg, msg_idx)}",
                 'session': session_id,
-                'message_id': msg.get('id', f'msg_{msg_idx}'),
+                'message_id': get_message_id(msg, msg_idx),
                 'message_index': msg_idx,
                 'timestamp': timestamp,
 
@@ -426,6 +432,8 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
     from .devsession import DevSession
     try:
         session = DevSession.load(session_file)
+        if getattr(session, "embedding_storage", {}).get("mode") == "external" and not getattr(session, "embedding_storage", {}).get("loaded"):
+            session.load_external_message_embeddings()
     except Exception as e:
         if verbose:
             print(f"   ⚠️  Failed to load: {e}")
@@ -448,6 +456,8 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
     # Extract vectors from new session
     message_count = 0
     for msg_idx, msg in enumerate(session.conversation):
+        if msg.get("deleted"):
+            continue
         if 'embedding' not in msg:
             continue
 
@@ -465,9 +475,9 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
 
         # Add to unified index
         index['unified_vectors'].append({
-            'id': f"{session_id}_{msg.get('id', msg_idx)}",
+            'id': f"{session_id}_{get_message_id(msg, msg_idx)}",
             'session': session_id,
-            'message_id': msg.get('id', f'msg_{msg_idx}'),
+            'message_id': get_message_id(msg, msg_idx),
             'message_index': msg_idx,
             'timestamp': timestamp,
 

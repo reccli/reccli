@@ -1,5 +1,7 @@
 # Phase 7: Testing Guide
 
+**Status note:** Historical testing guide from the Phase 7 delivery pass. Some commands and dependency examples reflect the phase-era workflow rather than the current CLI surface. Use [PROJECT_PLAN.md](/Users/will/coding-projects/RecCli/PROJECT_PLAN.md), [README.md](/Users/will/coding-projects/RecCli/README.md), and the live CLI help for the current runtime contract.
+
 **Date**: 2025-11-07 (Post-Audit)
 **Status**: ✅ Bugs Fixed - Ready for Real Testing
 
@@ -289,7 +291,7 @@ To get full compaction with AI summaries, you must trigger it during a `reccli c
 **Emergency Recovery**:
 ```bash
 # Check compaction log
-ls ~/.reccli/sessions/*-compaction-log.jsonl
+ls ~/reccli/sessions/*-compaction-log.jsonl
 
 # Rollback if needed (implementation has rollback support)
 ```

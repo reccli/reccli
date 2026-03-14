@@ -1,5 +1,9 @@
 # RecCli + .devsession Architecture
 
+**Status:** Mixed architecture document.
+
+The implemented core in the current repo is strongest at the `.devsession`, summary, indexing, retrieval, compaction, checkpoint, and episode layers. Sections that describe `.devproject` as a live project-layer dependency should be read as intended architecture, not fully wired mainline behavior today.
+
 ## Complete System Design
 
 ### Core Principle
@@ -296,8 +300,8 @@ Dataset Size    Search Time    Queries/Second
 This infrastructure enables the .devsession vision of **cross-session intelligence** - search your entire development history across all projects instantly.
 
 **Additional Documentation:**
-- LLM retrieval tools implementation: `docs/progress/phases/PHASE_8_IMPLEMENTATION.md`
-- Performance optimization details: `docs/implementation/indexing/VECTOR_SEARCH_FINAL.md`
+- LLM retrieval tools implementation: `docs/archive/progress/phases/PHASE_8_IMPLEMENTATION.md`
+- Performance optimization details: `docs/implementation/indexing/README.md`
 
 ---
 
@@ -381,8 +385,8 @@ Full project history: 50,000+ tokens saved with embeddings
 LLM: "RecCli is your open-source CLI recorder with .devsession format.
       You've completed the architecture design phase across 3 sessions.
       Next milestone is implementing the MVP export dialog. The design
-      is complete - you need to add the UI to reccli.py with format
-      selection (.txt, .md, .devsession) and optional embedding generation.
+      is complete - you need to wire the UI into the CLI/runtime path
+      with format selection (.txt, .md, .devsession) and optional embedding generation.
 
       Should we start implementing the export dialog now?"
 ```
