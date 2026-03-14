@@ -108,8 +108,8 @@ Retrieve full context from old session
 - **READY FOR PRODUCTION TESTING**
 
 ### New Findings (2026-01-29)
-- **Recorder decision**: Pure Python PTY only; asciinema is not part of the stack. Confirmed in `v2-devsession-recorder/reccli/recorder.py` and used across the CLI.
-- **Code layout**: Core implementation under `v2-devsession-recorder/reccli/` (`episodes.py`, `vector_index.py`, `search.py`, `devsession.py`, `cli.py`).
+- **Recorder decision**: Pure Python PTY only; asciinema is not part of the stack. Confirmed in `packages/reccli-core/reccli/recorder.py` and used across the CLI.
+- **Code layout**: Core implementation under `packages/reccli-core/reccli/` (`episodes.py`, `vector_index.py`, `search.py`, `devsession.py`, `cli.py`).
 - **Episodes integration**: Implemented. `DevSession` persists `episodes` and `current_episode_id`; `vector_index.py` assigns `episode_id` per message; `cli.py` adds `episode new`, `--episode`, `--all-episodes`, and defaults search to the session’s `current_episode_id` when `--session` is provided.
 - **Immediate priority**: Rebuild the unified index, run acceptance tests, and update CLI/docs to reflect episode features.
 - **Status drift note**: Minor inconsistencies between header/timeline; will be reconciled after episode integration lands.
@@ -153,7 +153,7 @@ Retrieve full context from old session
 
 #### Architecture:
 ```python
-DevsessionRecorder (reccli/recorder.py)
+DevsessionRecorder (`packages/reccli-core/reccli/recorder.py`)
   ├─ Uses Python pty module for terminal capture
   ├─ Records events in .devsession format directly
   ├─ Auto-saves incrementally (crash protection)
@@ -163,7 +163,7 @@ DevsessionRecorder (reccli/recorder.py)
 #### Tasks (Phase 0):
 - [x] Analyze options (asciinema Rust vs Python recorder)
 - [x] Make decision (Pure Python)
-- [x] Create `reccli/` package structure
+- [x] Create `packages/reccli-core/reccli/` package structure
 - [x] Implement `DevsessionRecorder` class
   - [x] PTY capture with event recording
   - [x] Incremental auto-save
@@ -215,11 +215,11 @@ DevsessionRecorder (reccli/recorder.py)
 - [x] **Added watcher** - Auto-launches GUI for new terminals, prevents duplicates on Space changes
 
 **Files Created**:
-- `reccli/llm.py` (300 lines) - LLMSession class
-- `reccli/config.py` (65 lines) - API key management
-- `reccli/recorder.py` - Added DevsessionGUI + BackgroundRecorder (500+ lines)
+- `packages/reccli-core/reccli/llm.py` (300 lines) - LLMSession class
+- `packages/reccli-core/reccli/config.py` (65 lines) - API key management
+- `packages/reccli-core/reccli/recorder.py` - Added DevsessionGUI + BackgroundRecorder (500+ lines)
 - `reccli-gui.py` - GUI launcher script
-- Updated `reccli/cli.py` - chat, ask, config commands
+- Updated `packages/reccli-core/reccli/cli.py` - chat, ask, config commands
 - Updated `README.md` - Full documentation
 
 **Deliverable**: ✅ Native LLM interface + Floating button GUI for easy recording
@@ -303,7 +303,7 @@ Into structured conversation:
 **Deliverable**: ✅ Working conversation parser with proven cleaning logic from reccli-public
 
 **Features Added**:
-- `ConversationParser` class in `reccli/parser.py`
+- `ConversationParser` class in `packages/reccli-core/reccli/parser.py`
 - `clean_text()` - ANSI escape code removal
 - `clean_incremental_typing()` - Remove typing artifacts (based on reccli-public logic)
 - `detect_llm()` - Identify Claude/ChatGPT sessions
@@ -337,7 +337,7 @@ Into structured conversation:
 **Deliverable**: ✅ Real-time token monitoring with warning thresholds
 
 **Features Added**:
-- `TokenCounter` class in `reccli/tokens.py`
+- `TokenCounter` class in `packages/reccli-core/reccli/tokens.py`
   - `count_text()`, `count_message()`, `count_conversation()`
   - `count_terminal_output()` - Count tokens in raw events
   - `get_limit()` - Get token limit for any model
@@ -481,7 +481,7 @@ llm.query("Why modal?", context=full_discussion)
 - ✅ Contextual (returns complete discussions, not fragments)
 
 **Implementation:**
-- `reccli/retrieval.py` - ContextRetriever with two-level search
+- `packages/reccli-core/reccli/retrieval.py` - ContextRetriever with two-level search
 - `test_two_level_retrieval.py` - Comprehensive demonstration
 - All summary items include `message_range` + `references` + temporal metadata
 
@@ -555,20 +555,20 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
 #### Implementation Summary:
 
 **Files Created**:
-- ✅ `reccli/embeddings.py` (296 lines) - Embedding provider abstraction
+- ✅ `packages/reccli-core/reccli/embeddings.py` (296 lines) - Embedding provider abstraction
   - `EmbeddingProvider` base class
   - `OpenAIEmbeddings` (text-embedding-3-small, 1536-dim)
   - `LocalEmbeddings` (sentence-transformers fallback)
   - Text hashing (blake3/sha256) for cache invalidation
 
-- ✅ `reccli/vector_index.py` (588 lines) - Unified index system
+- ✅ `packages/reccli-core/reccli/vector_index.py` (588 lines) - Unified index system
   - `build_unified_index()` - Build from all sessions
   - `update_index_with_new_session()` - Incremental updates
   - `validate_index()` - Integrity checking
   - `get_index_stats()` - Statistics retrieval
   - Message classification (decision/code/problem/note/log/doc)
 
-- ✅ `reccli/search.py` (549 lines) - Hybrid retrieval engine
+- ✅ `packages/reccli-core/reccli/search.py` (549 lines) - Hybrid retrieval engine
   - `dense_search()` - Cosine similarity ANN with binary .npy loading
   - `bm25_search()` - Keyword sparse search
   - `reciprocal_rank_fusion()` - RRF combination
@@ -579,8 +579,8 @@ Beyond simple recency boosts, .devsession uses **temporal structure as a first-c
   - `expand_result()` - Context expansion
 
 **Files Modified**:
-- ✅ `reccli/devsession.py` - Added `generate_embeddings()` method
-- ✅ `reccli/cli.py` - Added 6 new CLI commands
+- ✅ `packages/reccli-core/reccli/devsession.py` - Added `generate_embeddings()` method
+- ✅ `packages/reccli-core/reccli/cli.py` - Added 6 new CLI commands
 - ✅ `requirements.txt` - Added rank-bm25, blake3 dependencies
 
 #### Vector Search Performance Optimization (November 20, 2025)
@@ -643,8 +643,8 @@ sessions/
 **Status**: ✅ Production-ready for multi-session search at scale
 
 **Additional Documentation:**
-- Technical analysis: `v2-devsession-recorder/VECTOR_SEARCH_FINAL.md`
-- Binary storage solution: `v2-devsession-recorder/VECTOR_SEARCH_COMPLETION.md`
+- Technical analysis: `docs/implementation/indexing/VECTOR_SEARCH_FINAL.md`
+- Binary storage solution: `docs/implementation/indexing/VECTOR_SEARCH_COMPLETION.md`
 
 #### CLI Commands (All Implemented):
 - ✅ `reccli embed <session>` - Generate embeddings for a session
@@ -809,28 +809,28 @@ User clicks accept → all files ready instantly
 #### Implementation Summary
 
 **Files Created**:
-- ✅ `reccli/memory_middleware.py` (553 lines) - Core context loading
+- ✅ `packages/reccli-core/reccli/memory_middleware.py` (553 lines) - Core context loading
   - `MemoryMiddleware` class
   - `hydrate_prompt()` - Main context loading flow
   - Conditional project overview loading
   - Vector search with reranking
   - Importance scoring and temporal boosts
 
-- ✅ `reccli/wpc.py` (372 lines) - Work Package Continuity
+- ✅ `packages/reccli-core/reccli/wpc.py` (372 lines) - Work Package Continuity
   - `WorkPackageContinuity` class
   - `predict_next()` - 5 heuristic predictors
   - `prefetch()` - Pre-retrieval with budget management
   - Prefetch queue with LRU eviction
   - Adaptive cooldown/backoff
 
-- ✅ `reccli/post_answer_reasoning.py` (219 lines) - Post-answer prediction
+- ✅ `packages/reccli-core/reccli/post_answer_reasoning.py` (219 lines) - Post-answer prediction
   - `PostAnswerReasoning` class
   - `predict_next_query()` - LLM-based prediction
   - Heuristic fallback (no LLM required)
   - Prediction accuracy tracking
 
 **Files Modified**:
-- ✅ `reccli/cli.py` - Added `hydrate` command to test middleware
+- ✅ `packages/reccli-core/reccli/cli.py` - Added `hydrate` command to test middleware
 
 #### Tasks:
 - ✅ Implement `MemoryMiddleware` class
@@ -917,13 +917,13 @@ After Phase 6 completion, we conducted a comprehensive audit of the `message_ran
 
 ✅ **Safeguard #2: Define Range Semantics** - COMPLETE
 - Fixed 4 files: `summarizer.py`, `retrieval.py`, `code_change_detector.py`, `summary_verification.py`
-- Documented in `MESSAGE_RANGE_SPEC.md` (examples, conversion rules, invariants)
+- Documented in `docs/specs/MESSAGE_RANGE_SPEC.md` (examples, conversion rules, invariants)
 - Added comprehensive validation enforcing new semantics
 
 ⏸️ **Safeguard #3: Multi-Span Support** - EVALUATED, NOT NEEDED YET
 - For discussions spanning non-contiguous ranges
 - Low frequency, defer until observed in practice
-- Documented design in `SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md`
+- Documented design in `docs/implementation/retrieval/SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md`
 
 ⏸️ **Safeguard #4: Precision Quotes (char_span)** - EVALUATED, FUTURE (Phase 7)
 - Character-level precision within messages
@@ -948,49 +948,49 @@ After Phase 6 completion, we conducted a comprehensive audit of the `message_ran
 - Append-only log of compaction operations
 - Format: `.devsession-compaction-log.jsonl`
 - Enables rollback if reindexing has bugs
-- Designed in `SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md`
+- Designed in `docs/implementation/retrieval/SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md`
 
 **Documentation Created**:
-- ✅ `MESSAGE_RANGE_SPEC.md` - Canonical specification with examples
-- ✅ `RANGE_SEMANTICS_FIX.md` - Bug analysis and fix details
-- ✅ `SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md` - All 8 safeguards status and implementation plans
+- ✅ `docs/specs/MESSAGE_RANGE_SPEC.md` - Canonical specification with examples
+- ✅ `docs/decisions/RANGE_SEMANTICS_FIX.md` - Bug analysis and fix details
+- ✅ `docs/implementation/retrieval/SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md` - All 8 safeguards status and implementation plans
 
 **Files Modified**:
-- ✅ `reccli/summarizer.py` - Fixed `extract_span_messages()`, `extract_temporal_bounds()`
-- ✅ `reccli/retrieval.py` - Fixed `retrieve_full_context()`
-- ✅ `reccli/code_change_detector.py` - Fixed range construction from message IDs
-- ✅ `reccli/summary_verification.py` - Comprehensive validation with new semantics
+- ✅ `packages/reccli-core/reccli/summarizer.py` - Fixed `extract_span_messages()`, `extract_temporal_bounds()`
+- ✅ `packages/reccli-core/reccli/retrieval.py` - Fixed `retrieve_full_context()`
+- ✅ `packages/reccli-core/reccli/code_change_detector.py` - Fixed range construction from message IDs
+- ✅ `packages/reccli-core/reccli/summary_verification.py` - Comprehensive validation with new semantics
 
 **Before Phase 7 (Compaction)**:
-- [x] Implement Safeguard #5: Reindexing logic → `reccli/reindexing.py`
-- [x] Implement Safeguard #7: Integrate validation into write path → Updated `devsession.py save()`
-- [x] Implement Safeguard #8: Compaction log with rollback → `reccli/compaction_log.py`
-- [x] Verify Safeguard #6: Monotonic timestamps → `reccli/timestamp_validation.py`
+- [x] Implement Safeguard #5: Reindexing logic → `packages/reccli-core/reccli/reindexing.py`
+- [x] Implement Safeguard #7: Integrate validation into write path → Updated `packages/reccli-core/reccli/devsession.py save()`
+- [x] Implement Safeguard #8: Compaction log with rollback → `packages/reccli-core/reccli/compaction_log.py`
+- [x] Verify Safeguard #6: Monotonic timestamps → `packages/reccli-core/reccli/timestamp_validation.py`
 
 **Implementation Complete**: ✅ All 4 safeguards implemented
 
 **Files Created**:
-- ✅ `reccli/reindexing.py` (373 lines) - Reindex message_range after compaction
+- ✅ `packages/reccli-core/reccli/reindexing.py` (373 lines) - Reindex message_range after compaction
   - `reindex_summary_after_compaction()` - Main entry point
   - `build_id_to_index_mapping()` - Build ID→index mapping after transforms
   - `validate_reindexing()` - Verify reindexing succeeded
   - `auto_remove_invalid_items()` - Remove items referencing deleted messages
 
-- ✅ `reccli/compaction_log.py` (407 lines) - Safety log with rollback
+- ✅ `packages/reccli-core/reccli/compaction_log.py` (407 lines) - Safety log with rollback
   - `CompactionLog` class - Append-only JSONL log
   - `log_compaction_start()` - Log compaction plan + checksum
   - `create_backup()` - Create backup before compaction
   - `rollback_to_backup()` - Restore from backup if validation fails
   - `get_compaction_history()` - Audit trail
 
-- ✅ `reccli/timestamp_validation.py` (240 lines) - Timestamp validation
+- ✅ `packages/reccli-core/reccli/timestamp_validation.py` (240 lines) - Timestamp validation
   - `validate_monotonic_timestamps()` - Check timestamps always increase
   - `validate_timezone_utc()` - Verify UTC timestamps
   - `normalize_timestamps_to_utc()` - Convert all to Unix timestamps
   - `repair_non_monotonic_timestamps()` - Auto-fix timestamp issues
 
 **Files Modified**:
-- ✅ `reccli/devsession.py` - Added validation to `save()` method with auto-fix
+- ✅ `packages/reccli-core/reccli/devsession.py` - Added validation to `save()` method with auto-fix
 
 **Duration**: 1 day (completed November 2, 2025)
 
@@ -1037,17 +1037,17 @@ Skip expensive LLM reasoning when query is already clear:
 - Negation: +40%
 
 **Files Created**:
-- ✅ `reccli/streaming_retrieval.py` (520 lines)
+- ✅ `packages/reccli-core/reccli/streaming_retrieval.py` (520 lines)
   - `QueryClassifier` - Detect when LLM reasoning helps
   - `LLMReasoner` - 100-token query reasoning + expansion
   - `StreamingRetrieval` - Progressive 3-stage retrieval
 
 **Files Modified**:
-- ✅ `reccli/memory_middleware.py` - Added `hydrate_prompt_streaming()`
-- ✅ `reccli/cli.py` - Added `hydrate-stream` command
+- ✅ `packages/reccli-core/reccli/memory_middleware.py` - Added `hydrate_prompt_streaming()`
+- ✅ `packages/reccli-core/reccli/cli.py` - Added `hydrate-stream` command
 
 **Documentation**:
-- ✅ `STREAMING_HYBRID_RETRIEVAL.md` - Complete specification
+- ✅ `docs/implementation/retrieval/STREAMING_HYBRID_RETRIEVAL.md` - Complete specification
 
 **CLI Demo**:
 ```bash
@@ -1152,14 +1152,14 @@ Watch `token_counts`. When ≥ 180K (warn) / 190K (compact):
 - [x] Auto-enabled during `reccli chat` sessions
 
 #### Files Created
-- `/v2-devsession-recorder/reccli/preemptive_compaction.py`
-- `/v2-devsession-recorder/reccli/checkpoints.py`
-- `/v2-devsession-recorder/reccli/episodes.py`
-- `/v2-devsession-recorder/PHASE_7_COMPLETE.md`
-- `/v2-devsession-recorder/PHASE_7_QUICK_START.md`
-- `/v2-devsession-recorder/PHASE_7_TESTING_GUIDE.md`
-- `/v2-devsession-recorder/PHASE_7_FIXES_COMPLETE.md`
-- `/v2-devsession-recorder/PHASE_7_AUDIT.md`
+- `packages/reccli-core/reccli/preemptive_compaction.py`
+- `packages/reccli-core/reccli/checkpoints.py`
+- `packages/reccli-core/reccli/episodes.py`
+- `docs/progress/phases/PHASE_7_IMPLEMENTATION.md`
+- `docs/progress/phases/PHASE_7_WALKTHROUGH.md`
+- `docs/progress/phases/PHASE_7_TESTING.md`
+- `docs/progress/phases/PHASE_7_POST_AUDIT_FIXES.md`
+- `docs/decisions/PHASE_7_AUDIT.md`
 
 #### Acceptance Tests (Ready to Test):
 - [ ] After compaction, asking about just-resolved bug retrieves span instantly
@@ -1839,50 +1839,52 @@ This turns RecCli from "better vector search" into a **time-aware reasoning memo
 
 ```
 RecCli/
-├── reccli/
-│   ├── __init__.py
-│   ├── cli.py                 # CLI entry point (Phase 9)
-│   ├── recorder.py            # Modified asciinema recorder (Phase 0)
-│   ├── devsession.py          # .devsession file manager (Phase 1)
-│   ├── parser.py              # Conversation parser (Phase 2)
-│   ├── tokens.py              # Token counting (Phase 3)
-│   ├── summarizer.py          # Summary generation (Phase 4)
-│   ├── embeddings.py          # Vector embeddings (Phase 5)
-│   ├── memory.py              # Memory middleware (Phase 6)
-│   ├── compaction.py          # Preemptive compaction (Phase 7)
-│   ├── llm_adapters/          # LLM provider adapters (Phase 8)
-│   │   ├── base.py
-│   │   ├── claude.py
-│   │   ├── openai.py
-│   │   └── ollama.py
-│   └── devproject.py          # Project management (Phase 10)
+├── packages/
+│   └── reccli-core/
+│       ├── reccli/
+│       │   ├── cli.py                 # CLI entry point
+│       │   ├── recorder.py            # Pure Python PTY recorder
+│       │   ├── devsession.py          # .devsession file manager
+│       │   ├── parser.py              # Conversation parser
+│       │   ├── tokens.py              # Token counting
+│       │   ├── summarizer.py          # Summary generation
+│       │   ├── embeddings.py          # Vector embeddings
+│       │   ├── vector_index.py        # Unified vector index
+│       │   ├── search.py              # Hybrid retrieval
+│       │   ├── memory_middleware.py   # Prompt hydration
+│       │   ├── preemptive_compaction.py
+│       │   ├── checkpoints.py
+│       │   └── episodes.py
+│       ├── tests/
+│       └── ui/                        # TypeScript + Ink terminal UI
 │
-├── tests/
-│   ├── test_recorder.py
-│   ├── test_devsession.py
-│   ├── test_parser.py
-│   ├── test_memory.py
-│   └── benchmarks/
+├── docs/
+│   ├── architecture/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── CONTEXT_LOADING.md
+│   │   └── RECCLI_CLI_UI.md
+│   ├── decisions/
+│   │   ├── ASCIINEMA_ANALYSIS.md
+│   │   ├── DESIGN_DECISIONS.md
+│   │   ├── PHASE_7_AUDIT.md
+│   │   └── RANGE_SEMANTICS_FIX.md
+│   ├── implementation/
+│   │   ├── indexing/
+│   │   ├── prompts/
+│   │   └── retrieval/
+│   ├── product/
+│   ├── progress/
+│   ├── reference/
+│   └── specs/
+│       ├── DEVSESSION_FORMAT.md
+│       ├── MESSAGE_RANGE_SPEC.md
+│       ├── UNIFIED_VECTOR_INDEX.md
+│       └── schemas/
 │
-├── devsession/                # Documentation & specs
-│   ├── README.md
-│   ├── DEVSESSION_FORMAT.md
-│   ├── ARCHITECTURE.md
-│   ├── CONTEXT_LOADING.md
-│   ├── examples/
-│   │   ├── simple.devsession
-│   │   └── full-session.devsession
-│   └── schemas/
-│       ├── devsession.schema.json
-│       └── devproject.schema.json
-│
+├── apps/
 ├── examples/
-│   ├── quickstart/
-│   └── benchmarks/
-│
-├── setup.py
 ├── requirements.txt
-├── PROJECT_PLAN.md           # This file
+├── PROJECT_PLAN.md
 └── README.md
 ```
 
@@ -1971,7 +1973,7 @@ RecCli/
 ## 🔄 Development Workflow
 
 ### Daily:
-1. Update PROJECT_PLAN.md with progress
+1. Update `PROJECT_PLAN.md` with progress
 2. Commit working code to Git
 3. Test manually with real terminal sessions
 4. Document learnings

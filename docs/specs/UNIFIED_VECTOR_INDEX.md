@@ -614,9 +614,9 @@ def search_all_sessions(project_dir, query, top_k=10):
 5. **L2-Normalized Vectors**: Direct dot product for cosine similarity
 
 **Additional Documentation:**
-- Complete technical analysis: `../v2-devsession-recorder/VECTOR_SEARCH_FINAL.md`
-- Optimization status: `../v2-devsession-recorder/VECTOR_OPTIMIZATION_STATUS.md`
-- Binary storage solution: `../v2-devsession-recorder/VECTOR_SEARCH_COMPLETION.md`
+- Complete technical analysis: `../implementation/indexing/VECTOR_SEARCH_FINAL.md`
+- Optimization status: `../implementation/indexing/VECTOR_OPTIMIZATION_STATUS.md`
+- Binary storage solution: `../implementation/indexing/VECTOR_SEARCH_COMPLETION.md`
 
 ### Filtered Search
 

@@ -284,7 +284,7 @@ except ImportError:
 2. **Verify API signatures** against actual code
 3. **Test end-to-end** with a real session
 4. **Document limitations** (e.g., requires LLM API key)
-5. **Update PHASE_7_COMPLETE.md** with fixes
+5. **Update `PHASE_7_IMPLEMENTATION.md`** with fixes
 
 ---
 

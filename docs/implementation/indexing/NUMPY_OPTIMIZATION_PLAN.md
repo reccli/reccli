@@ -274,7 +274,7 @@ python3 tests/test_search_regression.py
 - [ ] Integration test with real sessions
 
 ### Phase 4: Documentation (30 min)
-- [ ] Update PHASE_5_SPEC.md with performance numbers
+- [ ] Update `docs/progress/phases/PHASE_5_IMPLEMENTATION.md` with performance numbers
 - [ ] Document numpy requirement
 - [ ] Add performance section to README
 

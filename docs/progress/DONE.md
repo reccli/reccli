@@ -16,15 +16,14 @@
 ## Files Created
 
 ```
-v2-devsession-recorder/
+packages/reccli-core/
 ├── reccli/
 │   ├── llm.py (300 lines)         # LLMSession class
 │   ├── config.py (65 lines)       # API key management
 │   └── cli.py (updated)           # Added chat, ask, config commands
 │
-├── requirements.txt               # anthropic, openai
-├── NATIVE_LLM_GUIDE.md           # Complete user guide
-└── README.md (updated)            # Added native LLM section
+├── ui/
+└── tests/
 ```
 
 **Total New Code**: ~400 lines of Python
@@ -70,7 +69,7 @@ v2-devsession-recorder/
 ### 1. Install Dependencies
 
 ```bash
-cd /Users/will/coding-projects/RecCli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 pip3 install anthropic openai
 ```
 

@@ -16,7 +16,7 @@ RecCli v2.0 now includes a **native LLM CLI** - you can chat with Claude or GPT 
 ### 1. Install Dependencies
 
 ```bash
-cd /Users/will/coding-projects/RecCli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 pip3 install anthropic openai
 ```
 
@@ -310,14 +310,13 @@ This is **Phase 0.5** of the RecCli project. Coming soon:
 ## Files Created
 
 ```
-v2-devsession-recorder/
+packages/reccli-core/
 ├── reccli/
 │   ├── llm.py          # LLMSession class (300 lines)
 │   ├── config.py       # Config management (65 lines)
 │   └── cli.py          # Updated with chat/ask/config commands
 │
-├── requirements.txt    # anthropic, openai
-└── NATIVE_LLM_GUIDE.md # This file
+└── ui/
 ```
 
 ---

@@ -101,11 +101,11 @@ summary = detector.assign_episode_ids_to_summary(summary, episodes)
 
 ### 4. Documentation Created
 
-- `PHASE_7_COMPLETE.md` - Technical completion report
-- `PHASE_7_QUICK_START.md` - User-friendly feature guide
-- `PHASE_7_TESTING_GUIDE.md` - How to test with API key
+- `PHASE_7_IMPLEMENTATION.md` - Technical completion report
+- `PHASE_7_WALKTHROUGH.md` - User-facing feature walkthrough
+- `PHASE_7_TESTING.md` - How to test with API key
 - `PHASE_7_AUDIT.md` - Self-audit findings
-- `PHASE_7_FIXES_COMPLETE.md` - Bug fix summary
+- `PHASE_7_POST_AUDIT_FIXES.md` - Bug fix summary
 - `API_KEY_SECURITY.md` - Security analysis and verification
 - `SESSION_2025_11_07_SUMMARY.md` - This file
 - Updated `PROJECT_PLAN.md` - Marked Phase 7 complete
@@ -169,7 +169,7 @@ summary = detector.assign_episode_ids_to_summary(summary, episodes)
 3. Start chat: `./reccli-v2.py chat --model claude`
 4. Have a long conversation (or manually compact with `./reccli-v2.py compact`)
 
-See `PHASE_7_TESTING_GUIDE.md` for detailed instructions.
+See `PHASE_7_TESTING.md` for detailed instructions.
 
 ---
 
@@ -200,22 +200,22 @@ See `PHASE_7_TESTING_GUIDE.md` for detailed instructions.
 ## Files Modified
 
 ### New Files (11)
-1. `/v2-devsession-recorder/reccli/preemptive_compaction.py`
-2. `/v2-devsession-recorder/reccli/checkpoints.py`
-3. `/v2-devsession-recorder/reccli/episodes.py`
-4. `/v2-devsession-recorder/PHASE_7_COMPLETE.md`
-5. `/v2-devsession-recorder/PHASE_7_QUICK_START.md`
-6. `/v2-devsession-recorder/PHASE_7_TESTING_GUIDE.md`
-7. `/v2-devsession-recorder/PHASE_7_AUDIT.md`
-8. `/v2-devsession-recorder/PHASE_7_FIXES_COMPLETE.md`
-9. `/v2-devsession-recorder/API_KEY_SECURITY.md`
-10. `/v2-devsession-recorder/SESSION_2025_11_07_SUMMARY.md`
+1. `packages/reccli-core/reccli/preemptive_compaction.py`
+2. `packages/reccli-core/reccli/checkpoints.py`
+3. `packages/reccli-core/reccli/episodes.py`
+4. `docs/progress/phases/PHASE_7_IMPLEMENTATION.md`
+5. `docs/progress/phases/PHASE_7_WALKTHROUGH.md`
+6. `docs/progress/phases/PHASE_7_TESTING.md`
+7. `docs/decisions/PHASE_7_AUDIT.md`
+8. `docs/progress/phases/PHASE_7_POST_AUDIT_FIXES.md`
+9. `docs/reference/API_KEY_SECURITY.md`
+10. `docs/progress/session-notes/SESSION_2025_11_07_SUMMARY.md`
 11. Updated `/PROJECT_PLAN.md`
 
 ### Modified Files (3)
-1. `/v2-devsession-recorder/reccli/preemptive_compaction.py` (fixes)
-2. `/v2-devsession-recorder/reccli/llm.py` (LLM client integration)
-3. `/v2-devsession-recorder/reccli/cli.py` (CLI commands)
+1. `packages/reccli-core/reccli/preemptive_compaction.py` (fixes)
+2. `packages/reccli-core/reccli/llm.py` (LLM client integration)
+3. `packages/reccli-core/reccli/cli.py` (CLI commands)
 
 ### Modified in Root
 1. `/.gitignore` (added extra config.json protections)
@@ -303,7 +303,7 @@ Phase 7 is the core innovation. If it works, the rest is polish. Could ship as-i
 
 ### Quick Start (5 minutes)
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 
 # Install dependencies
 pip3 install anthropic tiktoken jsonschema rank-bm25
@@ -319,7 +319,7 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 ```
 
 ### Full Testing
-See `PHASE_7_TESTING_GUIDE.md` for complete instructions.
+See `PHASE_7_TESTING.md` for complete instructions.
 
 ---
 

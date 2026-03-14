@@ -370,7 +370,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 
 #### 1. .devsession Format
 
-**Full specification:** See [DEVSESSION_FORMAT.md](DEVSESSION_FORMAT.md)
+**Full specification:** See [DEVSESSION_FORMAT.md](docs/specs/DEVSESSION_FORMAT.md)
 
 **Capabilities:**
 - Three-layer architecture (project overview + summary + full conversation)
@@ -404,7 +404,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 
 #### 3. Smart Project Initialization
 
-**Full specification:** See [PROJECT_INITIALIZATION.md](PROJECT_INITIALIZATION.md) and [PROJECT_ONBOARDING.md](PROJECT_ONBOARDING.md)
+**Full specification:** See [PROJECT_INITIALIZATION.md](docs/product/PROJECT_INITIALIZATION.md) and [PROJECT_ONBOARDING.md](docs/product/PROJECT_ONBOARDING.md)
 
 **Capabilities:**
 - Empty project → Conversational onboarding
@@ -421,7 +421,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 
 #### 4. Context Management
 
-**Full specification:** See [CONTEXT_LOADING.md](CONTEXT_LOADING.md)
+**Full specification:** See [CONTEXT_LOADING.md](docs/architecture/CONTEXT_LOADING.md)
 
 **Capabilities:**
 - Preemptive compaction at 190K tokens
@@ -452,7 +452,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 
 #### 6. Authentication & API Keys
 
-**Full specification:** See [SETTINGS_AND_AUTH.md](SETTINGS_AND_AUTH.md)
+**Full specification:** See [SETTINGS_AND_AUTH.md](docs/reference/SETTINGS_AND_AUTH.md)
 
 **Capabilities:**
 - Secure API key storage (system keychain)

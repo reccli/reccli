@@ -1,4 +1,4 @@
-# Phase 7 - Fixes Complete ✅
+# Phase 7: Post-Audit Fixes
 
 **Date**: 2025-11-07
 **Status**: 🟢 READY FOR TESTING
@@ -69,8 +69,8 @@
 ### New Files (3)
 
 1. **`PHASE_7_AUDIT.md`** - Self-audit report
-2. **`PHASE_7_TESTING_GUIDE.md`** - How to test with API key
-3. **`PHASE_7_FIXES_COMPLETE.md`** - This file
+2. **`PHASE_7_TESTING.md`** - How to test with API key
+3. **`PHASE_7_POST_AUDIT_FIXES.md`** - This file
 
 ---
 
@@ -83,7 +83,7 @@
 
 ### ⏳ Functional Tests (Requires API Key)
 - Need Anthropic or OpenAI API key to test fully
-- See `PHASE_7_TESTING_GUIDE.md` for testing instructions
+- See `PHASE_7_TESTING.md` for testing instructions
 - Can test basic CLI commands without API key
 
 ---
@@ -92,7 +92,7 @@
 
 ### Quick Test (No API Key Needed)
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 
 # Check if commands work
 ./reccli-v2.py --help | grep compact
@@ -125,7 +125,7 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 ./reccli-v2.py checkpoint list
 ```
 
-**See `PHASE_7_TESTING_GUIDE.md` for detailed testing instructions.**
+**See `PHASE_7_TESTING.md` for detailed testing instructions.**
 
 ---
 
@@ -177,11 +177,11 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 - `reccli/cli.py` ✅ Fixed
 
 **Documentation**:
-- `PHASE_7_COMPLETE.md` - Original completion doc
-- `PHASE_7_QUICK_START.md` - User guide
+- `PHASE_7_IMPLEMENTATION.md` - Original implementation report
+- `PHASE_7_WALKTHROUGH.md` - User guide
 - `PHASE_7_AUDIT.md` - Self-audit report
-- `PHASE_7_TESTING_GUIDE.md` - Testing instructions
-- `PHASE_7_FIXES_COMPLETE.md` - This file
+- `PHASE_7_TESTING.md` - Testing instructions
+- `PHASE_7_POST_AUDIT_FIXES.md` - This file
 
 ---
 
@@ -209,7 +209,7 @@ pip3 install anthropic tiktoken jsonschema rank-bm25
 ## Next Steps
 
 ### For You (User)
-1. Read `PHASE_7_TESTING_GUIDE.md`
+1. Read `PHASE_7_TESTING.md`
 2. Install dependencies (`pip3 install anthropic tiktoken ...`)
 3. Configure API key (`./reccli-v2.py config --anthropic-key ...`)
 4. Run Level 1 tests (5 minutes)

@@ -1,4 +1,4 @@
-# Phase 7: Preemptive Compaction - COMPLETE ✅
+# Phase 7: Preemptive Compaction - Implementation
 
 **Date**: 2025-11-07
 **Status**: Implementation Complete
@@ -219,7 +219,7 @@ You: [continues chatting seamlessly]
 
 ```bash
 # 1. Start chat with compaction enabled
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 ./reccli-v2.py chat --model claude
 
 # 2. Check token status
@@ -346,17 +346,17 @@ The actual test is:
 
 ## Files Created
 
-1. `/Users/will/coding-projects/reccli/v2-devsession-recorder/reccli/preemptive_compaction.py` (442 lines)
-2. `/Users/will/coding-projects/reccli/v2-devsession-recorder/reccli/checkpoints.py` (356 lines)
-3. `/Users/will/coding-projects/reccli/v2-devsession-recorder/reccli/episodes.py` (409 lines)
+1. `packages/reccli-core/reccli/preemptive_compaction.py` (442 lines)
+2. `packages/reccli-core/reccli/checkpoints.py` (356 lines)
+3. `packages/reccli-core/reccli/episodes.py` (409 lines)
 
 ## Files Modified
 
-1. `/Users/will/coding-projects/reccli/v2-devsession-recorder/reccli/llm.py`
+1. `packages/reccli-core/reccli/llm.py`
    - Updated `chat_loop()` to integrate compaction
    - Updated `_finalize()` to show compaction status
 
-2. `/Users/will/coding-projects/reccli/v2-devsession-recorder/reccli/cli.py`
+2. `packages/reccli-core/reccli/cli.py`
    - Added `cmd_compact()`
    - Added `cmd_check_tokens()`
    - Added `cmd_checkpoint_add()`

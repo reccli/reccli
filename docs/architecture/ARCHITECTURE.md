@@ -296,8 +296,8 @@ Dataset Size    Search Time    Queries/Second
 This infrastructure enables the .devsession vision of **cross-session intelligence** - search your entire development history across all projects instantly.
 
 **Additional Documentation:**
-- LLM retrieval tools implementation: `v2-devsession-recorder/PHASE_8_COMPLETE.md`
-- Performance optimization details: `v2-devsession-recorder/VECTOR_SEARCH_FINAL.md`
+- LLM retrieval tools implementation: `docs/progress/phases/PHASE_8_IMPLEMENTATION.md`
+- Performance optimization details: `docs/implementation/indexing/VECTOR_SEARCH_FINAL.md`
 
 ---
 

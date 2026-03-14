@@ -1,4 +1,4 @@
-# Phase 5: Vector Embeddings & Search - Implementation Spec
+# Phase 5: Vector Embeddings & Search - Implementation
 
 **Goal**: Semantic search over sessions with hybrid recall (dense + sparse) and time-aware boosts
 
@@ -721,9 +721,9 @@ From PROJECT_PLAN.md + unified_vector_index.md:
 ## File Structure
 
 ```
-v2-devsession-recorder/
+packages/reccli-core/
 ├── reccli/
-│   ├── embeddings.py          # NEW - Embedding providers
+│   ├── embeddings.py           # NEW - Embedding providers
 │   ├── vector_index.py         # NEW - Index building & updates
 │   ├── search.py               # NEW - Hybrid search & scoring
 │   ├── devsession.py           # EXTEND - Add generate_embeddings()
@@ -732,7 +732,7 @@ v2-devsession-recorder/
 │   ├── test_embeddings.py      # NEW - Test embedding providers
 │   ├── test_vector_index.py    # NEW - Test index building
 │   └── test_search.py          # NEW - Test hybrid search
-└── PHASE_5_SPEC.md             # This file
+└── docs/progress/phases/PHASE_5_IMPLEMENTATION.md  # This file
 ```
 
 ---

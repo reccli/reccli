@@ -35,8 +35,8 @@ The config file is stored in `~/reccli/`, which is outside your git repository e
 ├── sessions/                   ← Your .devsession files
 └── compaction logs/            ← Backup files
 
-/Users/will/coding-projects/reccli/  ← Git repo is HERE (separate)
-├── v2-devsession-recorder/
+/Users/will/coding-projects/RecCli/  ← Git repo is HERE (separate)
+├── packages/
 └── .git/
 ```
 
@@ -197,7 +197,7 @@ But for now, **private repo + config outside repo = perfectly safe**.
 ✅ **YES!** Go ahead and run:
 
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 ./reccli-v2.py config --anthropic-key YOUR_KEY_HERE
 ```
 

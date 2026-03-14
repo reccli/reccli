@@ -1,4 +1,4 @@
-# Phase 8 Retrieval - Usage Guide
+# Phase 8: Retrieval Usage
 
 ## Overview
 
@@ -11,7 +11,7 @@ Phase 8 adds intelligent context retrieval to RecCli's chat interface. The LLM c
 ### 1. Start a Chat Session
 
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 python3 -m reccli chat --model claude-sonnet
 ```
 

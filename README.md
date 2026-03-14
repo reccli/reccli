@@ -1,203 +1,97 @@
-# 🎬 RecCli
+# RecCli
 
-**The dead-simple CLI recorder with a floating record button**
+RecCli is a temporal memory engine for coding agents.
 
-Finally, a record button for your terminal. One click to start, one click to stop. That's it.
+Its core idea is a tri-layer memory system:
 
-![RecCli Demo](https://reccli.com/demo.gif)
+- project outline for cross-session context,
+- compacted session summary for active working memory,
+- full conversation history as the source of truth,
 
-## Why RecCli?
+with temporal links between the layers so an agent can recover exact prior reasoning instead of relying on lossy compaction or flat retrieval.
 
-Every developer has lost that perfect debugging session. The one where everything magically worked. The command you can't remember. The output that vanished.
+## What Exists Today
 
-**RecCli fixes that.**
+The current repo contains a working implementation of the core memory stack:
 
-- 🔴 **One-click recording** - Floating button stays on top while you work
-- ⏱️ **Live duration tracker** - See exactly how long you've been recording
-- 💾 **5 export formats** - Plain text, Markdown, JSON, HTML, or Asciinema cast
-- 📤 **Smart export dialog** - Choose format and location after each session
-- ⚙️ **Customizable settings** - Set default format and save location
-- 🚀 **Zero config** - Works immediately after install
-- 🆓 **100% Free & Open Source** - MIT Licensed
+- pure Python PTY terminal recording
+- `.devsession` session storage
+- conversation parsing and token counting
+- summary generation and reference verification
+- unified vector indexing and hybrid retrieval
+- memory middleware and streaming retrieval
+- preemptive compaction, checkpoints, and episodes
+- a TypeScript + Ink terminal UI layered over the Python core
+
+## Current Repo Status
+
+This repository has evolved significantly and the packaging surface is still being normalized.
+
+The canonical code now lives under [packages/reccli-core](/Users/will/coding-projects/RecCli/packages/reccli-core), and the documentation has been reorganized under [docs](/Users/will/coding-projects/RecCli/docs).
+
+If you are evaluating the project, start with the docs rather than older install scripts or marketing pages.
 
 ## Quick Start
 
+If your environment already has the needed Python dependencies installed, you can invoke the CLI directly:
+
 ```bash
-# Install
-git clone https://github.com/willluecke/RecCli.git
-cd RecCli
-./install.sh
-
-# Run
-reccli gui
-
-# Start recording with one click!
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli --help
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat --help
 ```
 
-Or install directly:
+The TypeScript terminal UI lives in `packages/reccli-core/ui`:
+
 ```bash
-curl -sSL https://raw.githubusercontent.com/willluecke/RecCli/main/install.sh | bash
+cd packages/reccli-core/ui
+npm install
+npm run build
 ```
 
-## Features
+Then launch chat through the Python entry point:
 
-### The Floating Button
-- **Circle (green)** = Ready to record
-- **Square (red)** = Recording in progress
-- Drag anywhere on your screen
-- Stays on top of all windows
-- Right-click for quick access to settings, stats, and recordings
-
-### Smart Recording
-- Captures everything: input, output, colors, timing
-- Live duration tracking during recording
-- Organized by timestamp: `session_20251029_143045`
-- All recordings stored locally in `~/.reccli/recordings`
-
-### Export Formats
-After each recording, choose from 5 export formats:
-
-1. **Plain Text (.txt)** - Simple text file with session metadata
-2. **Markdown (.md)** - Formatted markdown with code blocks (default)
-3. **JSON (.json)** - Structured JSON with full metadata
-4. **HTML (.html)** - Beautiful styled HTML page you can open in any browser
-5. **Asciinema Cast (.cast)** - Native format for replay with `asciinema play`
-
-### Customizable Settings
-- Set your default export format
-- Choose default save location
-- Configure recording preferences
-- Access via right-click menu → Settings
-
-### CLI Mode
 ```bash
-# GUI mode (default)
-reccli gui
-
-# View stats
-reccli status
-
-# Check version
-reccli --version
+cd /path/to/RecCli
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat
 ```
 
-## Installation
+## Repo Layout
 
-### Automatic (Recommended)
-```bash
-git clone https://github.com/willluecke/RecCli.git
-cd RecCli
-./install.sh
+```text
+RecCli/
+├── packages/
+│   └── reccli-core/
+│       ├── reccli/              # Python core
+│       ├── tests/               # Python tests and benchmarks
+│       └── ui/                  # TypeScript + Ink terminal UI
+├── docs/                        # Architecture, specs, product, reference, history
+├── apps/                        # Ancillary app surfaces
+├── examples/
+├── PROJECT_PLAN.md
+└── MVP.md
 ```
 
-### Manual
-```bash
-# Install dependencies
-pip3 install asciinema  # Optional but recommended
+## Documentation
 
-# Ubuntu/Debian
-sudo apt-get install python3 python3-tk
+Start here:
 
-# macOS
-brew install python-tk
+- [Docs Index](docs/README.md)
+- [One-Pager](docs/product/RECCLI_ONE_PAGER.md)
+- [Architecture](docs/architecture/ARCHITECTURE.md)
+- [`.devsession` Format](docs/specs/DEVSESSION_FORMAT.md)
+- [Unified Vector Index](docs/specs/UNIFIED_VECTOR_INDEX.md)
+- [Project Plan](PROJECT_PLAN.md)
 
-# Make executable
-chmod +x reccli.py
+## Positioning
 
-# Run
-python3 reccli.py gui
-```
+RecCli should be thought of as memory infrastructure, not primarily as a standalone chat UI.
 
-## Requirements
+The strongest product direction is likely:
 
-- Python 3.6+
-- tkinter (for GUI)
-- asciinema or script command (for recording)
-
-**Recommended:** Install asciinema for best recording quality
-```bash
-pip install asciinema
-```
-
-## Use Cases
-
-### Debugging
-Record your entire debugging session. When you finally fix that bug, you'll have the exact steps captured.
-
-### Teaching
-Share terminal sessions with juniors. They can replay exactly what you did, at their own pace.
-
-### Documentation
-Better than screenshots. Better than screen recordings. Just the terminal, perfectly captured.
-
-### AI Coding Sessions
-Recording Claude Code, Cursor, or Copilot sessions? RecCli captures everything without losing context.
-
-### Pair Programming
-Share your screen recording with remote teammates. Perfect for async code reviews.
-
-## FAQ
-
-**Q: Why not just use the script command?**
-A: Same reason you don't use Print Screen for screenshots. Sure, it works, but reducing friction changes behavior. You'll never remember to type 'script' before that debugging session. You will click a red button that's always visible.
-
-**Q: What about asciinema?**
-A: asciinema is great! We actually use it under the hood. But it's still command-line based. RecCli is about the UI/UX layer - the floating button that makes you actually USE recording instead of forgetting about it.
-
-**Q: Where are recordings stored?**
-A: Locally on your machine in `~/.reccli/recordings/`. Your data, your control.
-
-**Q: Can I use this with tmux/screen?**
-A: Yes! RecCli works with any terminal setup.
-
-**Q: Is this really free?**
-A: Yes! MIT licensed. Use it, fork it, modify it. We believe great dev tools should be free.
-
-## Contributing
-
-Contributions are welcome! Feel free to:
-- Report bugs
-- Suggest features
-- Submit pull requests
-- Improve documentation
-
-## Roadmap
-
-### Near-term
-- [ ] Playback in browser
-- [ ] Windows support
-- [ ] Session search and filtering
-
-### Future: .devsession Format
-RecCli is developing an open standard for AI coding sessions:
-- **`.devsession` files** - Structured format for storing AI coding sessions
-- **Smart summarization** - AI-generated context summaries for efficient loading
-- **Multi-session synthesis** - Load context from multiple sessions
-- **Section expansion** - Expand specific parts of conversation on demand
-
-This will enable better context management for AI coding tools (Claude Code, Cursor, etc.)
-
-[Read the format specification →](devsession/DEVSESSION_FORMAT.md)
-
-### Long-term
-- [ ] Cloud sync for recordings (optional)
-- [ ] Team sharing features
-- [ ] VS Code extension
-
-## Tech Stack
-
-- **Frontend**: Python + Tkinter (cross-platform GUI)
-- **Recording**: asciinema / script command
-- **Storage**: Local filesystem
+- RecCli as the canonical memory engine
+- `.devsession` and `.devproject` as the source-of-truth formats
+- host integrations, such as an OpenClaw plugin/context engine, as the main distribution surface
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
----
-
-**Built with love by developers, for developers.**
-
-[GitHub](https://github.com/willluecke/RecCli) | [Issues](https://github.com/willluecke/RecCli/issues)
-
-**Like this project? Give it a ⭐ on GitHub!**
+MIT. See [LICENSE](LICENSE).

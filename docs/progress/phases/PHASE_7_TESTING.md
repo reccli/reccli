@@ -1,4 +1,4 @@
-# Phase 7 Testing Guide - FIXED VERSION
+# Phase 7: Testing Guide
 
 **Date**: 2025-11-07 (Post-Audit)
 **Status**: ✅ Bugs Fixed - Ready for Real Testing
@@ -31,7 +31,7 @@
 ### 1. Install Dependencies
 
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 
 # Install required packages
 pip3 install anthropic openai tiktoken jsonschema rank-bm25

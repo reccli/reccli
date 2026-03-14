@@ -1,4 +1,4 @@
-# Phase 6: Memory Middleware - Implementation Spec
+# Phase 6: Memory Middleware - Implementation
 
 **Goal**: Hydrate LLM prompts from .devsession memory in ~2K tokens reliably
 
@@ -725,9 +725,9 @@ Shows what context would be loaded for a given query.
 ## File Structure
 
 ```
-v2-devsession-recorder/
+packages/reccli-core/
 ├── reccli/
-│   ├── memory_middleware.py    # NEW - Core context loading
+│   ├── memory_middleware.py     # NEW - Core context loading
 │   ├── wpc.py                   # NEW - Work Package Continuity
 │   ├── post_answer_reasoning.py # NEW - Post-answer prediction
 │   ├── search.py                # EXISTING - Phase 5 search (used by middleware)
@@ -737,7 +737,7 @@ v2-devsession-recorder/
 │   ├── test_memory_middleware.py  # NEW
 │   ├── test_wpc.py               # NEW
 │   └── test_post_answer.py       # NEW
-└── PHASE_6_SPEC.md              # This file
+└── docs/progress/phases/PHASE_6_IMPLEMENTATION.md  # This file
 ```
 
 ---

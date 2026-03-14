@@ -1,4 +1,4 @@
-# Phase 7: Preemptive Compaction - Quick Start Guide
+# Phase 7: Preemptive Compaction - Walkthrough
 
 ## What Is This?
 
@@ -19,7 +19,7 @@ Phase 7 adds **automatic intelligent compaction** at 190K tokens. When you're ch
 ### 1. Start a Chat with Compaction Enabled
 
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 
 # Start chat (compaction auto-enabled)
 ./reccli-v2.py chat --model claude
@@ -255,7 +255,7 @@ Even though the LLM only sees 28K tokens, your full 190K conversation is saved i
 
 Make sure you're in the right directory:
 ```bash
-cd /Users/will/coding-projects/reccli/v2-devsession-recorder
+cd /Users/will/coding-projects/RecCli
 ```
 
 ### Compaction Doesn't Trigger
