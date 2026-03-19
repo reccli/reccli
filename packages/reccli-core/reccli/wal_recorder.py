@@ -17,6 +17,7 @@ from typing import Optional
 from datetime import datetime
 
 from .devsession import DevSession
+from .devproject import discover_project_root
 
 
 class WALRecorder:
@@ -90,7 +91,9 @@ class WALRecorder:
             "started": datetime.now().isoformat(),
             "width": cols,
             "height": rows,
-            "shell": self.shell
+            "shell": self.shell,
+            "working_directory": str(Path.cwd()),
+            "project_root": str(discover_project_root(Path.cwd()) or Path.cwd()),
         }
         self.wal_file.write(json.dumps(header) + '\n')
         self.wal_file.flush()
@@ -214,6 +217,13 @@ class WALRecorder:
                 "session_id": self.session_id,
                 "created": header["started"],
                 "updated": datetime.now().isoformat(),
+                "metadata": {
+                    "session_id": self.session_id,
+                    "created_at": header["started"],
+                    "updated_at": datetime.now().isoformat(),
+                    "working_directory": header.get("working_directory"),
+                    "project_root": header.get("project_root"),
+                },
                 "terminal_recording": {
                     "version": 2,
                     "width": header["width"],
@@ -223,7 +233,23 @@ class WALRecorder:
                 },
                 "conversation": conversation,
                 "summary": None,
+                "spans": [],
                 "vector_index": None,
+                "summary_sync": {
+                    "status": "not_started",
+                    "last_synced_msg_id": None,
+                    "last_synced_msg_index": None,
+                    "updated_at": None,
+                    "pending_messages": 0,
+                    "pending_tokens": 0,
+                },
+                "embedding_storage": {
+                    "mode": "inline",
+                    "messages_file": None,
+                    "format": None,
+                    "external_message_count": 0,
+                    "loaded": True,
+                },
                 "token_counts": {
                     "conversation": 0,
                     "terminal_output": 0,
@@ -232,7 +258,10 @@ class WALRecorder:
                     "last_updated": None
                 },
                 "checksums": {},
-                "compaction_history": []
+                "compaction_history": [],
+                "checkpoints": [],
+                "episodes": [],
+                "current_episode_id": None,
             }
 
             # Atomic write: .tmp → .devsession

@@ -5,10 +5,15 @@ Stage 2: Reasoned summary (better model)
 """
 
 import json
+import re
+from copy import deepcopy
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
 from .summary_schema import (
+    SUMMARY_TEXT_FIELDS,
+    SPAN_KIND_BY_CATEGORY,
+    create_span,
     create_summary_skeleton,
     create_decision_item,
     create_code_change_item,
@@ -16,6 +21,7 @@ from .summary_schema import (
     create_open_issue_item,
     create_next_step_item,
     add_causal_edge,
+    ensure_summary_span_links,
 )
 from .summary_verification import SummaryVerifier
 from .redaction import redact_for_summarization
@@ -47,7 +53,7 @@ Output JSON array of spans:
     "category": "decision",
     "start": "msg_042",
     "end": "msg_050",
-    "start_index": 42,
+    "start_index": 41,
     "end_index": 50,
     "topic": "choosing modal vs sidebar for export dialog"
   },
@@ -83,7 +89,7 @@ Output a JSON object with this structure:
       "message_range": {
         "start": "msg_042",
         "end": "msg_050",
-        "start_index": 42,
+        "start_index": 41,
         "end_index": 50
       },
       "confidence": "low" | "medium" | "high",
@@ -141,6 +147,66 @@ CRITICAL RULES:
 - Use temperature 0 for determinism.
 """
 
+    DELTA_SUMMARY_PATCH_PROMPT = """You update an existing session summary using only new messages since the compaction frontier.
+
+Return JSON only with this shape:
+{
+  "operations": [
+    {
+      "op": "add_item",
+      "category": "decisions" | "open_issues" | "next_steps",
+      "item": { ... }
+    },
+    {
+      "op": "update_item",
+      "category": "decisions" | "open_issues" | "next_steps",
+      "item_id": "existing_summary_item_id",
+      "changes": { ... }
+    },
+    {
+      "op": "merge_items",
+      "category": "decisions" | "open_issues" | "next_steps",
+      "source_ids": ["old_id_a", "old_id_b"],
+      "target_item": { ... }
+    },
+    {
+      "op": "close_span",
+      "span_id": "open_span_id",
+      "end_message_id": "msg_123",
+      "message_ids": ["msg_101", "msg_103", "msg_123"]
+    },
+    {
+      "op": "no_change",
+      "reason": "why no update is needed"
+    }
+  ]
+}
+
+Rules:
+- Do NOT regenerate the whole summary.
+- Do NOT remove existing summary items implicitly.
+- Only emit surgical operations based on the new messages.
+- Prefer `update_item` over rewording an item from scratch.
+- `update_item` MUST NOT stretch an existing item beyond its linked spans. If new evidence falls outside the linked spans, emit a new item instead of stretching the old one.
+- `merge_items` should combine the source items' span_ids. Do not invent a merged range that ignores the source spans.
+- Only operate on decisions, open_issues, and next_steps.
+- Code changes are handled by deterministic tooling elsewhere.
+- Use message IDs, not computed indices. The runtime will resolve indices from canonical message IDs.
+- For any `message_range`, emit only `start` and `end` message IDs.
+- For `close_span`, emit `end_message_id` and optional `message_ids`, but do not emit `end_index`.
+- For `add_item` and `merge_items`, every item MUST include:
+  - canonical category field only:
+    - `decisions`: `decision` and `reasoning`
+    - `open_issues`: `issue`
+    - `next_steps`: `action`
+  - `references`
+  - `message_range.start`
+  - `message_range.end`
+- Do NOT use placeholder fields like `title`, `description`, or invented `span_ids`.
+- If you cannot ground an item in specific message IDs, emit `no_change` instead of a malformed item.
+- If nothing changed, emit exactly one `no_change` op.
+"""
+
     # Pricing (per 1M tokens) - Update these as models change
     PRICING = {
         "claude-3-5-sonnet-20241022": {"input": 3.0, "output": 15.0},
@@ -178,7 +244,8 @@ CRITICAL RULES:
     def format_conversation_for_llm(
         self,
         conversation: List[Dict],
-        include_indices: bool = True
+        include_indices: bool = True,
+        base_index: int = 0,
     ) -> str:
         """
         Format conversation for LLM consumption
@@ -192,12 +259,12 @@ CRITICAL RULES:
         """
         lines = []
         for i, msg in enumerate(conversation):
-            msg_id = f"msg_{i+1:03d}"
+            msg_id = f"msg_{base_index + i + 1:03d}"
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
 
             if include_indices:
-                lines.append(f"{msg_id} (index: {i+1}, {role}): {content}")
+                lines.append(f"{msg_id} (index: {base_index + i + 1}, {role}): {content}")
             else:
                 lines.append(f"{msg_id} ({role}): {content}")
 
@@ -224,7 +291,7 @@ CRITICAL RULES:
                 "category": "general",
                 "start": "msg_001",
                 "end": f"msg_{len(conversation):03d}",
-                "start_index": 1,
+                "start_index": 0,
                 "end_index": len(conversation),
                 "topic": "full session"
             }]
@@ -242,7 +309,7 @@ CRITICAL RULES:
             "category": "general",
             "start": "msg_001",
             "end": f"msg_{len(conversation):03d}",
-            "start_index": 1,
+            "start_index": 0,
             "end_index": len(conversation),
             "topic": "full session"
         }]
@@ -532,6 +599,1271 @@ CRITICAL RULES:
             "next_steps": []
         }
 
+    def _message_id_for_index(self, index: int) -> str:
+        return f"msg_{index + 1:03d}"
+
+    def _shift_message_id(self, message_id: str, offset: int) -> str:
+        try:
+            number = int(message_id.split("_")[1])
+        except (IndexError, ValueError):
+            return message_id
+        return f"msg_{number + offset:03d}"
+
+    def _shift_message_range(self, message_range: Dict[str, Any], offset: int) -> Dict[str, Any]:
+        shifted = dict(message_range)
+        if isinstance(shifted.get("start"), str):
+            shifted["start"] = self._shift_message_id(shifted["start"], offset)
+        if isinstance(shifted.get("end"), str):
+            shifted["end"] = self._shift_message_id(shifted["end"], offset)
+        if isinstance(shifted.get("start_index"), int):
+            shifted["start_index"] = shifted["start_index"] + offset
+        if isinstance(shifted.get("end_index"), int):
+            shifted["end_index"] = shifted["end_index"] + offset
+        return shifted
+
+    def _shift_summary_item_links(self, item: Dict[str, Any], offset: int) -> Dict[str, Any]:
+        shifted = deepcopy(item)
+        shifted["references"] = [
+            self._shift_message_id(ref, offset) if isinstance(ref, str) else ref
+            for ref in shifted.get("references", [])
+        ]
+        if "message_range" in shifted:
+            shifted["message_range"] = self._shift_message_range(shifted["message_range"], offset)
+        shifted.pop("span_ids", None)
+        return shifted
+
+    def _canonicalize_item(self, category: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        canonical_text_fields = {
+            "decisions": "decision",
+            "code_changes": "description",
+            "problems_solved": "problem",
+            "open_issues": "issue",
+            "next_steps": "action",
+        }
+        text_field = canonical_text_fields.get(category)
+        normalized_item = self._normalize_category_aliases(category, item)
+
+        message_range = normalized_item.get("message_range")
+        if (
+            normalized_item.get("id")
+            and "span_ids" in normalized_item
+            and text_field in normalized_item
+            and self._normalize_semantic_text(normalized_item.get(text_field, ""))
+            and isinstance(message_range, dict)
+            and "start_index" in message_range
+            and "end_index" in message_range
+        ):
+            return normalized_item
+
+        common = {
+            "references": normalized_item.get("references", []),
+            "message_range": normalized_item.get("message_range", {}),
+            "span_ids": normalized_item.get("span_ids", []),
+            "confidence": normalized_item.get("confidence", "medium"),
+            "t_first": normalized_item.get("t_first"),
+            "t_last": normalized_item.get("t_last"),
+        }
+
+        if category == "decisions":
+            canonical = create_decision_item(
+                decision=normalized_item.get("decision", ""),
+                reasoning=normalized_item.get("reasoning", ""),
+                impact=normalized_item.get("impact", "medium"),
+                alternatives_considered=normalized_item.get("alternatives_considered", []),
+                quote=normalized_item.get("quote"),
+                **common,
+            )
+        elif category == "code_changes":
+            canonical = create_code_change_item(
+                files=normalized_item.get("files", []),
+                description=normalized_item.get("description", ""),
+                change_type=normalized_item.get("type", "feature"),
+                lines_added=normalized_item.get("lines_added"),
+                lines_removed=normalized_item.get("lines_removed"),
+                source_of_truth=normalized_item.get("source_of_truth", "llm_inferred"),
+                **common,
+            )
+        elif category == "problems_solved":
+            canonical = create_problem_solved_item(
+                problem=normalized_item.get("problem", ""),
+                solution=normalized_item.get("solution", ""),
+                **common,
+            )
+        elif category == "open_issues":
+            canonical = create_open_issue_item(
+                issue=normalized_item.get("issue", ""),
+                severity=normalized_item.get("severity", "medium"),
+                **common,
+            )
+        else:
+            canonical = create_next_step_item(
+                action=normalized_item.get("action", ""),
+                priority=normalized_item.get("priority", 3),
+                estimated_time=normalized_item.get("estimated_time"),
+                **common,
+            )
+
+        # Preserve any extra metadata the constructors do not know about.
+        for key, value in normalized_item.items():
+            canonical.setdefault(key, value)
+        return canonical
+
+    def _merge_summary_items(self, existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: Dict[str, Dict[str, Any]] = {}
+        ordered_ids: List[str] = []
+
+        for item in existing + incoming:
+            item_id = item.get("id")
+            if not item_id:
+                continue
+            if item_id not in merged:
+                ordered_ids.append(item_id)
+                merged[item_id] = deepcopy(item)
+                continue
+
+            prior = merged[item_id]
+            updated = deepcopy(prior)
+            updated.update(item)
+
+            # Preserve manual protections unless explicitly changed.
+            if prior.get("pinned") and "pinned" not in item:
+                updated["pinned"] = True
+            if prior.get("locked") and "locked" not in item:
+                updated["locked"] = True
+            merged[item_id] = updated
+
+        return [merged[item_id] for item_id in ordered_ids]
+
+    def _apply_summary_patch(self, summary: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+        updated = deepcopy(summary)
+        if patch.get("overview"):
+            existing_overview = updated.get("overview", "").strip()
+            new_overview = patch["overview"].strip()
+            if not existing_overview:
+                updated["overview"] = new_overview
+            elif new_overview and new_overview not in existing_overview:
+                updated["overview"] = f"{existing_overview} {new_overview}".strip()
+
+        for category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:
+            updated[category] = self._merge_summary_items(
+                updated.get(category, []),
+                patch.get(category, []),
+            )
+
+        updated["created_at"] = datetime.now().isoformat()
+        return updated
+
+    def _build_summary_patch(
+        self,
+        conversation: List[Dict],
+        base_index: int = 0,
+        redact_secrets: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Build a patch describing only the supplied conversation slice.
+        The patch can be safely merged into an existing summary without dropping older items.
+        """
+        working = deepcopy(conversation)
+        if redact_secrets:
+            working, redaction_stats = redact_for_summarization(working)
+            if redaction_stats:
+                print(f"🔒 Redacted {sum(redaction_stats.values())} secrets: {redaction_stats}")
+
+        detector = CodeChangeDetector()
+        ground_truth = detector.analyze_conversation(working)
+        ground_truth_changes = detector.build_code_changes_from_ground_truth(working)
+
+        if self.use_two_stage:
+            spans = self.stage1_detect_spans(working)
+            print(f"📍 Detected {len(spans)} discussion spans")
+            llm_summary = self.stage2_generate_summary(working, spans)
+        else:
+            print(f"📝 Single-stage summarization of {len(working)} messages")
+            spans = [{
+                "category": "full_session",
+                "start": "msg_001",
+                "end": f"msg_{len(working):03d}",
+                "start_index": 0,
+                "end_index": len(working),
+                "topic": "complete session slice"
+            }]
+            llm_summary = self.stage2_generate_summary(working, spans)
+
+        if llm_summary.get("code_changes"):
+            llm_summary["code_changes"] = detector.augment_llm_code_changes(
+                llm_summary["code_changes"],
+                ground_truth
+            )
+        if ground_truth_changes and not llm_summary.get("code_changes"):
+            llm_summary["code_changes"] = ground_truth_changes
+
+        patch = {
+            "overview": llm_summary.get("overview") or "",
+            "decisions": [],
+            "code_changes": [],
+            "problems_solved": [],
+            "open_issues": [],
+            "next_steps": [],
+        }
+        for category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:
+            patch[category] = [
+                self._canonicalize_item(category, self._shift_summary_item_links(item, base_index))
+                for item in llm_summary.get(category, [])
+            ]
+        return patch
+
+    def _resolve_model_name_for_client(self) -> str:
+        """Normalize shorthand model names to provider-specific runtime IDs."""
+        anthropic_map = {
+            "claude": "claude-sonnet-4-5-20250929",
+            "claude-sonnet": "claude-sonnet-4-5-20250929",
+            "claude-haiku": "claude-haiku-4-5-20251001",
+            "claude-opus": "claude-opus-4-1-20250805",
+        }
+        openai_map = {
+            "gpt5": "gpt-5",
+            "gpt5-chat": "gpt-5-chat-latest",
+            "gpt5-mini": "gpt-5-mini",
+            "gpt5-nano": "gpt-5-nano",
+            "gpt5-codex": "gpt-5-codex",
+            "gpt4": "gpt-4-turbo",
+            "gpt4o": "gpt-4o",
+            "gpt4-turbo": "gpt-4-turbo",
+        }
+        if hasattr(self.llm_client, "messages"):
+            return anthropic_map.get(self.model, self.model)
+        if hasattr(self.llm_client, "chat"):
+            return openai_map.get(self.model, self.model)
+        return self.model
+
+    def _extract_json_payload(self, text: str) -> Dict[str, Any]:
+        """Extract a JSON object from a model response."""
+        text = (text or "").strip()
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1)
+        else:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                text = text[start:end + 1]
+        return json.loads(text)
+
+    def _call_json_llm(self, system_prompt: str, user_prompt: str, max_tokens: int = 2000) -> Dict[str, Any]:
+        """Call the configured LLM and parse a JSON object from the response."""
+        if not self.llm_client:
+            raise RuntimeError("No LLM client configured")
+
+        model_id = self._resolve_model_name_for_client()
+        if hasattr(self.llm_client, "messages"):
+            response = self.llm_client.messages.create(
+                model=model_id,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            text = "".join(
+                block.text for block in getattr(response, "content", [])
+                if hasattr(block, "text")
+            )
+            return self._extract_json_payload(text)
+
+        if hasattr(self.llm_client, "chat"):
+            response = self.llm_client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+            )
+            text = response.choices[0].message.content or ""
+            return self._extract_json_payload(text)
+
+        raise RuntimeError("Unsupported LLM client surface for summarization")
+
+    def _snapshot_summary_ids(self, summary: Dict[str, Any]) -> Dict[str, set]:
+        categories = ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]
+        return {
+            category: {item.get("id") for item in summary.get(category, []) if item.get("id")}
+            for category in categories
+        }
+
+    def _assert_no_silent_item_loss(
+        self,
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+        operations: List[Dict[str, Any]],
+    ) -> None:
+        """Every pre-existing item must survive unless explicitly marked as merged/superseded."""
+        before_ids = self._snapshot_summary_ids(before)
+        after_ids = self._snapshot_summary_ids(after)
+
+        explicitly_handled = {category: set() for category in before_ids}
+        for op in operations:
+            category = op.get("category")
+            if category not in explicitly_handled:
+                continue
+            if op.get("op") == "merge_items":
+                explicitly_handled[category].update(op.get("source_ids", []))
+
+        silent_loss = {}
+        for category, ids in before_ids.items():
+            lost = ids - after_ids.get(category, set()) - explicitly_handled[category]
+            if lost:
+                silent_loss[category] = sorted(lost)
+
+        if silent_loss:
+            raise ValueError(f"Silent summary item loss detected: {silent_loss}")
+
+    def _format_open_spans_for_delta(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "id": span.get("id"),
+                "kind": span.get("kind"),
+                "topic": span.get("topic"),
+                "start_message_id": span.get("start_message_id"),
+                "start_index": span.get("start_index"),
+                "latest_message_id": span.get("latest_message_id"),
+                "latest_index": span.get("latest_index"),
+                "message_ids": span.get("message_ids", []),
+            }
+            for span in spans
+            if span.get("status") == "open"
+        ]
+
+    def _normalize_semantic_text(self, value: str) -> str:
+        return " ".join((value or "").strip().lower().split())
+
+    def _text_field_for_category(self, category: str) -> str:
+        return SUMMARY_TEXT_FIELDS.get(category, "summary")
+
+    def _message_id_to_index(self, conversation: List[Dict[str, Any]]) -> Dict[str, int]:
+        return {
+            message.get("_message_id"): index
+            for index, message in enumerate(conversation)
+            if message.get("_message_id")
+        }
+
+    def _resolve_message_range_from_ids(
+        self,
+        message_range: Optional[Dict[str, Any]],
+        message_index: Dict[str, int],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(message_range, dict):
+            return message_range
+
+        start_id = message_range.get("start")
+        end_id = message_range.get("end")
+        if not isinstance(start_id, str) or not isinstance(end_id, str):
+            return message_range
+        if start_id not in message_index or end_id not in message_index:
+            return message_range
+
+        start_index = message_index[start_id]
+        end_index = message_index[end_id] + 1
+        resolved = dict(message_range)
+        resolved["start_index"] = start_index
+        resolved["end_index"] = end_index
+        return resolved
+
+    def _expand_message_range_to_references(
+        self,
+        item: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        message_index: Dict[str, int],
+    ) -> Dict[str, Any]:
+        expanded = deepcopy(item)
+        references = [ref for ref in expanded.get("references", []) if ref in message_index]
+        if not references:
+            return expanded
+
+        range_info = expanded.get("message_range")
+        indices = [message_index[ref] for ref in references]
+        if isinstance(range_info, dict):
+            start_id = range_info.get("start")
+            end_id = range_info.get("end")
+            if start_id in message_index:
+                indices.append(message_index[start_id])
+            if end_id in message_index:
+                indices.append(message_index[end_id])
+
+        start_index = min(indices)
+        end_index = max(indices) + 1
+        expanded["message_range"] = {
+            "start": conversation[start_index].get("_message_id"),
+            "end": conversation[end_index - 1].get("_message_id"),
+            "start_index": start_index,
+            "end_index": end_index,
+        }
+        return expanded
+
+    def _normalize_category_aliases(self, category: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = deepcopy(item)
+
+        if category == "decisions":
+            if not normalized.get("decision") and normalized.get("title"):
+                normalized["decision"] = normalized["title"]
+            if not normalized.get("reasoning") and normalized.get("description"):
+                normalized["reasoning"] = normalized["description"]
+        elif category == "open_issues":
+            if not normalized.get("issue"):
+                normalized["issue"] = normalized.get("title") or normalized.get("description", "")
+        elif category == "next_steps":
+            if not normalized.get("action"):
+                normalized["action"] = (
+                    normalized.get("step")
+                    or normalized.get("title")
+                    or normalized.get("description", "")
+                )
+            if isinstance(normalized.get("priority"), str):
+                priority_map = {"high": 1, "medium": 3, "low": 5}
+                normalized["priority"] = priority_map.get(
+                    normalized["priority"].strip().lower(),
+                    3,
+                )
+
+        return normalized
+
+    def _canonical_field_missing(self, category: str, item: Dict[str, Any]) -> bool:
+        text_field = self._text_field_for_category(category)
+        return not self._normalize_semantic_text(item.get(text_field, ""))
+
+    def _span_bounds(self, span: Dict[str, Any]) -> Tuple[int, int]:
+        start_index = span.get("start_index", 0)
+        end_index = span.get("end_index")
+        if not isinstance(end_index, int):
+            latest_index = span.get("latest_index")
+            if isinstance(latest_index, int):
+                end_index = latest_index + 1
+        if not isinstance(end_index, int):
+            end_index = start_index
+        return start_index, end_index
+
+    def _span_contains_index(self, span: Dict[str, Any], index: int) -> bool:
+        start_index, end_index = self._span_bounds(span)
+        return start_index <= index < end_index
+
+    def _item_required_indices(
+        self,
+        item: Dict[str, Any],
+        message_index: Dict[str, int],
+    ) -> List[int]:
+        indices = set()
+        message_range = item.get("message_range") or {}
+        start_id = message_range.get("start")
+        end_id = message_range.get("end")
+        if isinstance(start_id, str) and start_id in message_index:
+            indices.add(message_index[start_id])
+        if isinstance(end_id, str) and end_id in message_index:
+            indices.add(message_index[end_id])
+        for ref in item.get("references", []):
+            if ref in message_index:
+                indices.add(message_index[ref])
+        return sorted(indices)
+
+    def _infer_support_span(
+        self,
+        category: str,
+        item: Dict[str, Any],
+        projected_spans: List[Dict[str, Any]],
+        message_index: Dict[str, int],
+        conversation: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        required_indices = self._item_required_indices(item, message_index)
+        if not required_indices:
+            return None
+
+        existing_span_ids = set(item.get("span_ids", []))
+        covered_indices = set()
+        for span in projected_spans:
+            if span.get("id") not in existing_span_ids:
+                continue
+            for idx in required_indices:
+                if self._span_contains_index(span, idx):
+                    covered_indices.add(idx)
+
+        uncovered = [idx for idx in required_indices if idx not in covered_indices]
+        if not uncovered:
+            return None
+
+        start_index = min(uncovered)
+        end_index = max(uncovered) + 1
+        start_message_id = conversation[start_index].get("_message_id")
+        end_message_id = conversation[end_index - 1].get("_message_id")
+        if not start_message_id or not end_message_id:
+            return None
+
+        inferred = create_span(
+            kind=SPAN_KIND_BY_CATEGORY.get(category, "supporting_discussion"),
+            start_message_id=start_message_id,
+            start_index=start_index,
+            end_message_id=end_message_id,
+            end_index=end_index,
+            topic=item.get(self._text_field_for_category(category), "") or item.get("id", category),
+            references=item.get("references", []),
+            t_first=conversation[start_index].get("timestamp"),
+            t_last=conversation[end_index - 1].get("timestamp"),
+            message_ids=[
+                conversation[idx].get("_message_id")
+                for idx in range(start_index, end_index)
+                if conversation[idx].get("_message_id")
+            ],
+        )
+        if inferred.get("id") not in {span.get("id") for span in projected_spans}:
+            projected_spans.append(inferred)
+        return inferred
+
+    def _reconcile_item_spans(
+        self,
+        category: str,
+        item: Dict[str, Any],
+        projected_spans: List[Dict[str, Any]],
+        message_index: Dict[str, int],
+        conversation: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        reconciled = deepcopy(item)
+        reconciled.setdefault("span_ids", [])
+        inferred = self._infer_support_span(
+            category=category,
+            item=reconciled,
+            projected_spans=projected_spans,
+            message_index=message_index,
+            conversation=conversation,
+        )
+        if inferred and inferred.get("id") not in reconciled["span_ids"]:
+            reconciled["span_ids"] = list(reconciled["span_ids"]) + [inferred["id"]]
+        return reconciled
+
+    def _is_semantic_duplicate(
+        self,
+        category: str,
+        item: Dict[str, Any],
+        existing_items: List[Dict[str, Any]],
+    ) -> bool:
+        text_field = self._text_field_for_category(category)
+        candidate = self._normalize_semantic_text(item.get(text_field, ""))
+        if not candidate:
+            return False
+
+        candidate_refs = set(item.get("references", []))
+        for existing in existing_items:
+            if existing.get("status") == "merged":
+                continue
+            existing_text = self._normalize_semantic_text(existing.get(text_field, ""))
+            if candidate != existing_text:
+                continue
+            existing_refs = set(existing.get("references", []))
+            if not candidate_refs or not existing_refs or candidate_refs & existing_refs:
+                return True
+        return False
+
+    def _item_range_bounds(self, item: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+        message_range = item.get("message_range") or {}
+        start_index = message_range.get("start_index")
+        end_index = message_range.get("end_index")
+        if not isinstance(start_index, int) or not isinstance(end_index, int):
+            return None
+        return start_index, end_index
+
+    def _range_gap(self, left: Dict[str, Any], right: Dict[str, Any]) -> int:
+        left_bounds = self._item_range_bounds(left)
+        right_bounds = self._item_range_bounds(right)
+        if not left_bounds or not right_bounds:
+            return 10**9
+        left_start, left_end = left_bounds
+        right_start, right_end = right_bounds
+        if left_end < right_start:
+            return right_start - left_end
+        if right_end < left_start:
+            return left_start - right_end
+        return 0
+
+    def _semantic_tokens(self, category: str, item: Dict[str, Any]) -> set:
+        stopwords = {
+            "the", "and", "for", "with", "that", "this", "from", "into", "also",
+            "need", "needs", "using", "use", "should", "still", "item", "flow",
+            "track", "tracked", "work", "queue", "next", "step", "issue", "decision",
+            "handling", "implement", "implementation", "add", "update", "merge",
+            "close", "change", "keep", "instead", "than", "while", "during",
+        }
+        text_parts = [item.get(self._text_field_for_category(category), "")]
+        if category == "decisions":
+            text_parts.append(item.get("reasoning", ""))
+        normalized = self._normalize_semantic_text(" ".join(text_parts))
+        return {
+            token for token in re.findall(r"[a-z0-9_]+", normalized)
+            if len(token) > 2 and token not in stopwords
+        }
+
+    def _should_fold_new_item_into_existing(
+        self,
+        category: str,
+        existing_item: Dict[str, Any],
+        new_item: Dict[str, Any],
+    ) -> bool:
+        existing_tokens = self._semantic_tokens(category, existing_item)
+        new_tokens = self._semantic_tokens(category, new_item)
+        shared_tokens = existing_tokens & new_tokens
+        if not shared_tokens:
+            return False
+
+        range_gap = self._range_gap(existing_item, new_item)
+        if len(shared_tokens) >= 2:
+            return True
+        return range_gap <= 6
+
+    def _merge_references(
+        self,
+        left: Dict[str, Any],
+        right: Dict[str, Any],
+        message_index: Dict[str, int],
+    ) -> List[str]:
+        refs = list(dict.fromkeys(list(left.get("references", [])) + list(right.get("references", []))))
+        return sorted(refs, key=lambda ref: message_index.get(ref, 10**9))
+
+    def _expand_item_range(
+        self,
+        left: Dict[str, Any],
+        right: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        message_index: Dict[str, int],
+    ) -> Dict[str, Any]:
+        candidate = deepcopy(left)
+        indices = []
+        for item in [left, right]:
+            bounds = self._item_range_bounds(item)
+            if bounds:
+                start_index, end_index = bounds
+                indices.extend([start_index, end_index - 1])
+            for ref in item.get("references", []):
+                if ref in message_index:
+                    indices.append(message_index[ref])
+        if not indices:
+            return candidate
+
+        start_index = min(indices)
+        end_index = max(indices) + 1
+        candidate["message_range"] = {
+            "start": conversation[start_index].get("_message_id"),
+            "end": conversation[end_index - 1].get("_message_id"),
+            "start_index": start_index,
+            "end_index": end_index,
+        }
+        return candidate
+
+    def _fold_new_item_into_existing(
+        self,
+        category: str,
+        existing_item: Dict[str, Any],
+        new_item: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        message_index: Dict[str, int],
+    ) -> Dict[str, Any]:
+        folded = deepcopy(existing_item)
+        text_field = self._text_field_for_category(category)
+        if new_item.get(text_field):
+            folded[text_field] = new_item[text_field]
+        if category == "decisions" and new_item.get("reasoning"):
+            folded["reasoning"] = new_item["reasoning"]
+        if category == "open_issues" and new_item.get("severity"):
+            folded["severity"] = new_item["severity"]
+
+        folded["references"] = self._merge_references(existing_item, new_item, message_index)
+        folded["span_ids"] = list(dict.fromkeys(list(existing_item.get("span_ids", [])) + list(new_item.get("span_ids", []))))
+        folded = self._expand_item_range(folded, new_item, conversation, message_index)
+        if new_item.get("t_first") and (not folded.get("t_first") or new_item["t_first"] < folded["t_first"]):
+            folded["t_first"] = new_item["t_first"]
+        if new_item.get("t_last"):
+            folded["t_last"] = new_item["t_last"]
+        return self._canonicalize_item(category, folded)
+
+    def _post_op_deduplicate_summary(
+        self,
+        before_summary: Dict[str, Any],
+        summary: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        updated = deepcopy(summary)
+        message_index = self._message_id_to_index(conversation)
+
+        for category in ["decisions", "open_issues"]:
+            prior_ids = {
+                item.get("id")
+                for item in before_summary.get(category, [])
+                if item.get("id")
+            }
+            items = list(updated.get(category, []))
+            existing_items = [item for item in items if item.get("id") in prior_ids]
+            existing_items = [item for item in existing_items if item.get("status") != "merged"]
+            new_items = [item for item in items if item.get("id") not in prior_ids]
+            dropped_ids = set()
+
+            for new_item in new_items:
+                match = next(
+                    (
+                        existing_item for existing_item in existing_items
+                        if existing_item.get("id") not in dropped_ids
+                        and self._should_fold_new_item_into_existing(category, existing_item, new_item)
+                    ),
+                    None,
+                )
+                if not match:
+                    continue
+
+                folded = self._fold_new_item_into_existing(
+                    category=category,
+                    existing_item=match,
+                    new_item=new_item,
+                    conversation=conversation,
+                    message_index=message_index,
+                )
+                for idx, item in enumerate(existing_items):
+                    if item.get("id") == match.get("id"):
+                        existing_items[idx] = folded
+                        break
+                dropped_ids.add(new_item.get("id"))
+
+            updated[category] = existing_items + [
+                item for item in new_items
+                if item.get("id") not in dropped_ids
+            ]
+
+        return updated
+
+    def _validate_delta_operations(
+        self,
+        operations: List[Dict[str, Any]],
+        current_summary: Dict[str, Any],
+        current_spans: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Reject malformed or obviously unsafe LLM patch ops before mutating state."""
+        allowed_categories = {"decisions", "open_issues", "next_steps"}
+        allowed_ops = {"add_item", "update_item", "merge_items", "close_span", "no_change"}
+        warnings: List[str] = []
+        validated_ops: List[Dict[str, Any]] = []
+
+        message_index = self._message_id_to_index(conversation)
+        items_by_category = {
+            category: {
+                item.get("id"): item
+                for item in current_summary.get(category, [])
+                if item.get("id")
+            }
+            for category in allowed_categories
+        }
+        open_spans = {
+            span.get("id"): span
+            for span in current_spans
+            if span.get("id") and span.get("status") == "open"
+        }
+        projected_spans = [deepcopy(span) for span in current_spans]
+        projected_items = {
+            category: [deepcopy(item) for item in current_summary.get(category, [])]
+            for category in allowed_categories
+        }
+
+        for index, raw_op in enumerate(operations):
+            op = deepcopy(raw_op)
+            op_type = op.get("op")
+
+            if op_type not in allowed_ops:
+                warnings.append(f"op[{index}] rejected: unsupported op '{op_type}'")
+                continue
+
+            if op_type == "no_change":
+                if len(operations) > 1:
+                    warnings.append(f"op[{index}] ignored: no_change cannot be combined with other ops")
+                    continue
+                return ([{"op": "no_change", "reason": op.get("reason", "validated_no_change")}], warnings)
+
+            if op_type == "close_span":
+                span_id = op.get("span_id")
+                span = open_spans.get(span_id)
+                if not span:
+                    warnings.append(f"op[{index}] rejected: close_span target '{span_id}' is not open")
+                    continue
+
+                end_message_id = op.get("end_message_id")
+                if not isinstance(end_message_id, str) or end_message_id not in message_index:
+                    warnings.append(f"op[{index}] rejected: close_span missing valid end_message_id")
+                    continue
+                end_index = message_index[end_message_id] + 1
+                if end_index <= span.get("start_index", -1) or end_index > len(conversation):
+                    warnings.append(f"op[{index}] rejected: close_span end_index {end_index} out of bounds")
+                    continue
+
+                expected_end_message_id = conversation[end_index - 1].get("_message_id")
+
+                member_ids = list(op.get("message_ids") or [])
+                if member_ids:
+                    if any(member_id not in message_index for member_id in member_ids):
+                        warnings.append(f"op[{index}] rejected: close_span references unknown message_ids")
+                        continue
+                    if any(
+                        message_index[member_id] < span.get("start_index", 0)
+                        or message_index[member_id] >= end_index
+                        for member_id in member_ids
+                    ):
+                        warnings.append(f"op[{index}] rejected: close_span message_ids fall outside span bounds")
+                        continue
+                else:
+                    member_ids = [
+                        conversation[msg_index].get("_message_id")
+                        for msg_index in range(span.get("start_index", 0), end_index)
+                        if conversation[msg_index].get("_message_id")
+                    ]
+
+                op["end_message_id"] = expected_end_message_id
+                op["end_index"] = end_index
+                op["message_ids"] = member_ids
+                validated_ops.append(op)
+                for span_position, projected_span in enumerate(projected_spans):
+                    if projected_span.get("id") != span_id:
+                        continue
+                    projected_spans[span_position] = {
+                        **projected_span,
+                        "status": "closed",
+                        "end_message_id": expected_end_message_id,
+                        "end_index": end_index,
+                        "message_ids": member_ids,
+                    }
+                    break
+                continue
+
+            category = op.get("category")
+            if category not in allowed_categories:
+                warnings.append(f"op[{index}] rejected: unsupported category '{category}'")
+                continue
+
+            items = projected_items[category]
+
+            if op_type == "update_item":
+                item_id = op.get("item_id")
+                if item_id not in items_by_category[category]:
+                    warnings.append(f"op[{index}] rejected: update_item target '{item_id}' not found")
+                    continue
+                changes = op.get("changes")
+                if not isinstance(changes, dict) or not changes:
+                    warnings.append(f"op[{index}] rejected: update_item missing changes")
+                    continue
+                if "id" in changes:
+                    changes = {key: value for key, value in changes.items() if key != "id"}
+                    op["changes"] = changes
+                if not changes:
+                    warnings.append(f"op[{index}] rejected: update_item changes became empty after sanitization")
+                    continue
+                proposed_item = deepcopy(items_by_category[category][item_id])
+                proposed_item.update(changes)
+                if "message_range" in proposed_item:
+                    proposed_item["message_range"] = self._resolve_message_range_from_ids(
+                        proposed_item.get("message_range"),
+                        message_index,
+                    )
+                proposed_item = self._expand_message_range_to_references(
+                    proposed_item,
+                    conversation,
+                    message_index,
+                )
+                proposed_item = self._normalize_category_aliases(category, proposed_item)
+                proposed_item["span_ids"] = list(
+                    proposed_item.get("span_ids") or items_by_category[category][item_id].get("span_ids", [])
+                )
+                proposed_item = self._canonicalize_item(category, proposed_item)
+                if self._canonical_field_missing(category, proposed_item):
+                    warnings.append(
+                        f"op[{index}] rejected: update_item missing canonical {self._text_field_for_category(category)} field"
+                    )
+                    continue
+                proposed_item = self._reconcile_item_spans(
+                    category=category,
+                    item=proposed_item,
+                    projected_spans=projected_spans,
+                    message_index=message_index,
+                    conversation=conversation,
+                )
+                verifier = SummaryVerifier(conversation, projected_spans)
+                valid, errors = verifier.verify_decision(proposed_item)
+                if not valid:
+                    warnings.append(
+                        f"op[{index}] rejected: update_item would create invalid {category[:-1]}: {', '.join(errors)}"
+                    )
+                    continue
+                op["changes"] = proposed_item
+                validated_ops.append(op)
+                target = proposed_item
+                items_by_category[category][item_id] = target
+                for item_position, item in enumerate(items):
+                    if item.get("id") == item_id:
+                        items[item_position] = target
+                        break
+                continue
+
+            if op_type == "add_item":
+                item = deepcopy(op.get("item") or {})
+                if not item:
+                    warnings.append(f"op[{index}] rejected: add_item missing item payload")
+                    continue
+                if "message_range" in item:
+                    item["message_range"] = self._resolve_message_range_from_ids(
+                        item.get("message_range"),
+                        message_index,
+                    )
+                item = self._normalize_category_aliases(category, item)
+                canonical = self._canonicalize_item(category, item)
+                if self._canonical_field_missing(category, canonical):
+                    warnings.append(
+                        f"op[{index}] rejected: add_item missing canonical {self._text_field_for_category(category)} field"
+                    )
+                    continue
+                canonical = self._reconcile_item_spans(
+                    category=category,
+                    item=canonical,
+                    projected_spans=projected_spans,
+                    message_index=message_index,
+                    conversation=conversation,
+                )
+                if self._is_semantic_duplicate(category, canonical, items):
+                    warnings.append(f"op[{index}] rejected: add_item duplicates existing {category[:-1]} content")
+                    continue
+                verifier = SummaryVerifier(conversation, projected_spans)
+                valid, errors = verifier.verify_decision(canonical)
+                if not valid:
+                    warnings.append(
+                        f"op[{index}] rejected: add_item produced invalid {category[:-1]}: {', '.join(errors)}"
+                    )
+                    continue
+                op["item"] = canonical
+                validated_ops.append(op)
+                items.append(canonical)
+                items_by_category[category][canonical["id"]] = canonical
+                continue
+
+            if op_type == "merge_items":
+                source_ids = list(op.get("source_ids") or [])
+                if not source_ids:
+                    warnings.append(f"op[{index}] rejected: merge_items missing source_ids")
+                    continue
+                if any(source_id not in items_by_category[category] for source_id in source_ids):
+                    warnings.append(f"op[{index}] rejected: merge_items references unknown source_ids")
+                    continue
+                target_item = deepcopy(op.get("target_item") or {})
+                if not target_item:
+                    warnings.append(f"op[{index}] rejected: merge_items missing target_item")
+                    continue
+                if "message_range" in target_item:
+                    target_item["message_range"] = self._resolve_message_range_from_ids(
+                        target_item.get("message_range"),
+                        message_index,
+                    )
+                target_item = self._normalize_category_aliases(category, target_item)
+                source_span_ids = []
+                for source_id in source_ids:
+                    source_item = items_by_category[category].get(source_id, {})
+                    source_span_ids.extend(source_item.get("span_ids", []))
+                target_item["span_ids"] = list(dict.fromkeys(list(target_item.get("span_ids", [])) + source_span_ids))
+                canonical_target = self._canonicalize_item(category, target_item)
+                if self._canonical_field_missing(category, canonical_target):
+                    warnings.append(
+                        f"op[{index}] rejected: merge_items missing canonical {self._text_field_for_category(category)} field"
+                    )
+                    continue
+                canonical_target = self._reconcile_item_spans(
+                    category=category,
+                    item=canonical_target,
+                    projected_spans=projected_spans,
+                    message_index=message_index,
+                    conversation=conversation,
+                )
+                comparison_items = [
+                    item for item in items
+                    if item.get("id") not in set(source_ids)
+                ]
+                if self._is_semantic_duplicate(category, canonical_target, comparison_items):
+                    warnings.append(f"op[{index}] rejected: merge_items target duplicates an existing item")
+                    continue
+                verifier = SummaryVerifier(conversation, projected_spans)
+                valid, errors = verifier.verify_decision(canonical_target)
+                if not valid:
+                    warnings.append(
+                        f"op[{index}] rejected: merge_items target invalid for {category}: {', '.join(errors)}"
+                    )
+                    continue
+                op["target_item"] = canonical_target
+                validated_ops.append(op)
+                items.append(canonical_target)
+                items_by_category[category][canonical_target["id"]] = canonical_target
+
+        if not validated_ops:
+            return ([{"op": "no_change", "reason": "validation_rejected"}], warnings)
+        return validated_ops, warnings
+
+    def generate_delta_operations(
+        self,
+        current_summary: Dict[str, Any],
+        conversation_slice: List[Dict[str, Any]],
+        open_spans: Optional[List[Dict[str, Any]]] = None,
+        base_index: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Ask the model for constrained patch operations instead of a full summary rewrite."""
+        if not self.llm_client or not conversation_slice:
+            return [{"op": "no_change", "reason": "No LLM client or empty conversation slice"}]
+
+        summary_view = {
+            "overview": current_summary.get("overview", ""),
+            "decisions": current_summary.get("decisions", []),
+            "open_issues": current_summary.get("open_issues", []),
+            "next_steps": current_summary.get("next_steps", []),
+        }
+        user_prompt = "\n\n".join([
+            "Current summary state:",
+            json.dumps(summary_view, indent=2, ensure_ascii=False),
+            "New messages since the frontier:",
+            self.format_conversation_for_llm(conversation_slice, base_index=base_index),
+            "Open spans that may need closing:",
+            json.dumps(self._format_open_spans_for_delta(open_spans or []), indent=2, ensure_ascii=False),
+        ])
+
+        try:
+            payload = self._call_json_llm(
+                self.DELTA_SUMMARY_PATCH_PROMPT,
+                user_prompt,
+                max_tokens=3000,
+            )
+        except Exception as exc:
+            print(f"⚠️  Delta op generation failed: {exc}")
+            return [{"op": "no_change", "reason": f"llm_error: {exc}"}]
+
+        operations = payload.get("operations", [])
+        if not operations:
+            return [{"op": "no_change", "reason": "empty_operation_list"}]
+        return operations
+
+    def _update_existing_item(self, category: str, item: Dict[str, Any], changes: Dict[str, Any]) -> Dict[str, Any]:
+        updated = deepcopy(item)
+        updated.update(changes)
+        return self._canonicalize_item(category, updated)
+
+    def _apply_delta_operations(
+        self,
+        summary: Dict[str, Any],
+        spans: List[Dict[str, Any]],
+        operations: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        updated_summary = deepcopy(summary)
+        updated_spans = deepcopy(spans)
+        categories = ["decisions", "open_issues", "next_steps"]
+
+        for op in operations:
+            op_type = op.get("op")
+            if op_type == "no_change":
+                continue
+
+            if op_type == "close_span":
+                span_id = op.get("span_id")
+                for span in updated_spans:
+                    if span.get("id") != span_id:
+                        continue
+                    span["status"] = "closed"
+                    span["end_message_id"] = op.get("end_message_id")
+                    span["end_index"] = op.get("end_index")
+                    if "message_ids" in op:
+                        span["message_ids"] = list(op.get("message_ids") or [])
+                    end_index = span.get("end_index")
+                    if isinstance(end_index, int) and 0 < end_index <= len(conversation):
+                        span["t_last"] = conversation[end_index - 1].get("timestamp")
+                    break
+                continue
+
+            category = op.get("category")
+            if category not in categories:
+                continue
+
+            items = list(updated_summary.get(category, []))
+
+            if op_type == "add_item":
+                item = self._canonicalize_item(category, deepcopy(op.get("item", {})))
+                items = self._merge_summary_items(items, [item])
+            elif op_type == "update_item":
+                item_id = op.get("item_id")
+                changes = op.get("changes", {})
+                next_items = []
+                for item in items:
+                    if item.get("id") == item_id:
+                        next_items.append(self._update_existing_item(category, item, changes))
+                    else:
+                        next_items.append(item)
+                items = next_items
+            elif op_type == "merge_items":
+                source_ids = set(op.get("source_ids", []))
+                target_item = self._canonicalize_item(category, deepcopy(op.get("target_item", {})))
+                next_items = []
+                for item in items:
+                    if item.get("id") in source_ids:
+                        merged = deepcopy(item)
+                        merged["merged_into"] = target_item.get("id")
+                        merged["status"] = "merged"
+                        next_items.append(merged)
+                    else:
+                        next_items.append(item)
+                items = self._merge_summary_items(next_items, [target_item])
+
+            updated_summary[category] = items
+
+        return updated_summary, updated_spans
+
+    def update_summary_state_incrementally(
+        self,
+        conversation: List[Dict],
+        existing_summary: Optional[Dict[str, Any]],
+        existing_spans: Optional[List[Dict[str, Any]]],
+        start_index: int,
+        end_index: Optional[int] = None,
+        session_hash: Optional[str] = None,
+        redact_secrets: bool = True,
+    ) -> Dict[str, Any]:
+        """Update summary/spans together using constrained delta ops plus deterministic patches."""
+        end_index = len(conversation) if end_index is None else min(end_index, len(conversation))
+        start_index = max(0, min(start_index, end_index))
+        current_spans = deepcopy(existing_spans or [])
+
+        if existing_summary is None:
+            summary = self.summarize_session(
+                conversation[:end_index],
+                session_hash=session_hash,
+                redact_secrets=redact_secrets,
+            )
+            spans = ensure_summary_span_links(summary, current_spans)
+            return {"summary": summary, "spans": spans, "operations": []}
+
+        if start_index >= end_index:
+            return {"summary": deepcopy(existing_summary), "spans": current_spans, "operations": []}
+
+        if not self.llm_client:
+            updated_summary = self.update_summary_incrementally(
+                conversation=conversation,
+                existing_summary=existing_summary,
+                start_index=start_index,
+                end_index=end_index,
+                session_hash=session_hash,
+                redact_secrets=redact_secrets,
+            )
+            spans = ensure_summary_span_links(updated_summary, current_spans)
+            return {"summary": updated_summary, "spans": spans, "operations": []}
+
+        operations = self.generate_delta_operations(
+            current_summary=existing_summary,
+            conversation_slice=conversation[start_index:end_index],
+            open_spans=[span for span in current_spans if span.get("status") == "open"],
+            base_index=start_index,
+        )
+        operations, op_warnings = self._validate_delta_operations(
+            operations=operations,
+            current_summary=existing_summary,
+            current_spans=current_spans,
+            conversation=conversation,
+        )
+        if op_warnings:
+            print("⚠️  Rejected invalid delta ops:")
+            for warning in op_warnings:
+                print(f"  - {warning}")
+
+        updated_summary, updated_spans = self._apply_delta_operations(
+            summary=existing_summary,
+            spans=current_spans,
+            operations=operations,
+            conversation=conversation,
+        )
+
+        deterministic_patch = self._build_summary_patch(
+            conversation[start_index:end_index],
+            base_index=start_index,
+            redact_secrets=redact_secrets,
+        )
+        updated_summary["code_changes"] = self._merge_summary_items(
+            updated_summary.get("code_changes", []),
+            deterministic_patch.get("code_changes", []),
+        )
+        if deterministic_patch.get("overview"):
+            updated_summary = self._apply_summary_patch(updated_summary, {"overview": deterministic_patch["overview"]})
+
+        updated_summary = self._post_op_deduplicate_summary(
+            before_summary=existing_summary,
+            summary=updated_summary,
+            conversation=conversation,
+        )
+
+        self.enrich_with_temporal_data(updated_summary, conversation)
+        updated_spans = ensure_summary_span_links(updated_summary, updated_spans)
+
+        verifier = SummaryVerifier(conversation, updated_spans)
+        is_valid, errors = verifier.verify_summary(updated_summary)
+        if not is_valid:
+            print("⚠️  Incremental summary-state validation errors:")
+            for category, errs in errors.items():
+                if errs:
+                    print(f"  {category}:")
+                    for err in errs:
+                        print(f"    - {err}")
+            updated_summary, warnings = verifier.auto_fix_summary(updated_summary)
+            updated_spans = verifier.spans
+            if warnings:
+                print("🔧 Auto-fixed incremental summary-state issues:")
+                for warning in warnings:
+                    print(f"  - {warning}")
+
+        self._assert_no_silent_item_loss(existing_summary, updated_summary, operations)
+        return {"summary": updated_summary, "spans": updated_spans, "operations": operations}
+
+    def update_summary_incrementally(
+        self,
+        conversation: List[Dict],
+        existing_summary: Optional[Dict[str, Any]],
+        start_index: int,
+        end_index: Optional[int] = None,
+        session_hash: Optional[str] = None,
+        redact_secrets: bool = True,
+    ) -> Dict[str, Any]:
+        """Update an existing summary using only messages beyond the summary frontier."""
+        end_index = len(conversation) if end_index is None else min(end_index, len(conversation))
+        start_index = max(0, min(start_index, end_index))
+
+        if existing_summary is None:
+            return self.summarize_session(
+                conversation[:end_index],
+                session_hash=session_hash,
+                redact_secrets=redact_secrets,
+            )
+
+        if start_index >= end_index:
+            return deepcopy(existing_summary)
+
+        patch = self._build_summary_patch(
+            conversation[start_index:end_index],
+            base_index=start_index,
+            redact_secrets=redact_secrets,
+        )
+        updated_summary = self._apply_summary_patch(existing_summary, patch)
+        self.enrich_with_temporal_data(updated_summary, conversation)
+        spans = ensure_summary_span_links(updated_summary)
+        verifier = SummaryVerifier(conversation, spans)
+        is_valid, errors = verifier.verify_summary(updated_summary)
+        if not is_valid:
+            print("⚠️  Incremental summary validation errors:")
+            for category, errs in errors.items():
+                if errs:
+                    print(f"  {category}:")
+                    for err in errs:
+                        print(f"    - {err}")
+            updated_summary, warnings = verifier.auto_fix_summary(updated_summary)
+            if warnings:
+                print("🔧 Auto-fixed incremental summary issues:")
+                for warning in warnings:
+                    print(f"  - {warning}")
+        return updated_summary
+
     def summarize_session(
         self,
         conversation: List[Dict],
@@ -549,60 +1881,25 @@ CRITICAL RULES:
         Returns:
             Complete summary with metadata
         """
-        # Step 1: Redact secrets
-        if redact_secrets:
-            conversation, redaction_stats = redact_for_summarization(conversation)
-            if redaction_stats:
-                print(f"🔒 Redacted {sum(redaction_stats.values())} secrets: {redaction_stats}")
-
-        # Step 2: Detect ground truth code changes
-        detector = CodeChangeDetector()
-        ground_truth = detector.analyze_conversation(conversation)
-        ground_truth_changes = detector.build_code_changes_from_ground_truth(conversation)
-
-        # Step 3: Choose pipeline based on use_two_stage flag
-        if self.use_two_stage:
-            # Two-stage: Span detection → Reasoned summary
-            spans = self.stage1_detect_spans(conversation)
-            print(f"📍 Detected {len(spans)} discussion spans")
-            llm_summary = self.stage2_generate_summary(conversation, spans)
-        else:
-            # Single-stage: Direct summarization (default, simpler, more reliable)
-            print(f"📝 Single-stage summarization of {len(conversation)} messages")
-            spans = [{
-                "category": "full_session",
-                "start": "msg_001",
-                "end": f"msg_{len(conversation):03d}",
-                "start_index": 1,
-                "end_index": len(conversation),
-                "topic": "complete session"
-            }]
-            llm_summary = self.stage2_generate_summary(conversation, spans)
-
-        # Step 4: Augment LLM code changes with ground truth
-        if llm_summary.get("code_changes"):
-            llm_summary["code_changes"] = detector.augment_llm_code_changes(
-                llm_summary["code_changes"],
-                ground_truth
-            )
-
-        # Step 5: Merge ground truth changes with LLM summary
-        # Prefer ground truth for code changes
-        if ground_truth_changes and not llm_summary.get("code_changes"):
-            llm_summary["code_changes"] = ground_truth_changes
-
-        # Step 6: Create full summary with metadata
         summary = create_summary_skeleton(
             model=self.model,
             session_hash=session_hash
         )
-        summary.update(llm_summary)
+        patch = self._build_summary_patch(
+            conversation,
+            base_index=0,
+            redact_secrets=redact_secrets,
+        )
+        summary = self._apply_summary_patch(summary, patch)
 
         # Step 6.5: Enrich with temporal data (t_first, t_last) for two-level retrieval
         self.enrich_with_temporal_data(summary, conversation)
 
+        # Step 6.6: Ensure summary items are linked to first-class semantic spans
+        spans = ensure_summary_span_links(summary)
+
         # Step 7: Verify references
-        verifier = SummaryVerifier(conversation)
+        verifier = SummaryVerifier(conversation, spans)
         is_valid, errors = verifier.verify_summary(summary)
 
         if not is_valid:

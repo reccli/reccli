@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 import numpy as np
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add package root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from reccli.search import dense_search
 

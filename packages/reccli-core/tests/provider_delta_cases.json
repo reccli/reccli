@@ -1,0 +1,341 @@
+[
+  {
+    "name": "multi_op_batch_update_add_close",
+    "existing_summary": {
+      "schema_version": "1.1",
+      "model": "test-model",
+      "model_version": "test",
+      "created_at": "2026-03-14T00:00:00",
+      "session_hash": "case-001",
+      "overview": "WAL recording replaced older terminal capture ideas.",
+      "decisions": [
+        {
+          "id": "dec_existing",
+          "decision": "Use WAL recording",
+          "reasoning": "Append-only capture is more reliable",
+          "impact": "high",
+          "references": ["msg_001", "msg_002"],
+          "message_range": {
+            "start": "msg_001",
+            "end": "msg_002",
+            "start_index": 0,
+            "end_index": 2
+          },
+          "span_ids": ["spn_decision"]
+        }
+      ],
+      "code_changes": [],
+      "problems_solved": [],
+      "open_issues": [
+        {
+          "id": "iss_existing",
+          "issue": "Retry handling still needed",
+          "severity": "medium",
+          "references": ["msg_003", "msg_004"],
+          "message_range": {
+            "start": "msg_003",
+            "end": "msg_004",
+            "start_index": 2,
+            "end_index": 4
+          },
+          "span_ids": ["spn_open"]
+        }
+      ],
+      "next_steps": [],
+      "causal_edges": [],
+      "audit_trail": []
+    },
+    "existing_spans": [
+      {
+        "id": "spn_decision",
+        "kind": "decision_discussion",
+        "status": "closed",
+        "start_message_id": "msg_001",
+        "end_message_id": "msg_002",
+        "start_index": 0,
+        "end_index": 2,
+        "message_ids": ["msg_001", "msg_002"]
+      },
+      {
+        "id": "spn_open",
+        "kind": "open_issue_discussion",
+        "status": "open",
+        "start_message_id": "msg_003",
+        "start_index": 2,
+        "latest_message_id": "msg_004",
+        "latest_index": 3,
+        "message_ids": ["msg_003", "msg_004"]
+      }
+    ],
+    "conversation": [
+      {"role": "user", "content": "Use WAL recording.", "_message_id": "msg_001"},
+      {"role": "assistant", "content": "Append-only capture is more reliable.", "_message_id": "msg_002"},
+      {"role": "user", "content": "Retry handling is still unresolved.", "_message_id": "msg_003"},
+      {"role": "assistant", "content": "Yes, keep retry handling open for now.", "_message_id": "msg_004"},
+      {"role": "user", "content": "Update the decision rationale: WAL also makes redaction and replay easier.", "_message_id": "msg_005"},
+      {"role": "assistant", "content": "Agreed, that should update the WAL decision rationale.", "_message_id": "msg_006"},
+      {"role": "assistant", "content": "Next step is implementing retry handling in the queue worker.", "_message_id": "msg_007"},
+      {"role": "assistant", "content": "That closes the active retry discussion for now.", "_message_id": "msg_008"}
+    ],
+    "start_index": 4,
+    "end_index": 8,
+    "expected": {
+      "allowed_op_types": ["update_item", "close_span", "add_item", "no_change"],
+      "required_op_types": ["close_span", "add_item"],
+      "min_operation_count": 2,
+      "expected_decision_count": 1,
+      "expected_open_issue_count": 1,
+      "expected_next_step_count": 1
+    }
+  },
+  {
+    "name": "no_change_small_talk_and_restatement",
+    "existing_summary": {
+      "schema_version": "1.1",
+      "model": "test-model",
+      "model_version": "test",
+      "created_at": "2026-03-14T00:00:00",
+      "session_hash": "case-002",
+      "overview": "The session established WAL recording as the approach.",
+      "decisions": [
+        {
+          "id": "dec_wal",
+          "decision": "Use WAL recording",
+          "reasoning": "Append-only capture is durable and replayable",
+          "impact": "high",
+          "references": ["msg_001", "msg_002"],
+          "message_range": {
+            "start": "msg_001",
+            "end": "msg_002",
+            "start_index": 0,
+            "end_index": 2
+          },
+          "span_ids": ["spn_wal"]
+        }
+      ],
+      "code_changes": [],
+      "problems_solved": [],
+      "open_issues": [],
+      "next_steps": [],
+      "causal_edges": [],
+      "audit_trail": []
+    },
+    "existing_spans": [
+      {
+        "id": "spn_wal",
+        "kind": "decision_discussion",
+        "status": "closed",
+        "start_message_id": "msg_001",
+        "end_message_id": "msg_002",
+        "start_index": 0,
+        "end_index": 2,
+        "message_ids": ["msg_001", "msg_002"]
+      }
+    ],
+    "conversation": [
+      {"role": "user", "content": "Should we use WAL recording?", "_message_id": "msg_001"},
+      {"role": "assistant", "content": "Yes, use WAL recording.", "_message_id": "msg_002"},
+      {"role": "user", "content": "Can you restate what we decided?", "_message_id": "msg_003"},
+      {"role": "assistant", "content": "We decided to use WAL recording.", "_message_id": "msg_004"},
+      {"role": "user", "content": "Okay thanks, that is clear now.", "_message_id": "msg_005"}
+    ],
+    "start_index": 2,
+    "end_index": 5,
+    "expected": {
+      "allowed_op_types": ["no_change"],
+      "required_op_types": ["no_change"],
+      "expected_decision_count": 1,
+      "expected_open_issue_count": 0,
+      "expected_next_step_count": 0
+    }
+  },
+  {
+    "name": "merge_duplicate_open_issues",
+    "existing_summary": {
+      "schema_version": "1.1",
+      "model": "test-model",
+      "model_version": "test",
+      "created_at": "2026-03-14T00:00:00",
+      "session_hash": "case-003",
+      "overview": "The session is tracking resilience follow-up work.",
+      "decisions": [],
+      "code_changes": [],
+      "problems_solved": [],
+      "open_issues": [
+        {
+          "id": "iss_retry",
+          "issue": "Retry handling is not implemented yet",
+          "severity": "medium",
+          "references": ["msg_001"],
+          "message_range": {
+            "start": "msg_001",
+            "end": "msg_001",
+            "start_index": 0,
+            "end_index": 1
+          },
+          "span_ids": ["spn_retry"]
+        },
+        {
+          "id": "iss_deadletter",
+          "issue": "Dead-letter queue flow is not implemented yet",
+          "severity": "medium",
+          "references": ["msg_002"],
+          "message_range": {
+            "start": "msg_002",
+            "end": "msg_002",
+            "start_index": 1,
+            "end_index": 2
+          },
+          "span_ids": ["spn_deadletter"]
+        }
+      ],
+      "next_steps": [],
+      "causal_edges": [],
+      "audit_trail": []
+    },
+    "existing_spans": [
+      {
+        "id": "spn_retry",
+        "kind": "open_issue_discussion",
+        "status": "closed",
+        "start_message_id": "msg_001",
+        "end_message_id": "msg_001",
+        "start_index": 0,
+        "end_index": 1,
+        "message_ids": ["msg_001"]
+      },
+      {
+        "id": "spn_deadletter",
+        "kind": "open_issue_discussion",
+        "status": "closed",
+        "start_message_id": "msg_002",
+        "end_message_id": "msg_002",
+        "start_index": 1,
+        "end_index": 2,
+        "message_ids": ["msg_002"]
+      }
+    ],
+    "conversation": [
+      {"role": "user", "content": "Retry handling is still missing.", "_message_id": "msg_001"},
+      {"role": "user", "content": "Dead-letter queue flow is also still missing.", "_message_id": "msg_002"},
+      {"role": "user", "content": "Let's collapse retry handling and dead-letter queue into one resilience backlog item.", "_message_id": "msg_003"},
+      {"role": "assistant", "content": "Agreed, merge those two open issues into one resilience workstream.", "_message_id": "msg_004"}
+    ],
+    "start_index": 2,
+    "end_index": 4,
+    "expected": {
+      "allowed_op_types": ["merge_items", "update_item", "no_change"],
+      "required_op_types": ["merge_items"],
+      "expected_open_issue_count": 1
+    }
+  },
+  {
+    "name": "contradictory_input_reverses_prior_decision",
+    "existing_summary": {
+      "schema_version": "1.1",
+      "model": "test-model",
+      "model_version": "test",
+      "created_at": "2026-03-14T00:00:00",
+      "session_hash": "case-004",
+      "overview": "The export flow originally used a modal dialog.",
+      "decisions": [
+        {
+          "id": "dec_export_surface",
+          "decision": "Use a modal dialog for export",
+          "reasoning": "Modal keeps the user focused on a single export task",
+          "impact": "medium",
+          "references": ["msg_001", "msg_002"],
+          "message_range": {
+            "start": "msg_001",
+            "end": "msg_002",
+            "start_index": 0,
+            "end_index": 2
+          },
+          "span_ids": ["spn_export_modal"]
+        }
+      ],
+      "code_changes": [],
+      "problems_solved": [],
+      "open_issues": [],
+      "next_steps": [],
+      "causal_edges": [],
+      "audit_trail": []
+    },
+    "existing_spans": [
+      {
+        "id": "spn_export_modal",
+        "kind": "decision_discussion",
+        "status": "closed",
+        "start_message_id": "msg_001",
+        "end_message_id": "msg_002",
+        "start_index": 0,
+        "end_index": 2,
+        "message_ids": ["msg_001", "msg_002"]
+      }
+    ],
+    "conversation": [
+      {"role": "user", "content": "Should the export flow use a modal?", "_message_id": "msg_001"},
+      {"role": "assistant", "content": "Yes, use a modal dialog for export.", "_message_id": "msg_002"},
+      {"role": "user", "content": "Actually the export controls need to stay visible while editing, so a sidebar is better.", "_message_id": "msg_003"},
+      {"role": "assistant", "content": "Agreed, reverse the earlier decision and use a sidebar instead.", "_message_id": "msg_004"},
+      {"role": "assistant", "content": "Update the prior decision rather than tracking a duplicate one.", "_message_id": "msg_005"}
+    ],
+    "start_index": 2,
+    "end_index": 5,
+    "expected": {
+      "allowed_op_types": ["update_item", "add_item", "no_change"],
+      "expected_decision_count": 1
+    }
+  },
+  {
+    "name": "long_frontier_multiple_topics",
+    "existing_summary": {
+      "schema_version": "1.1",
+      "model": "test-model",
+      "model_version": "test",
+      "created_at": "2026-03-14T00:00:00",
+      "session_hash": "case-005",
+      "overview": "",
+      "decisions": [],
+      "code_changes": [],
+      "problems_solved": [],
+      "open_issues": [],
+      "next_steps": [],
+      "causal_edges": [],
+      "audit_trail": []
+    },
+    "existing_spans": [],
+    "conversation": [
+      {"role": "user", "content": "We need a recorder that survives terminal crashes.", "_message_id": "msg_001"},
+      {"role": "assistant", "content": "WAL recording would give append-only durability.", "_message_id": "msg_002"},
+      {"role": "user", "content": "Agreed, decide on WAL recording.", "_message_id": "msg_003"},
+      {"role": "assistant", "content": "Decision: use WAL recording.", "_message_id": "msg_004"},
+      {"role": "user", "content": "The summary updater must not drop items during compaction.", "_message_id": "msg_005"},
+      {"role": "assistant", "content": "Then we need constrained delta ops.", "_message_id": "msg_006"},
+      {"role": "user", "content": "Keep the vocabulary to add, update, merge, close, and no_change.", "_message_id": "msg_007"},
+      {"role": "assistant", "content": "Agreed, keep the op set constrained.", "_message_id": "msg_008"},
+      {"role": "user", "content": "We still need provider regression coverage.", "_message_id": "msg_009"},
+      {"role": "assistant", "content": "Next step: add real-provider golden cases.", "_message_id": "msg_010"},
+      {"role": "user", "content": "We also need duplicate-op rejection.", "_message_id": "msg_011"},
+      {"role": "assistant", "content": "Validation should reject duplicate semantic adds.", "_message_id": "msg_012"},
+      {"role": "user", "content": "There is still one open issue: merge_items is under-tested.", "_message_id": "msg_013"},
+      {"role": "assistant", "content": "Track merge_items coverage as an open issue.", "_message_id": "msg_014"},
+      {"role": "user", "content": "Add a no-change provider case too.", "_message_id": "msg_015"},
+      {"role": "assistant", "content": "Next step: add a no-change provider case.", "_message_id": "msg_016"},
+      {"role": "user", "content": "Add a long-frontier provider case as well.", "_message_id": "msg_017"},
+      {"role": "assistant", "content": "Next step: add a long-frontier provider case.", "_message_id": "msg_018"},
+      {"role": "user", "content": "What is the second core decision?", "_message_id": "msg_019"},
+      {"role": "assistant", "content": "Decision: keep message IDs canonical and derive indices in runtime.", "_message_id": "msg_020"},
+      {"role": "user", "content": "Good, that keeps the LLM away from index arithmetic.", "_message_id": "msg_021"},
+      {"role": "assistant", "content": "Implement the remaining harness cases next.", "_message_id": "msg_022"}
+    ],
+    "start_index": 0,
+    "end_index": 22,
+    "expected": {
+      "allowed_op_types": ["add_item", "no_change"],
+      "min_operation_count": 2,
+      "min_decision_count": 1,
+      "min_next_step_count": 1
+    }
+  }
+]

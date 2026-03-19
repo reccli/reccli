@@ -1,5 +1,9 @@
 # RecCli MVP & Roadmap
 
+**Status:** Historical planning document.
+
+This file captures an older 2024 product shape, including the floating-button recorder MVP and `.cast` export ideas. It is not the authoritative project plan. Use [PROJECT_PLAN.md](/Users/will/coding-projects/RecCli/PROJECT_PLAN.md) for current status and treat the rest of this document as archived planning context.
+
 **Project:** RecCli - CLI terminal recorder with AI-powered session management
 **Status:** Architecture & Design Complete → Ready for Implementation
 **Last Updated:** October 29, 2024
@@ -62,7 +66,7 @@ This approach:
 **Functionality:**
 - Click [● REC] → Start recording terminal session in new window
 - Click [■ STOP] → Stop recording, show export dialog
-- Uses asciinema for terminal capture
+- Uses native PTY/WAL terminal capture
 - Display recording duration in real-time
 - Right-click menu for settings, stats, and recordings folder
 - Draggable if needed (manual repositioning)
@@ -72,7 +76,7 @@ This approach:
 **Technical:**
 - Python + tkinter UI (floating overlay)
 - AppleScript integration for terminal window position tracking
-- asciinema subprocess for recording
+- native recorder subprocess for recording
 - Simple session storage in memory
 - Auto-generate session ID
 - Supports both Terminal.app and iTerm2
@@ -167,7 +171,7 @@ Date: 2024-10-29 14:30:45
 
 **Asciinema Cast (.cast):**
 ```
-Native asciinema format - can replay with asciinema play
+Raw cast format
 ```
 
 **Success Criteria:**
@@ -255,7 +259,7 @@ chmod +x reccli.py
                │
                v
     ┌─────────────────────┐
-    │ asciinema (subprocess) │
+    │ native recorder        │
     │  Terminal recording    │
     └──────────┬─────────────┘
                │
@@ -283,7 +287,7 @@ chmod +x reccli.py
 **Dependencies:**
 - Python 3.8+
 - tkinter (GUI)
-- asciinema (recording)
+- native recorder (recording)
 - Standard library only (no AI deps)
 
 **File Structure:**
@@ -297,7 +301,7 @@ RecCli/
 │   │   └── settings_dialog.py
 │   ├── recording/
 │   │   ├── session.py
-│   │   └── asciinema_wrapper.py
+│   │   └── recorder.py
 │   └── export/
 │       ├── txt_exporter.py
 │       ├── md_exporter.py
@@ -305,7 +309,7 @@ RecCli/
 │       ├── html_exporter.py
 │       └── cast_exporter.py
 ├── install.sh
-├── requirements.txt       # asciinema only
+├── requirements.txt
 ├── README.md
 └── LICENSE
 ```
@@ -387,7 +391,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 
 #### 2. .devproject File
 
-**Full specification:** See [DEVPROJECT_FILE.md](DEVPROJECT_FILE.md)
+**Full specification:** See [DEVPROJECT_FORMAT.md](DEVPROJECT_FORMAT.md)
 
 **Capabilities:**
 - Project-level context (architecture, tech stack, decisions)
@@ -521,7 +525,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
                                v
 ┌──────────────────────────────────────────────────────┐
 │                Recording Session                     │
-│  (asciinema + metadata collection)                   │
+│  (native recording + metadata collection)            │
 └──────────────────┬───────────────────────────────────┘
                    │
                    v
@@ -616,7 +620,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 **Week 1-2: Core Recording**
 - [ ] Set up project structure
 - [ ] Implement basic UI (REC/STOP buttons)
-- [ ] Integrate asciinema
+- [ ] Integrate native WAL recorder
 - [ ] Session management
 - [ ] Duration tracking
 
@@ -692,7 +696,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 ### Phase 1
 - **Language:** Python 3.8+
 - **UI:** tkinter
-- **Recording:** asciinema
+- **Recording:** native PTY/WAL
 - **Storage:** Local filesystem
 - **Platforms:** Linux, macOS
 
@@ -760,7 +764,7 @@ Phase 2 transforms RecCli from a simple recorder into an intelligent AI context 
 **Mitigation:** Focus on export formats, simplicity as differentiator
 
 **Risk:** Platform compatibility issues
-**Mitigation:** Test on major platforms, asciinema is proven
+**Mitigation:** Test native recording thoroughly on major platforms
 
 ### Phase 2 Risks
 

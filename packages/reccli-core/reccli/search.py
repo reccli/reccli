@@ -581,6 +581,55 @@ def compute_badges(result: Dict, index: Dict, current_section: str = 'default') 
     return badges
 
 
+def filter_deleted_results(sessions_dir: Path, results: List[Dict]) -> List[Dict]:
+    """
+    Filter stale index results against canonical session files so tombstoned or redacted
+    messages do not surface from outdated vector caches.
+    """
+    from .devsession import DevSession
+
+    session_cache: Dict[str, DevSession] = {}
+    filtered: List[Dict] = []
+
+    for result in results:
+        session_id = result.get("session")
+        message_id = result.get("message_id")
+        if not session_id or not message_id:
+            filtered.append(result)
+            continue
+
+        if session_id not in session_cache:
+            session_file = sessions_dir / f"{session_id}.devsession"
+            if not session_file.exists():
+                continue
+            try:
+                session_cache[session_id] = DevSession.load(session_file)
+            except Exception:
+                continue
+
+        session = session_cache[session_id]
+        message = None
+        for msg in session.conversation:
+            if (
+                msg.get("id") == message_id
+                or msg.get("_message_id") == message_id
+                or msg.get("_id") == message_id
+            ):
+                message = msg
+                break
+
+        if message is None or message.get("deleted"):
+            continue
+        result = {**result}
+        result["content_preview"] = message.get("content", "")[:200]
+        if message.get("redacted"):
+            result.setdefault("metadata", {})
+            result["metadata"]["redacted"] = True
+        filtered.append(result)
+
+    return filtered
+
+
 def search(
     sessions_dir: Path,
     query: str,
@@ -638,6 +687,9 @@ def search(
     # 5. Apply scope filters
     if scope:
         rrf_results = apply_scope_filter(rrf_results, scope)
+
+    # 5.5. Cross-check stale vector hits against the canonical session file.
+    rrf_results = filter_deleted_results(sessions_dir, rrf_results)
 
     # 6. Apply boosts
     for result in rrf_results:
@@ -698,6 +750,8 @@ def expand_result(sessions_dir: Path, result_id: str, context_window: int = 5) -
 
     # Get message index
     msg_index = target_vector['message_index']
+    if 0 <= msg_index < len(session.conversation) and session.conversation[msg_index].get("deleted"):
+        return None
 
     # Get context window
     start_idx = max(0, msg_index - context_window)

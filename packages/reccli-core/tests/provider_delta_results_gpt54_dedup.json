@@ -1,0 +1,1046 @@
+{
+  "model": "gpt-5.4",
+  "generated_at": "2026-03-14T10:23:23.985904",
+  "cases": [
+    {
+      "name": "multi_op_batch_update_add_close",
+      "raw_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Use WAL recording",
+            "reasoning": "Append-only capture is more reliable, and WAL also makes redaction and replay easier.",
+            "references": [
+              "msg_005",
+              "msg_006"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_006"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Implement retry handling in the queue worker.",
+            "references": [
+              "msg_007"
+            ],
+            "message_range": {
+              "start": "msg_007",
+              "end": "msg_007"
+            }
+          }
+        },
+        {
+          "op": "close_span",
+          "span_id": "spn_open",
+          "end_message_id": "msg_008",
+          "message_ids": [
+            "msg_003",
+            "msg_004",
+            "msg_008"
+          ]
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_373c5c88",
+            "decision": "Use WAL recording",
+            "reasoning": "Append-only capture is more reliable, and WAL also makes redaction and replay easier.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_3cbd6c66"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_006",
+              "start_index": 4,
+              "end_index": 6
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_3e8513db",
+            "action": "Implement retry handling in the queue worker.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_e4b4bc4c"
+            ],
+            "references": [
+              "msg_007"
+            ],
+            "message_range": {
+              "start": "msg_007",
+              "end": "msg_007",
+              "start_index": 6,
+              "end_index": 7
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "close_span",
+          "span_id": "spn_open",
+          "end_message_id": "msg_008",
+          "message_ids": [
+            "msg_003",
+            "msg_004",
+            "msg_008"
+          ],
+          "end_index": 8
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_bc36bb23",
+            "decision": "WAL also makes redaction and replay easier",
+            "reasoning": "This adds to the rationale for using WAL recording beyond append-only reliability.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_945b064c"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_006",
+              "start_index": 4,
+              "end_index": 6
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_a7525604",
+            "action": "Implement retry handling in the queue worker",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_7f3c4ce7"
+            ],
+            "references": [
+              "msg_007"
+            ],
+            "message_range": {
+              "start": "msg_007",
+              "end": "msg_007",
+              "start_index": 6,
+              "end_index": 7
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "close_span",
+          "span_id": "spn_open",
+          "end_message_id": "msg_008",
+          "message_ids": [
+            "msg_003",
+            "msg_004",
+            "msg_008"
+          ],
+          "end_index": 8
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 1,
+      "next_step_count_after": 1,
+      "decision_ids_after": [
+        "dec_existing"
+      ],
+      "open_issue_ids_after": [
+        "iss_existing"
+      ],
+      "next_step_ids_after": [
+        "nxt_a7525604"
+      ],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "no_change_small_talk_and_restatement",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "The new messages only restate the existing WAL decision for clarification and do not introduce or modify any decisions, open issues, or next steps."
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "The new messages only restate the existing WAL decision for clarification and do not introduce or modify any decisions, open issues, or next steps."
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "The new messages only restate the existing decision and acknowledge understanding; they introduce no new decisions, open issues, or next steps."
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_wal"
+      ],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "merge_duplicate_open_issues",
+      "raw_operations": [
+        {
+          "op": "merge_items",
+          "category": "open_issues",
+          "source_ids": [
+            "iss_retry",
+            "iss_deadletter"
+          ],
+          "target_item": {
+            "issue": "Resilience backlog work remains to implement retry handling and dead-letter queue flow",
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004"
+            }
+          }
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "merge_items",
+          "category": "open_issues",
+          "source_ids": [
+            "iss_retry",
+            "iss_deadletter"
+          ],
+          "target_item": {
+            "id": "iss_dbe992f5",
+            "issue": "Resilience backlog work remains to implement retry handling and dead-letter queue flow",
+            "severity": "medium",
+            "span_ids": [
+              "spn_retry",
+              "spn_deadletter",
+              "spn_bf5e344c"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "merge_items",
+          "category": "open_issues",
+          "source_ids": [
+            "iss_retry",
+            "iss_deadletter"
+          ],
+          "target_item": {
+            "id": "iss_3ea4d944",
+            "issue": "Resilience backlog workstream covering retry handling and dead-letter queue flow, both not implemented yet",
+            "severity": "medium",
+            "span_ids": [
+              "spn_retry",
+              "spn_deadletter",
+              "spn_a4604cb6"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "decision_count_after": 0,
+      "open_issue_count_after": 1,
+      "next_step_count_after": 0,
+      "decision_ids_after": [],
+      "open_issue_ids_after": [
+        "iss_3ea4d944"
+      ],
+      "next_step_ids_after": [],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "contradictory_input_reverses_prior_decision",
+      "raw_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Use a sidebar for export instead of a modal dialog",
+            "reasoning": "The export controls need to remain visible while editing, which a sidebar supports better than a modal",
+            "references": [
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_003",
+              "end": "msg_004"
+            }
+          }
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_4c595477",
+            "decision": "Use a sidebar for export instead of a modal dialog",
+            "reasoning": "The export controls need to remain visible while editing, which a sidebar supports better than a modal",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_4096612b"
+            ],
+            "references": [
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_003",
+              "end": "msg_004",
+              "start_index": 2,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_4c595477",
+            "decision": "Use a sidebar for export instead of a modal dialog",
+            "reasoning": "The export controls need to stay visible while editing, so a sidebar better supports the workflow than a modal",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_4096612b"
+            ],
+            "references": [
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_003",
+              "end": "msg_004",
+              "start_index": 2,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_export_surface"
+      ],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "long_frontier_multiple_topics",
+      "raw_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Use WAL recording for a recorder that survives terminal crashes.",
+            "reasoning": "WAL provides append-only durability, which supports crash survival.",
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Keep message IDs canonical and derive indices in runtime.",
+            "reasoning": "This keeps the LLM away from index arithmetic.",
+            "references": [
+              "msg_019",
+              "msg_020",
+              "msg_021"
+            ],
+            "message_range": {
+              "start": "msg_019",
+              "end": "msg_021"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "issue": "merge_items coverage is under-tested.",
+            "references": [
+              "msg_013",
+              "msg_014"
+            ],
+            "message_range": {
+              "start": "msg_013",
+              "end": "msg_014"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Add real-provider golden cases.",
+            "references": [
+              "msg_009",
+              "msg_010"
+            ],
+            "message_range": {
+              "start": "msg_009",
+              "end": "msg_010"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Add a no-change provider case.",
+            "references": [
+              "msg_015",
+              "msg_016"
+            ],
+            "message_range": {
+              "start": "msg_015",
+              "end": "msg_016"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Add a long-frontier provider case.",
+            "references": [
+              "msg_017",
+              "msg_018"
+            ],
+            "message_range": {
+              "start": "msg_017",
+              "end": "msg_018"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Implement the remaining harness cases next.",
+            "references": [
+              "msg_022"
+            ],
+            "message_range": {
+              "start": "msg_022",
+              "end": "msg_022"
+            }
+          }
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_ca101a89",
+            "decision": "Use WAL recording for a recorder that survives terminal crashes.",
+            "reasoning": "WAL provides append-only durability, which supports crash survival.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_be47b1ba"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_f2c4f79d",
+            "decision": "Keep message IDs canonical and derive indices in runtime.",
+            "reasoning": "This keeps the LLM away from index arithmetic.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_b3c83732"
+            ],
+            "references": [
+              "msg_019",
+              "msg_020",
+              "msg_021"
+            ],
+            "message_range": {
+              "start": "msg_019",
+              "end": "msg_021",
+              "start_index": 18,
+              "end_index": 21
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "id": "iss_433d41fa",
+            "issue": "merge_items coverage is under-tested.",
+            "severity": "medium",
+            "span_ids": [
+              "spn_392f07d6"
+            ],
+            "references": [
+              "msg_013",
+              "msg_014"
+            ],
+            "message_range": {
+              "start": "msg_013",
+              "end": "msg_014",
+              "start_index": 12,
+              "end_index": 14
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_e4fed1cc",
+            "action": "Add real-provider golden cases.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5383262c"
+            ],
+            "references": [
+              "msg_009",
+              "msg_010"
+            ],
+            "message_range": {
+              "start": "msg_009",
+              "end": "msg_010",
+              "start_index": 8,
+              "end_index": 10
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_8826f7f4",
+            "action": "Add a no-change provider case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_1d2fe99a"
+            ],
+            "references": [
+              "msg_015",
+              "msg_016"
+            ],
+            "message_range": {
+              "start": "msg_015",
+              "end": "msg_016",
+              "start_index": 14,
+              "end_index": 16
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_dc5dbafa",
+            "action": "Add a long-frontier provider case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5a8047d7"
+            ],
+            "references": [
+              "msg_017",
+              "msg_018"
+            ],
+            "message_range": {
+              "start": "msg_017",
+              "end": "msg_018",
+              "start_index": 16,
+              "end_index": 18
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_b8a8e56a",
+            "action": "Implement the remaining harness cases next.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5dee78d4"
+            ],
+            "references": [
+              "msg_022"
+            ],
+            "message_range": {
+              "start": "msg_022",
+              "end": "msg_022",
+              "start_index": 21,
+              "end_index": 22
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_ca101a89",
+            "decision": "Use WAL recording for a recorder that survives terminal crashes.",
+            "reasoning": "WAL recording provides append-only durability and was explicitly agreed as the approach.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_be47b1ba"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_f8c73d03",
+            "decision": "Keep the summary updater operation set constrained to add, update, merge, close, and no_change.",
+            "reasoning": "Constrained delta operations help ensure compaction does not drop items, and the vocabulary was explicitly limited to this set.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_2bfe83a4"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006",
+              "msg_007",
+              "msg_008"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_008",
+              "start_index": 4,
+              "end_index": 8
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_1bd0ebf4",
+            "decision": "Use canonical message IDs in outputs and derive indices in the runtime.",
+            "reasoning": "This keeps the model away from index arithmetic and centralizes index resolution in deterministic runtime logic.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_064f2e97"
+            ],
+            "references": [
+              "msg_019",
+              "msg_020",
+              "msg_021"
+            ],
+            "message_range": {
+              "start": "msg_019",
+              "end": "msg_021",
+              "start_index": 18,
+              "end_index": 21
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "id": "iss_59121af0",
+            "issue": "merge_items is under-tested and needs coverage.",
+            "severity": "medium",
+            "span_ids": [
+              "spn_92f80080"
+            ],
+            "references": [
+              "msg_013",
+              "msg_014"
+            ],
+            "message_range": {
+              "start": "msg_013",
+              "end": "msg_014",
+              "start_index": 12,
+              "end_index": 14
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_7639619b",
+            "action": "Add real-provider golden cases for regression coverage.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_1772cf99"
+            ],
+            "references": [
+              "msg_009",
+              "msg_010"
+            ],
+            "message_range": {
+              "start": "msg_009",
+              "end": "msg_010",
+              "start_index": 8,
+              "end_index": 10
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_0a0408f9",
+            "action": "Add validation to reject duplicate semantic add operations.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_7e194513"
+            ],
+            "references": [
+              "msg_011",
+              "msg_012"
+            ],
+            "message_range": {
+              "start": "msg_011",
+              "end": "msg_012",
+              "start_index": 10,
+              "end_index": 12
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_8826f7f4",
+            "action": "Add a no-change provider case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_1d2fe99a"
+            ],
+            "references": [
+              "msg_015",
+              "msg_016"
+            ],
+            "message_range": {
+              "start": "msg_015",
+              "end": "msg_016",
+              "start_index": 14,
+              "end_index": 16
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_dc5dbafa",
+            "action": "Add a long-frontier provider case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5a8047d7"
+            ],
+            "references": [
+              "msg_017",
+              "msg_018"
+            ],
+            "message_range": {
+              "start": "msg_017",
+              "end": "msg_018",
+              "start_index": 16,
+              "end_index": 18
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_b8a8e56a",
+            "action": "Implement the remaining harness cases next.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5dee78d4"
+            ],
+            "references": [
+              "msg_022"
+            ],
+            "message_range": {
+              "start": "msg_022",
+              "end": "msg_022",
+              "start_index": 21,
+              "end_index": 22
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "decision_count_after": 3,
+      "open_issue_count_after": 1,
+      "next_step_count_after": 5,
+      "decision_ids_after": [
+        "dec_ca101a89",
+        "dec_f8c73d03",
+        "dec_1bd0ebf4"
+      ],
+      "open_issue_ids_after": [
+        "iss_59121af0"
+      ],
+      "next_step_ids_after": [
+        "nxt_7639619b",
+        "nxt_0a0408f9",
+        "nxt_8826f7f4",
+        "nxt_dc5dbafa",
+        "nxt_b8a8e56a"
+      ],
+      "failures": [],
+      "passed": true
+    }
+  ]
+}

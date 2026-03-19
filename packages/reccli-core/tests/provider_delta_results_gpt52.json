@@ -1,0 +1,1152 @@
+{
+  "model": "gpt-5.2",
+  "generated_at": "2026-03-14T10:05:54.778498",
+  "cases": [
+    {
+      "name": "multi_op_batch_update_add_close",
+      "raw_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "WAL recording also supports easier redaction and replay",
+            "reasoning": "Beyond reliability, WAL enables post-processing (redaction) and deterministic replay.",
+            "references": [
+              "msg_005",
+              "msg_006"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_006"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Implement retry handling in the queue worker",
+            "references": [
+              "msg_007"
+            ],
+            "message_range": {
+              "start": "msg_007",
+              "end": "msg_007"
+            }
+          }
+        },
+        {
+          "op": "close_span",
+          "span_id": "spn_open",
+          "end_message_id": "msg_008",
+          "message_ids": [
+            "msg_003",
+            "msg_004",
+            "msg_008"
+          ]
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_9485d62b",
+            "decision": "WAL recording also supports easier redaction and replay",
+            "reasoning": "Beyond reliability, WAL enables post-processing (redaction) and deterministic replay.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_d8bde724"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_006",
+              "start_index": 4,
+              "end_index": 6
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_a7525604",
+            "action": "Implement retry handling in the queue worker",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_7f3c4ce7"
+            ],
+            "references": [
+              "msg_007"
+            ],
+            "message_range": {
+              "start": "msg_007",
+              "end": "msg_007",
+              "start_index": 6,
+              "end_index": 7
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "close_span",
+          "span_id": "spn_open",
+          "end_message_id": "msg_008",
+          "message_ids": [
+            "msg_003",
+            "msg_004",
+            "msg_008"
+          ],
+          "end_index": 8
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_de7ff49c",
+            "decision": "WAL recording also enables easier redaction and replay",
+            "reasoning": "Beyond reliability, WAL supports post-processing needs like redaction and deterministic replay.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_21f65ffc"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_006",
+              "start_index": 4,
+              "end_index": 6
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_a7525604",
+            "action": "Implement retry handling in the queue worker",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_7f3c4ce7"
+            ],
+            "references": [
+              "msg_007"
+            ],
+            "message_range": {
+              "start": "msg_007",
+              "end": "msg_007",
+              "start_index": 6,
+              "end_index": 7
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "close_span",
+          "span_id": "spn_open",
+          "end_message_id": "msg_008",
+          "message_ids": [
+            "msg_003",
+            "msg_004",
+            "msg_008"
+          ],
+          "end_index": 8
+        }
+      ],
+      "decision_count_after": 2,
+      "open_issue_count_after": 1,
+      "next_step_count_after": 1,
+      "decision_ids_after": [
+        "dec_existing",
+        "dec_de7ff49c"
+      ],
+      "open_issue_ids_after": [
+        "iss_existing"
+      ],
+      "next_step_ids_after": [
+        "nxt_a7525604"
+      ],
+      "failures": [
+        "missing required op types: ['update_item']",
+        "expected decisions count 1, got 2"
+      ],
+      "passed": false
+    },
+    {
+      "name": "no_change_small_talk_and_restatement",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "New messages only restate the existing decision (use WAL recording) and add no new decisions, open issues, next steps, or spans to close."
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "New messages only restate the existing decision (use WAL recording) and add no new decisions, open issues, next steps, or spans to close."
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "New messages only ask to restate and confirm the existing decision (use WAL recording) and do not introduce any new decisions, open issues, next steps, or spans to close."
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_wal"
+      ],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "merge_duplicate_open_issues",
+      "raw_operations": [
+        {
+          "op": "merge_items",
+          "category": "open_issues",
+          "source_ids": [
+            "iss_retry",
+            "iss_deadletter"
+          ],
+          "target_item": {
+            "issue": "Resilience backlog item: implement retry handling and dead-letter queue flow",
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004"
+            }
+          }
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "merge_items",
+          "category": "open_issues",
+          "source_ids": [
+            "iss_retry",
+            "iss_deadletter"
+          ],
+          "target_item": {
+            "id": "iss_8cf994e7",
+            "issue": "Resilience backlog item: implement retry handling and dead-letter queue flow",
+            "severity": "medium",
+            "span_ids": [
+              "spn_retry",
+              "spn_deadletter",
+              "spn_243030ee"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "merge_items",
+          "category": "open_issues",
+          "source_ids": [
+            "iss_retry",
+            "iss_deadletter"
+          ],
+          "target_item": {
+            "id": "iss_8cf994e7",
+            "issue": "Resilience backlog item: implement retry handling and dead-letter queue flow",
+            "severity": "medium",
+            "span_ids": [
+              "spn_retry",
+              "spn_deadletter",
+              "spn_243030ee"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "decision_count_after": 0,
+      "open_issue_count_after": 3,
+      "next_step_count_after": 0,
+      "decision_ids_after": [],
+      "open_issue_ids_after": [
+        "iss_retry",
+        "iss_deadletter",
+        "iss_8cf994e7"
+      ],
+      "next_step_ids_after": [],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "contradictory_input_reverses_prior_decision",
+      "raw_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Reverse the earlier decision and use a sidebar for export controls instead of a modal dialog",
+            "reasoning": "Export controls need to stay visible while editing, which a sidebar supports better than a modal",
+            "references": [
+              "msg_003",
+              "msg_004",
+              "msg_005"
+            ],
+            "message_range": {
+              "start": "msg_003",
+              "end": "msg_005"
+            }
+          }
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_b9f598da",
+            "decision": "Reverse the earlier decision and use a sidebar for export controls instead of a modal dialog",
+            "reasoning": "Export controls need to stay visible while editing, which a sidebar supports better than a modal",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_f46364fb"
+            ],
+            "references": [
+              "msg_003",
+              "msg_004",
+              "msg_005"
+            ],
+            "message_range": {
+              "start": "msg_003",
+              "end": "msg_005",
+              "start_index": 2,
+              "end_index": 5
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_2074f625",
+            "decision": "Reverse the earlier decision and use a sidebar for export controls (instead of a modal) so controls remain visible while editing.",
+            "reasoning": "Export controls need to stay visible during editing; a sidebar supports persistent access better than a modal.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_65c4b52d"
+            ],
+            "references": [
+              "msg_003",
+              "msg_004",
+              "msg_005"
+            ],
+            "message_range": {
+              "start": "msg_003",
+              "end": "msg_005",
+              "start_index": 2,
+              "end_index": 5
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "decision_count_after": 2,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_export_surface",
+        "dec_2074f625"
+      ],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [
+        "unexpected op types: ['add_item']",
+        "missing required op types: ['update_item']",
+        "expected decisions count 1, got 2"
+      ],
+      "passed": false
+    },
+    {
+      "name": "long_frontier_multiple_topics",
+      "raw_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Use WAL (write-ahead log) recording so the recorder survives terminal crashes via append-only durability.",
+            "reasoning": "WAL provides durable, append-only recording that can be recovered after a crash.",
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Keep message IDs canonical in the summary output and derive indices at runtime.",
+            "reasoning": "Avoids LLM index arithmetic and keeps references stable across compaction/frontier changes.",
+            "references": [
+              "msg_019",
+              "msg_020",
+              "msg_021"
+            ],
+            "message_range": {
+              "start": "msg_019",
+              "end": "msg_021"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "decision": "Constrain the summary updater to delta operations (add_item, update_item, merge_items, close_span, no_change) to prevent dropping items during compaction.",
+            "reasoning": "Using constrained delta ops supports compaction-safe, surgical updates without implicitly removing existing items.",
+            "references": [
+              "msg_005",
+              "msg_006",
+              "msg_007",
+              "msg_008"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_008"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "issue": "merge_items operation is under-tested; add/track coverage for merge_items behavior.",
+            "references": [
+              "msg_013",
+              "msg_014"
+            ],
+            "message_range": {
+              "start": "msg_013",
+              "end": "msg_014"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Add real-provider golden test cases to improve provider regression coverage.",
+            "references": [
+              "msg_009",
+              "msg_010"
+            ],
+            "message_range": {
+              "start": "msg_009",
+              "end": "msg_010"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Implement validation to reject duplicate semantic add operations (duplicate-op rejection).",
+            "references": [
+              "msg_011",
+              "msg_012"
+            ],
+            "message_range": {
+              "start": "msg_011",
+              "end": "msg_012"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Add a no-change provider test case.",
+            "references": [
+              "msg_015",
+              "msg_016"
+            ],
+            "message_range": {
+              "start": "msg_015",
+              "end": "msg_016"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Add a long-frontier provider test case.",
+            "references": [
+              "msg_017",
+              "msg_018"
+            ],
+            "message_range": {
+              "start": "msg_017",
+              "end": "msg_018"
+            }
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "action": "Implement the remaining harness cases.",
+            "references": [
+              "msg_022"
+            ],
+            "message_range": {
+              "start": "msg_022",
+              "end": "msg_022"
+            }
+          }
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_4897c123",
+            "decision": "Use WAL (write-ahead log) recording so the recorder survives terminal crashes via append-only durability.",
+            "reasoning": "WAL provides durable, append-only recording that can be recovered after a crash.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_535cd5e2"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_05b569de",
+            "decision": "Keep message IDs canonical in the summary output and derive indices at runtime.",
+            "reasoning": "Avoids LLM index arithmetic and keeps references stable across compaction/frontier changes.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_425e25f9"
+            ],
+            "references": [
+              "msg_019",
+              "msg_020",
+              "msg_021"
+            ],
+            "message_range": {
+              "start": "msg_019",
+              "end": "msg_021",
+              "start_index": 18,
+              "end_index": 21
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_a9a17e52",
+            "decision": "Constrain the summary updater to delta operations (add_item, update_item, merge_items, close_span, no_change) to prevent dropping items during compaction.",
+            "reasoning": "Using constrained delta ops supports compaction-safe, surgical updates without implicitly removing existing items.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_03fdcfde"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006",
+              "msg_007",
+              "msg_008"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_008",
+              "start_index": 4,
+              "end_index": 8
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "id": "iss_16ebe734",
+            "issue": "merge_items operation is under-tested; add/track coverage for merge_items behavior.",
+            "severity": "medium",
+            "span_ids": [
+              "spn_5dba0f34"
+            ],
+            "references": [
+              "msg_013",
+              "msg_014"
+            ],
+            "message_range": {
+              "start": "msg_013",
+              "end": "msg_014",
+              "start_index": 12,
+              "end_index": 14
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_3e4daeb1",
+            "action": "Add real-provider golden test cases to improve provider regression coverage.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_49781590"
+            ],
+            "references": [
+              "msg_009",
+              "msg_010"
+            ],
+            "message_range": {
+              "start": "msg_009",
+              "end": "msg_010",
+              "start_index": 8,
+              "end_index": 10
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_53c64703",
+            "action": "Implement validation to reject duplicate semantic add operations (duplicate-op rejection).",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_f1505357"
+            ],
+            "references": [
+              "msg_011",
+              "msg_012"
+            ],
+            "message_range": {
+              "start": "msg_011",
+              "end": "msg_012",
+              "start_index": 10,
+              "end_index": 12
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_8cb2cb8b",
+            "action": "Add a no-change provider test case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_0c0e1b54"
+            ],
+            "references": [
+              "msg_015",
+              "msg_016"
+            ],
+            "message_range": {
+              "start": "msg_015",
+              "end": "msg_016",
+              "start_index": 14,
+              "end_index": 16
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_bcd0ceed",
+            "action": "Add a long-frontier provider test case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_e5bb6829"
+            ],
+            "references": [
+              "msg_017",
+              "msg_018"
+            ],
+            "message_range": {
+              "start": "msg_017",
+              "end": "msg_018",
+              "start_index": 16,
+              "end_index": 18
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_adeb1098",
+            "action": "Implement the remaining harness cases.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5f6e7eb1"
+            ],
+            "references": [
+              "msg_022"
+            ],
+            "message_range": {
+              "start": "msg_022",
+              "end": "msg_022",
+              "start_index": 21,
+              "end_index": 22
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_0ed6dca7",
+            "decision": "Use WAL (write-ahead log) recording to ensure the recorder survives terminal crashes.",
+            "reasoning": "Append-only WAL recording provides durability across crashes.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_6daf788b"
+            ],
+            "references": [
+              "msg_001",
+              "msg_002",
+              "msg_003",
+              "msg_004"
+            ],
+            "message_range": {
+              "start": "msg_001",
+              "end": "msg_004",
+              "start_index": 0,
+              "end_index": 4
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_c52a78f6",
+            "decision": "Keep message IDs canonical in the summary ops and derive indices at runtime.",
+            "reasoning": "Avoids LLM index arithmetic and keeps references stable.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_b0a9dcca"
+            ],
+            "references": [
+              "msg_019",
+              "msg_020",
+              "msg_021"
+            ],
+            "message_range": {
+              "start": "msg_019",
+              "end": "msg_021",
+              "start_index": 18,
+              "end_index": 21
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "decisions",
+          "item": {
+            "id": "dec_508950ca",
+            "decision": "Constrain the summary updater to delta operations (add_item, update_item, merge_items, close_span, no_change) so compaction does not drop items.",
+            "reasoning": "Using constrained delta ops prevents implicit deletion during compaction and keeps updates surgical.",
+            "impact": "medium",
+            "alternatives_considered": [],
+            "span_ids": [
+              "spn_02c3aafd"
+            ],
+            "references": [
+              "msg_005",
+              "msg_006",
+              "msg_007",
+              "msg_008"
+            ],
+            "message_range": {
+              "start": "msg_005",
+              "end": "msg_008",
+              "start_index": 4,
+              "end_index": 8
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "quote": null,
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "id": "iss_8acf1cb5",
+            "issue": "merge_items operation is under-tested; add coverage.",
+            "severity": "medium",
+            "span_ids": [
+              "spn_acea141d"
+            ],
+            "references": [
+              "msg_013",
+              "msg_014"
+            ],
+            "message_range": {
+              "start": "msg_013",
+              "end": "msg_014",
+              "start_index": 12,
+              "end_index": 14
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "open_issues",
+          "item": {
+            "id": "iss_c7dad130",
+            "issue": "Need duplicate-op rejection (validation should reject duplicate semantic adds).",
+            "severity": "medium",
+            "span_ids": [
+              "spn_e3e3b772"
+            ],
+            "references": [
+              "msg_011",
+              "msg_012"
+            ],
+            "message_range": {
+              "start": "msg_011",
+              "end": "msg_012",
+              "start_index": 10,
+              "end_index": 12
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_7835fbd6",
+            "action": "Add real-provider golden cases for provider regression coverage.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_bb5df4a1"
+            ],
+            "references": [
+              "msg_009",
+              "msg_010"
+            ],
+            "message_range": {
+              "start": "msg_009",
+              "end": "msg_010",
+              "start_index": 8,
+              "end_index": 10
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_8826f7f4",
+            "action": "Add a no-change provider case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_1d2fe99a"
+            ],
+            "references": [
+              "msg_015",
+              "msg_016"
+            ],
+            "message_range": {
+              "start": "msg_015",
+              "end": "msg_016",
+              "start_index": 14,
+              "end_index": 16
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_dc5dbafa",
+            "action": "Add a long-frontier provider case.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5a8047d7"
+            ],
+            "references": [
+              "msg_017",
+              "msg_018"
+            ],
+            "message_range": {
+              "start": "msg_017",
+              "end": "msg_018",
+              "start_index": 16,
+              "end_index": 18
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        },
+        {
+          "op": "add_item",
+          "category": "next_steps",
+          "item": {
+            "id": "nxt_adeb1098",
+            "action": "Implement the remaining harness cases.",
+            "priority": 3,
+            "estimated_time": null,
+            "span_ids": [
+              "spn_5f6e7eb1"
+            ],
+            "references": [
+              "msg_022"
+            ],
+            "message_range": {
+              "start": "msg_022",
+              "end": "msg_022",
+              "start_index": 21,
+              "end_index": 22
+            },
+            "t_first": null,
+            "t_last": null,
+            "confidence": "medium",
+            "pinned": false,
+            "locked": false
+          }
+        }
+      ],
+      "decision_count_after": 3,
+      "open_issue_count_after": 2,
+      "next_step_count_after": 4,
+      "decision_ids_after": [
+        "dec_0ed6dca7",
+        "dec_c52a78f6",
+        "dec_508950ca"
+      ],
+      "open_issue_ids_after": [
+        "iss_8acf1cb5",
+        "iss_c7dad130"
+      ],
+      "next_step_ids_after": [
+        "nxt_7835fbd6",
+        "nxt_8826f7f4",
+        "nxt_dc5dbafa",
+        "nxt_adeb1098"
+      ],
+      "failures": [],
+      "passed": true
+    }
+  ]
+}

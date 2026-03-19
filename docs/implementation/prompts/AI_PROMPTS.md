@@ -1,5 +1,16 @@
 # AI System Prompts for RecCli
 
+**Status:** Mixed implementation/design prompt catalog.
+
+This file is not the authoritative source of all live prompts. The current implemented prompt logic primarily lives in:
+
+- `packages/reccli-core/reccli/summarizer.py`
+- `packages/reccli-core/reccli/llm.py`
+- `packages/reccli-core/reccli/streaming_retrieval.py`
+- `packages/reccli-core/reccli/post_answer_reasoning.py`
+
+Sections below that describe click-based export or project-creation flows should be read as design-era prompt material unless they match the current CLI behavior.
+
 ## Overview
 
 This document contains all AI system prompts used in RecCli for session management, project overview generation, and context compaction.
@@ -228,9 +239,9 @@ Repository: https://github.com/willluecke/RecCli
 License: MIT
 
 Tech Stack:
-- Languages: Python
-- Frameworks: tkinter
-- Key Dependencies: asciinema, anthropic, sentence-transformers
+- Languages: Python, TypeScript
+- Frameworks: prompt_toolkit, Ink
+- Key Dependencies: anthropic, openai, sentence-transformers
 
 README Content:
 # RecCli
@@ -238,10 +249,10 @@ CLI terminal recorder with AI-powered session management...
 [README content here, truncated to 2000 chars]
 
 File Structure:
-- reccli.py (main application)
-- install.sh (installation script)
-- devsession/ (format specifications)
-- src/ (source code)
+- packages/reccli-core/reccli/cli.py (CLI entry point)
+- packages/reccli-core/backend/server.py (chat backend bridge)
+- packages/reccli-core/ui/ (terminal UI)
+- docs/specs/ (format specifications)
 
 Generate the .devproject JSON.
 ```
@@ -349,7 +360,7 @@ Current Project Overview:
     "status": "alpha"
   },
   "tech_stack": {
-    "key_dependencies": ["asciinema", "anthropic"]
+    "key_dependencies": ["anthropic"]
   },
   "key_decisions": [
     {"decision": "Open source (MIT license)", "impact": "high"}
@@ -379,7 +390,7 @@ Session Summary:
   ],
   "code_changes": [
     {
-      "files": ["reccli.py", "export_dialog.py"],
+      "files": ["packages/reccli-core/reccli/cli.py", "src/ui/dialogs.py"],
       "description": "Added export dialog with .txt, .md, .devsession options",
       "type": "feature"
     },

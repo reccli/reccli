@@ -929,9 +929,9 @@ The "What is this project?" layer**
   "project_overview": {
     "name": "RecCli",
     "description": "CLI terminal recorder with AI-powered session management",
-    "tech_stack": ["Python", "tkinter", "asciinema", "Claude API"],
+    "tech_stack": ["Python", "tkinter", "Claude API"],
     "architecture": {
-      "recording": "asciinema-based terminal capture",
+      "recording": "native terminal capture",
       "ui": "2-button overlay (REC/STOP + Settings)",
       "storage": "Dual-layer .devsession format with vector embeddings"
     },
@@ -2214,7 +2214,7 @@ Option B: Individual Files + Unified Vector Index (Hybrid)
 n our devsession_format document, we still mention the three layer architecture within the .devsession file. I thought we were just keeping the top layer project overview in the .devproject file, or should we keep a copy of the repo's .devproject file in every .devsession file? pretty sure every user of .devsession will also use .devproject. what do you think, keep it in .devsession as a backup keep it in .devsession as a backup or only keep it in .devproject?
 
 Excellent design question! Looking at both documents, I see the tension:
-* DEVPROJECT_FILE.md says .devproject is the "**single source of truth**"
+* DEVPROJECT_FORMAT.md says .devproject is the "**single source of truth**"
 * DEVSESSION_FORMAT.md includes project_overview as Layer 1 in every session
 
 ⠀**My Recommendation: Lightweight Snapshot Approach**

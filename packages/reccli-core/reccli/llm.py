@@ -22,6 +22,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from .devsession import DevSession
 from .config import Config
+from .devproject import initialize_session_project_metadata
 
 
 # Phase 8: Retrieval System Prompt
@@ -173,6 +174,7 @@ class LLMSession:
         self.model = model
         self.session_path = Path(session_path)
         self.session = DevSession()
+        initialize_session_project_metadata(self.session, Path.cwd())
         self.start_time = time.time()
 
         # Paste state tracking

@@ -24,7 +24,7 @@ class ExportDialog:
 
         Args:
             parent: Parent tkinter window
-            session_file: Path to recorded .cast file
+            session_file: Path to recorded session file
             metadata: Session metadata (session_id, duration, etc.)
             config: User config (default_format, default_location, etc.)
         """
@@ -109,8 +109,7 @@ class ExportDialog:
             ('txt', 'Plain Text (.txt)', 'Simple text file with terminal output'),
             ('md', 'Markdown (.md)', 'Markdown format with code blocks'),
             ('json', 'JSON (.json)', 'Structured JSON with metadata'),
-            ('html', 'HTML (.html)', 'Styled HTML page'),
-            ('cast', 'Asciinema Cast (.cast)', 'Native asciinema format (replayable)')
+            ('html', 'HTML (.html)', 'Styled HTML page')
         ]
 
         for value, label, description in formats:
@@ -312,7 +311,7 @@ class SettingsDialog:
         format_combo = ttk.Combobox(
             export_frame,
             textvariable=self.format_var,
-            values=['txt', 'md', 'json', 'html', 'cast'],
+            values=['txt', 'md', 'json', 'html'],
             state='readonly',
             width=20
         )

@@ -1,5 +1,7 @@
 # Vector Search Optimization - COMPLETE ✅
 
+**Status:** Historical implementation retrospective. The live implementation authority is `packages/reccli-core/reccli/search.py` and `packages/reccli-core/reccli/vector_index.py`.
+
 **Status**: Production Ready 🚀
 **Date**: 2025-11-20
 **Performance**: All targets met and exceeded

@@ -8,16 +8,17 @@ __author__ = "RecCli Team"
 
 from .recorder import DevsessionRecorder
 from .devsession import DevSession
+from .devproject import DevProjectManager, discover_project_root
 from .llm import LLMSession, chat_session, one_shot_query
 from .config import Config
-from .cli import main
 
 __all__ = [
     'DevsessionRecorder',
     'DevSession',
+    'DevProjectManager',
+    'discover_project_root',
     'LLMSession',
     'chat_session',
     'one_shot_query',
-    'Config',
-    'main'
+    'Config'
 ]

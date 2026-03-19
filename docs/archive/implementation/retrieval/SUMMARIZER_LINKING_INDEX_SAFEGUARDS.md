@@ -1,5 +1,7 @@
 # GPT-5 Safeguards Implementation Status
 
+**Status:** Mixed implementation/historical note. The safeguards described here are still relevant, but the canonical range-semantics contract now lives in `docs/specs/MESSAGE_RANGE_SPEC.md`.
+
 This document tracks our implementation of the 8 safeguards recommended by GPT-5 for robust two-level linked retrieval.
 
 ## Safeguard #1: Stable Anchors ✅ COMPLETE

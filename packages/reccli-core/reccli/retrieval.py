@@ -25,6 +25,11 @@ class ContextRetriever:
         self.devsession = devsession
         self.summary = devsession.summary
         self.conversation = devsession.conversation
+        self.spans = getattr(devsession, "spans", []) or []
+        self.span_lookup = {
+            span["id"]: span for span in self.spans
+            if isinstance(span, dict) and span.get("id")
+        }
 
     def retrieve_full_context(
         self,
@@ -43,16 +48,15 @@ class ContextRetriever:
         Returns:
             Dict with full discussion messages + metadata
         """
-        if not summary_item.get("message_range"):
+        start_idx, end_idx, core_member_indices, resolved_span_ids, resolved_via = self._resolve_item_bounds(summary_item)
+        if start_idx is None or end_idx is None:
             return {
                 "messages": [],
-                "error": "Summary item missing message_range"
+                "error": "Summary item missing span_ids and message_range"
             }
 
-        msg_range = summary_item["message_range"]
-        # Indices are 0-based, range is [start, end) inclusive-exclusive
-        start_idx = msg_range.get("start_index", 0)
-        end_idx = msg_range.get("end_index", len(self.conversation))
+        start_idx = max(0, min(start_idx, len(self.conversation)))
+        end_idx = max(start_idx, min(end_idx, len(self.conversation)))
 
         # Expand context (include N messages before/after for better understanding)
         expanded_start = max(0, start_idx - expand_context)
@@ -64,7 +68,10 @@ class ContextRetriever:
         # Mark which messages are in the core range vs expanded context
         for i, msg in enumerate(messages):
             actual_idx = expanded_start + i
-            msg["_in_core_range"] = (start_idx <= actual_idx < end_idx)
+            if core_member_indices:
+                msg["_in_core_range"] = actual_idx in core_member_indices
+            else:
+                msg["_in_core_range"] = (start_idx <= actual_idx < end_idx)
             msg["_message_id"] = f"msg_{actual_idx + 1:03d}"
 
         return {
@@ -73,7 +80,7 @@ class ContextRetriever:
             "core_range": {
                 "start": start_idx,
                 "end": end_idx,
-                "count": end_idx - start_idx
+                "count": len(core_member_indices) if core_member_indices else end_idx - start_idx
             },
             "expanded_range": {
                 "start": expanded_start,
@@ -83,7 +90,9 @@ class ContextRetriever:
             "temporal_bounds": {
                 "t_first": summary_item.get("t_first"),
                 "t_last": summary_item.get("t_last")
-            }
+            },
+            "resolved_span_ids": resolved_span_ids,
+            "resolved_via": resolved_via,
         }
 
     def retrieve_by_reference(
@@ -101,14 +110,8 @@ class ContextRetriever:
         Returns:
             List of messages with context
         """
-        # Parse message ID
-        try:
-            msg_num = int(message_id.split("_")[1])
-            msg_idx = msg_num - 1  # Convert to 0-based
-        except (IndexError, ValueError):
-            return []
-
-        if msg_idx < 0 or msg_idx >= len(self.conversation):
+        msg_idx = self._resolve_message_index(message_id)
+        if msg_idx is None:
             return []
 
         # Get surrounding context
@@ -124,6 +127,121 @@ class ContextRetriever:
             msg["_message_id"] = f"msg_{actual_idx + 1:03d}"
 
         return messages
+
+    def _resolve_message_index(self, message_id: Optional[str]) -> Optional[int]:
+        """Resolve a message ID against stored message metadata or numeric suffix."""
+        if not message_id:
+            return None
+
+        for idx, msg in enumerate(self.conversation):
+            if msg.get("_message_id") == message_id or msg.get("_id") == message_id:
+                return idx
+
+        try:
+            msg_num = int(message_id.split("_")[1])
+        except (IndexError, ValueError):
+            return None
+
+        msg_idx = msg_num - 1
+        if 0 <= msg_idx < len(self.conversation):
+            return msg_idx
+        return None
+
+    def _resolve_span_bounds(self, span: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+        start_idx = span.get("start_index")
+        end_idx = span.get("end_index")
+
+        if not isinstance(start_idx, int):
+            start_idx = self._resolve_message_index(span.get("start_message_id"))
+        if not isinstance(end_idx, int):
+            latest_index = span.get("latest_index")
+            if isinstance(latest_index, int):
+                end_idx = latest_index + 1
+            else:
+                end_ref = self._resolve_message_index(span.get("end_message_id") or span.get("latest_message_id"))
+                end_idx = end_ref + 1 if end_ref is not None else None
+
+        if start_idx is None or end_idx is None:
+            return None, None
+
+        return start_idx, end_idx
+
+    def _resolve_item_bounds(
+        self,
+        summary_item: Dict[str, Any],
+    ) -> Tuple[Optional[int], Optional[int], List[int], List[str], str]:
+        span_ids = [
+            span_id for span_id in summary_item.get("span_ids", [])
+            if isinstance(span_id, str) and span_id in self.span_lookup
+        ]
+
+        if span_ids:
+            resolved = [
+                self._resolve_span_bounds(self.span_lookup[span_id])
+                for span_id in span_ids
+            ]
+            resolved = [(start, end) for start, end in resolved if start is not None and end is not None]
+            if resolved:
+                core_member_indices = sorted({
+                    idx
+                    for span_id in span_ids
+                    for idx in self._resolve_span_member_indices(self.span_lookup[span_id])
+                })
+                return (
+                    min(start for start, _ in resolved),
+                    max(end for _, end in resolved),
+                    core_member_indices,
+                    span_ids,
+                    "span_ids",
+                )
+
+        msg_range = summary_item.get("message_range") or {}
+        start_idx = msg_range.get("start_index")
+        end_idx = msg_range.get("end_index")
+
+        if not isinstance(start_idx, int):
+            start_idx = self._resolve_message_index(msg_range.get("start"))
+
+        if not isinstance(end_idx, int):
+            end_ref = self._resolve_message_index(msg_range.get("end"))
+            end_idx = end_ref + 1 if end_ref is not None else None
+
+        if start_idx is None:
+            start_idx = 0 if msg_range else None
+        if end_idx is None:
+            end_idx = len(self.conversation) if msg_range else None
+
+        if start_idx is None or end_idx is None:
+            return None, None, [], [], "none"
+
+        if (
+            start_idx < 0
+            or start_idx >= len(self.conversation)
+            or end_idx <= start_idx
+            or end_idx > len(self.conversation)
+        ):
+            resolved_start = self._resolve_message_index(msg_range.get("start"))
+            resolved_end = self._resolve_message_index(msg_range.get("end"))
+            if resolved_start is not None:
+                start_idx = resolved_start
+            if resolved_end is not None:
+                end_idx = resolved_end + 1
+
+        return start_idx, end_idx, [], [], "message_range"
+
+    def _resolve_span_member_indices(self, span: Dict[str, Any]) -> List[int]:
+        message_ids = [
+            message_id for message_id in span.get("message_ids", [])
+            if isinstance(message_id, str)
+        ]
+        if message_ids:
+            resolved = [self._resolve_message_index(message_id) for message_id in message_ids]
+            return [idx for idx in resolved if idx is not None]
+
+        start_idx, end_idx = self._resolve_span_bounds(span)
+        if start_idx is None or end_idx is None:
+            return []
+        return list(range(start_idx, end_idx))
 
     def search_summary(
         self,

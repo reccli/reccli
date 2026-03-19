@@ -1,5 +1,9 @@
 # Context Loading Strategy for .devsession
 
+**Status:** Mixed implementation/design document.
+
+The live code implements summary loading, recent-message continuity, vector retrieval, streaming hydration, and optional `.devproject` loading when a project file is present. References below that treat `.devproject` as mandatory or automatically maintained should be read as planned project-layer behavior unless they match the current middleware code.
+
 ## The Core Problem
 
 When **compacting a long session** (approaching 180K+ tokens), what context should remain?
@@ -18,14 +22,14 @@ When **compacting a long session** (approaching 180K+ tokens), what context shou
 
 The .devsession format provides three layers of context:
 
-### Layer 1: Project Overview (Macro)
-**Source:** `.devproject` file at project root
+### Layer 1: Project Overview (Macro, Optional)
+**Source:** `.devproject` file at project root, if present
 **Size:** ~300-500 tokens
 **Contains:** Project name, purpose, architecture, key decisions, tech stack, milestones
-**Updated:** Each session end
-**Loaded:** Conditionally (see Conditional Loading section below)
+**Updated:** Planned project-layer behavior
+**Loaded:** Conditionally when available (see Conditional Loading section below)
 
-**Purpose:** Keeps LLM grounded in "what is this project?" - the macro perspective.
+**Purpose:** Keeps the model grounded in "what is this project?" when project-level context exists, but RecCli should still function without it.
 
 ### Layer 2: Session Summary (This Session)
 **Source:** `.devsession` file's summary object
@@ -517,22 +521,22 @@ The algorithm:
 
 ### Where Project Overview Lives
 
-The project overview is stored in a **`.devproject` file at the project root**:
+If present, the project overview can be stored in a **`.devproject` file at the project root**:
 
 ```
 ~/projects/YourProject/
-├── .devproject              # ← Project overview (single source of truth)
-├── .gitignore               # ← Auto-updated to exclude .devproject
+├── .devproject              # ← Optional project overview cache
+├── .gitignore               # ← May exclude .devproject, depending on user choice
 ├── README.md
 └── ...
 ```
 
-**Lifecycle:**
-- **Session start:** RecCli reads `.devproject` and loads project overview into session
-- **Session end:** RecCli updates `.devproject` based on session summary
-- **Gitignore:** RecCli automatically adds `.devproject` to your `.gitignore` (privacy by default)
+**Lifecycle today vs. planned behavior:**
+- **Today:** middleware can read `.devproject` if one already exists nearby
+- **Planned:** RecCli may generate or refine `.devproject` from repo state and session history
+- **Planned:** Gitignore management would be opt-out or user-confirmed, not assumed as a hard requirement
 
-See `DEVPROJECT_FILE.md` for complete specification.
+See `DEVPROJECT_FORMAT.md` for complete specification.
 
 ### The Token Budget Problem
 

@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# Add reccli to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add package root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from reccli.summarizer import SessionSummarizer
 from reccli.tokens import TokenCounter

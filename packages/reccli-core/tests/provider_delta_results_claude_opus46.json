@@ -1,0 +1,180 @@
+{
+  "model": "claude-opus-4.6",
+  "generated_at": "2026-03-14T10:12:52.125079",
+  "cases": [
+    {
+      "name": "multi_op_batch_update_add_close",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4KdQAW1R5pzPdobr5'}"
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4KdQAW1R5pzPdobr5'}"
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4LD7pLfJLYojQuKaC'}"
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 1,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_existing"
+      ],
+      "open_issue_ids_after": [
+        "iss_existing"
+      ],
+      "next_step_ids_after": [],
+      "failures": [
+        "missing required op types: ['add_item', 'close_span', 'update_item']",
+        "expected at least 3 validated ops, got 1",
+        "expected next_steps count 1, got 0"
+      ],
+      "passed": false
+    },
+    {
+      "name": "no_change_small_talk_and_restatement",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4Lt41NxwDay5FQHQ9'}"
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4Lt41NxwDay5FQHQ9'}"
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4MWkn5ZjpFA4j7Cbg'}"
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_wal"
+      ],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [],
+      "passed": true
+    },
+    {
+      "name": "merge_duplicate_open_issues",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4N3kRFpXFbNdBMr44'}"
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4N3kRFpXFbNdBMr44'}"
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4Nfhrhin6AKrPqdyh'}"
+        }
+      ],
+      "decision_count_after": 0,
+      "open_issue_count_after": 2,
+      "next_step_count_after": 0,
+      "decision_ids_after": [],
+      "open_issue_ids_after": [
+        "iss_retry",
+        "iss_deadletter"
+      ],
+      "next_step_ids_after": [],
+      "failures": [
+        "missing required op types: ['merge_items']",
+        "expected open_issues count 3, got 2"
+      ],
+      "passed": false
+    },
+    {
+      "name": "contradictory_input_reverses_prior_decision",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4PDCY2TVbJAxa3VZP'}"
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4PDCY2TVbJAxa3VZP'}"
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4PmSVgx3MKxDCkvJQ'}"
+        }
+      ],
+      "decision_count_after": 1,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [
+        "dec_export_surface"
+      ],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [
+        "missing required op types: ['update_item']"
+      ],
+      "passed": false
+    },
+    {
+      "name": "long_frontier_multiple_topics",
+      "raw_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4QMucnnNJ3bDKQHYG'}"
+        }
+      ],
+      "validated_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4QMucnnNJ3bDKQHYG'}"
+        }
+      ],
+      "validation_warnings": [],
+      "applied_operations": [
+        {
+          "op": "no_change",
+          "reason": "llm_error: Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'model: claude-opus-4.6 was not found. Did you mean claude-opus-4-6?'}, 'request_id': 'req_011CZ3M4QvdsTmG8TemLPo5w'}"
+        }
+      ],
+      "decision_count_after": 0,
+      "open_issue_count_after": 0,
+      "next_step_count_after": 0,
+      "decision_ids_after": [],
+      "open_issue_ids_after": [],
+      "next_step_ids_after": [],
+      "failures": [
+        "expected at least 2 validated ops, got 1",
+        "expected at least 1 next_steps, got 0",
+        "expected at least 1 decisions, got 0"
+      ],
+      "passed": false
+    }
+  ]
+}

@@ -11,7 +11,7 @@ This demonstrates the key insight:
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from reccli.devsession import DevSession
 from reccli.retrieval import ContextRetriever, format_context_for_llm
@@ -27,12 +27,12 @@ def create_mock_session():
         {"role": "user", "content": "Let's build an export dialog", "timestamp": 0.0},
         {"role": "assistant", "content": "Sure! What format should we support?", "timestamp": 1.0},
         # ... lots of messages ...
-        {"role": "user", "content": "Should we use a modal or sidebar?", "timestamp": 40.0},  # msg_42
+        {"role": "user", "content": "Should we use a modal or sidebar?", "timestamp": 40.0},
         {"role": "assistant", "content": "Let me think about the UX tradeoffs...", "timestamp": 41.0},
         {"role": "assistant", "content": "Modal focuses user attention on the export task", "timestamp": 42.0},
         {"role": "assistant", "content": "Sidebar allows multitasking but might be distracting", "timestamp": 43.0},
         {"role": "user", "content": "Good point. I think modal is better for focused tasks", "timestamp": 44.0},
-        {"role": "assistant", "content": "Agreed. Let's go with modal. I'll implement it.", "timestamp": 45.0},  # msg_47
+        {"role": "assistant", "content": "Agreed. Let's go with modal. I'll implement it.", "timestamp": 45.0},
         {"role": "tool", "content": "Created file: src/export_dialog.py", "timestamp": 46.0},
         {"role": "assistant", "content": "Modal dialog created! Here's the code...", "timestamp": 47.0},
         {"role": "user", "content": "Perfect! Now let's add validation", "timestamp": 48.0},
@@ -54,12 +54,12 @@ def create_mock_session():
         decision="Use modal dialog for export feature",
         reasoning="Modal focuses user attention on the export task, better for focused operations",
         impact="medium",
-        references=["msg_045", "msg_046", "msg_047"],  # Key moments
+        references=["msg_005", "msg_007", "msg_008"],
         message_range={
-            "start": "msg_042",     # Full discussion starts here
-            "end": "msg_050",       # Full discussion ends here
-            "start_index": 42,      # Array index for O(1) lookup
-            "end_index": 50
+            "start": "msg_003",
+            "end": "msg_010",
+            "start_index": 2,
+            "end_index": 10
         },
         confidence="high",
         quote="Modal focuses user attention on the export task",
@@ -122,7 +122,7 @@ def test_reference_retrieval():
     retriever = ContextRetriever(session)
 
     # Jump to a specific message
-    target_msg = "msg_045"
+    target_msg = "msg_005"
 
     print(f"\n1. Target message: {target_msg}")
 

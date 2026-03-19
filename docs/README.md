@@ -2,7 +2,11 @@
 
 This directory is organized by document function, not by chronology.
 
-Use this page as the canonical entry point for project documentation.
+Use this page as the canonical documentation index for project readers.
+
+Implementation note: the current codebase is strongest at the `.devsession`, retrieval, indexing, and compaction layers. `.devproject` should be read as an optional project-outline layer, not a startup requirement. Some product docs describe future onboarding and generation flows rather than features already wired into the main CLI.
+
+Documentation maintenance note: cleanup rules and triage decisions live in [restructuring-plan.md](./restructuring-plan.md). Keep this file focused on the stable reading path.
 
 ## Start Here
 
@@ -11,6 +15,11 @@ Use this page as the canonical entry point for project documentation.
 - [`.devsession` Specification](./specs/DEVSESSION_FORMAT.md)
 - [Unified Vector Index](./specs/UNIFIED_VECTOR_INDEX.md)
 - [Project Plan](../PROJECT_PLAN.md)
+
+## Documentation Cleanup
+
+- [Document Inventory](./document-index.md) - full inventory with first-seen dates, buckets, actions, and notes
+- [Restructuring Plan](./restructuring-plan.md) - working inventory, triage rules, and migration batches
 
 ## Product
 
@@ -34,9 +43,9 @@ These are the normative format and contract documents.
 
 - [README.md](./specs/README.md)
 - [DEVSESSION_FORMAT.md](./specs/DEVSESSION_FORMAT.md)
-- [DEVPROJECT_FILE.md](./specs/DEVPROJECT_FILE.md)
 - [MESSAGE_RANGE_SPEC.md](./specs/MESSAGE_RANGE_SPEC.md)
 - [UNIFIED_VECTOR_INDEX.md](./specs/UNIFIED_VECTOR_INDEX.md)
+- [DEVPROJECT_FORMAT.md](./specs/DEVPROJECT_FORMAT.md) - optional project-outline design
 - [SESSION_STORAGE.md](./specs/SESSION_STORAGE.md)
 
 ## Reference
@@ -53,17 +62,12 @@ These are subsystem deep dives, optimization notes, and supporting technical mat
 
 ### Retrieval
 
+- [README.md](./implementation/retrieval/README.md)
 - [STREAMING_HYBRID_RETRIEVAL.md](./implementation/retrieval/STREAMING_HYBRID_RETRIEVAL.md)
-- [SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md](./implementation/retrieval/SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md)
 
 ### Indexing
 
-- [NUMPY_OPTIMIZATION_PLAN.md](./implementation/indexing/NUMPY_OPTIMIZATION_PLAN.md)
-- [VECTOR_OPTIMIZATION_STATUS.md](./implementation/indexing/VECTOR_OPTIMIZATION_STATUS.md)
-- [VECTOR_SEARCH_ANALYSIS.md](./implementation/indexing/VECTOR_SEARCH_ANALYSIS.md)
-- [VECTOR_SEARCH_BOTTLENECK_ANALYSIS.md](./implementation/indexing/VECTOR_SEARCH_BOTTLENECK_ANALYSIS.md)
-- [VECTOR_SEARCH_COMPLETION.md](./implementation/indexing/VECTOR_SEARCH_COMPLETION.md)
-- [VECTOR_SEARCH_FINAL.md](./implementation/indexing/VECTOR_SEARCH_FINAL.md)
+- [README.md](./implementation/indexing/README.md)
 
 ### Prompts
 
@@ -73,27 +77,24 @@ These are subsystem deep dives, optimization notes, and supporting technical mat
 
 These are decision records and design-fix analyses.
 
-- [ASCIINEMA_ANALYSIS.md](./decisions/ASCIINEMA_ANALYSIS.md)
-- [DESIGN_DECISIONS.md](./decisions/DESIGN_DECISIONS.md)
-- [PHASE_7_AUDIT.md](./decisions/PHASE_7_AUDIT.md)
 - [RANGE_SEMANTICS_FIX.md](./decisions/RANGE_SEMANTICS_FIX.md)
 
 ## Progress
 
-These documents are useful, but many are time-bound rather than canonical.
+These documents are useful delivery records, but they are time-bound rather than canonical.
 
-- [DONE.md](./progress/DONE.md)
-- [execution_summary.md](./progress/execution_summary.md)
-- [PHASE_7_IMPLEMENTATION.md](./progress/phases/PHASE_7_IMPLEMENTATION.md)
-- [PHASE_7_POST_AUDIT_FIXES.md](./progress/phases/PHASE_7_POST_AUDIT_FIXES.md)
-- [PHASE_7_WALKTHROUGH.md](./progress/phases/PHASE_7_WALKTHROUGH.md)
-- [PHASE_7_TESTING.md](./progress/phases/PHASE_7_TESTING.md)
-- [PHASE_8_IMPLEMENTATION.md](./progress/phases/PHASE_8_IMPLEMENTATION.md)
-- [PHASE_8_USAGE.md](./progress/phases/PHASE_8_USAGE.md)
+- [README.md](./progress/README.md)
 - [SESSION_2025_11_07_SUMMARY.md](./progress/session-notes/SESSION_2025_11_07_SUMMARY.md)
 
 ## Archive
 
 Historical ideation and legacy working notes live here.
 
+- [MVP.md](./archive/product/MVP.md)
+- [DESIGN_DECISIONS.md](./archive/decisions/DESIGN_DECISIONS.md)
+- [PHASE_7_AUDIT.md](./archive/decisions/PHASE_7_AUDIT.md)
 - [RecCli_intelligent_context_management_overview.md](./archive/ideation/RecCli_intelligent_context_management_overview.md)
+- `docs/archive/progress/phases/` - archived phase implementation, testing, and walkthrough docs
+- `docs/archive/progress/` - superseded completion summaries and execution snapshots
+- `docs/archive/implementation/indexing/` - superseded optimization snapshots and retrospectives
+- `docs/archive/implementation/retrieval/` - historical retrieval safeguards and design notes

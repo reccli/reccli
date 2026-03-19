@@ -1,330 +1,142 @@
-# RecCli Native LLM - Quick Start Guide
+# RecCli Native LLM Guide
 
-**Status**: ✅ Complete and Ready to Use
-**Date**: 2025-11-01
+**Status:** Current operational reference.
 
-## What Is This?
+This document covers the current Python CLI chat surface. It reflects the live command set under [cli.py](/Users/will/coding-projects/RecCli/packages/reccli-core/reccli/cli.py).
 
-RecCli v2.0 now includes a **native LLM CLI** - you can chat with Claude or GPT directly through RecCli, and every conversation is automatically saved to `.devsession` format.
+## What Exists Today
 
-**No wrappers. No external tools. Just RecCli + LLM API = Clean conversations.**
+RecCli supports native LLM chat without wrapping another CLI.
 
----
+Current entry points:
 
-## Quick Start (3 Steps)
+- `chat`: interactive chat UI
+- `ask`: one-shot question
+- `config`: API keys and default model
+- `list`, `show`, `export`: session management
 
-### 1. Install Dependencies
+All chats are persisted as `.devsession` files.
+
+## Quick Start
+
+### 1. Install dependencies
 
 ```bash
 cd /Users/will/coding-projects/RecCli
 pip3 install anthropic openai
 ```
 
-### 2. Set Your API Key
+### 2. Configure a provider key
 
 ```bash
-# For Claude (Anthropic)
-./reccli-v2.py config --anthropic-key sk-ant-YOUR_KEY_HERE
-
-# Or for GPT (OpenAI)
-./reccli-v2.py config --openai-key sk-YOUR_KEY_HERE
-
-# Set default model (optional)
-./reccli-v2.py config --default-model claude
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli config --anthropic-key sk-ant-YOUR_KEY_HERE
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli config --openai-key sk-YOUR_KEY_HERE
 ```
 
-### 3. Start Chatting!
+### 3. Start chat
 
 ```bash
-# Interactive chat (default model)
-./reccli-v2.py chat
-
-# Chat with specific model
-./reccli-v2.py chat --model claude
-./reccli-v2.py chat --model gpt4
-
-# One-shot question
-./reccli-v2.py ask "explain what .devsession files are"
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat --model claude
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat --model gpt5
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli ask "explain .devsession"
 ```
 
----
+## Current Model Surface
 
-## Usage Examples
+The chat command currently accepts:
 
-### Interactive Chat
+- `claude`
+- `claude-sonnet`
+- `claude-opus`
+- `claude-haiku`
+- `gpt5`
+- `gpt5-mini`
+- `gpt5-nano`
+- `gpt4o`
 
-```bash
-$ ./reccli-v2.py chat --model claude
-
-🤖 RecCli Chat - claude
-📝 Recording to: chat_claude_20251101_210530.devsession
-Type 'exit' or press Ctrl+D to quit
-
-You: help me build a JWT authentication system
-
-Claude: I'll help you build a JWT authentication system. Let's start with...
-
-[Conversation continues...]
-
-You: exit
-
-✅ Session saved
-   File: /Users/will/.reccli/sessions/chat_claude_20251101_210530.devsession
-   Messages: 12
-   Duration: 145.3s
-```
-
-### One-Shot Questions
-
-```bash
-$ ./reccli-v2.py ask "what are the benefits of .devsession format?"
-
-Claude: The .devsession format offers several key benefits:
-1. Lossless conversation preservation...
-2. Intelligent summarization layer...
-[...]
-
-✅ Session saved
-   File: /Users/will/.reccli/sessions/ask_20251101_210600.devsession
-   Messages: 2
-   Duration: 2.1s
-```
-
----
-
-## .devsession Output
-
-Every chat is saved to `.devsession` format:
-
-```json
-{
-  "format": "devsession",
-  "version": "1.0",
-  "session_id": "session_20251101_210530",
-  "created": "2025-11-01T21:05:30",
-
-  "conversation": [
-    {
-      "role": "user",
-      "content": "help me build JWT auth",
-      "timestamp": 0.0
-    },
-    {
-      "role": "assistant",
-      "content": "I'll help you build JWT authentication...",
-      "timestamp": 1.234
-    }
-  ],
-
-  "summary": null,         // Will be added in Phase 4
-  "vector_index": null,    // Will be added in Phase 5
-  "terminal_recording": {  // Empty for native LLM chats
-    "events": []
-  }
-}
-```
-
-**Clean, structured conversation** - no terminal parsing needed!
-
----
-
-## Available Models
-
-### Claude (Anthropic)
-- `claude` - Claude 3.5 Sonnet (default, best for coding)
-- `claude-sonnet` - Same as above
-- `claude-opus` - Claude 3 Opus (most capable)
-- `claude-haiku` - Claude 3.5 Haiku (fastest)
-
-### GPT (OpenAI)
-- `gpt4` - GPT-4 Turbo
-- `gpt4o` - GPT-4o (latest)
-
----
+`claude` is normalized to `claude-sonnet` in the CLI path.
 
 ## Configuration
 
-### View Current Config
+The current config command supports only three operations:
 
 ```bash
-$ ./reccli-v2.py config
-
-📋 Current Configuration
-
-Sessions directory: /Users/will/.reccli/sessions
-Default model: claude
-
-API Keys:
-  Anthropic: ✓ Set
-  OpenAI: ✗ Not set
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli config --anthropic-key sk-ant-...
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli config --openai-key sk-...
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli config --default-model claude
 ```
 
-### Set API Keys
+Running `config` with no flags prints the current configuration:
 
 ```bash
-# Anthropic (for Claude)
-./reccli-v2.py config --anthropic-key sk-ant-api03-...
-
-# OpenAI (for GPT)
-./reccli-v2.py config --openai-key sk-...
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli config
 ```
 
-### Set Default Model
+Config is stored in:
 
-```bash
-./reccli-v2.py config --default-model claude
-
-# Now can just run:
-./reccli-v2.py chat  # Uses claude automatically
+```text
+~/reccli/config.json
 ```
 
----
+Sessions default to:
+
+```text
+~/reccli/sessions/
+```
 
 ## Session Management
 
-### List All Sessions
+List sessions:
 
 ```bash
-$ ./reccli-v2.py list
-
-📁 Sessions in /Users/will/.reccli/sessions
-
-Name                           Duration     Events     Created
----------------------------------------------------------------------------
-chat_claude_20251101_210530    145.3s       12         2025-11-01 21:05
-ask_20251101_210600            2.1s         2          2025-11-01 21:06
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli list
 ```
 
-### Show Session Details
+Show one session:
 
 ```bash
-$ ./reccli-v2.py show chat_claude_20251101_210530
-
-📋 Session: session_20251101_210530
-   File: /Users/will/.reccli/sessions/chat_claude_20251101_210530.devsession
-   Created: 2025-11-01T21:05:30
-   Updated: 2025-11-01T21:07:55
-
-💬 Conversation: 12 messages
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli show my-session
 ```
 
-### Export Session
+Export a session:
 
 ```bash
-# Export to markdown
-./reccli-v2.py export chat_claude_20251101_210530
-
-# Export to plain text
-./reccli-v2.py export chat_claude_20251101_210530 -f txt
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli export my-session
+PYTHONPATH=packages/reccli-core python3 -m reccli.cli export my-session -f txt
 ```
 
----
+## Chat Notes
 
-## Advanced Usage
+The current `chat` command launches the TypeScript + Ink UI through [chat_ui.py](/Users/will/coding-projects/RecCli/packages/reccli-core/reccli/chat_ui.py). That means the UX is terminal-native, but the source of truth for session and model logic remains in the Python core.
 
-### Custom Session Names
+The UI bridge now targets the packaged backend under `packages/reccli-core/backend/`. See [RECCLI_CLI_UI.md](/Users/will/coding-projects/RecCli/docs/architecture/RECCLI_CLI_UI.md) for the current architecture note.
 
-```bash
-./reccli-v2.py chat -n jwt-auth-discussion --model claude
-```
+## `.devsession` Output
 
-### Custom Output Path
+The current `DevSession` object includes:
 
-```bash
-./reccli-v2.py chat -o ~/my-sessions/auth.devsession
-```
+- terminal recording metadata/events
+- conversation messages
+- summary
+- vector index
+- token counts
+- compaction history
+- episodes
 
-### Override API Key (One-Time)
+The exact schema is documented in [DEVSESSION_FORMAT.md](/Users/will/coding-projects/RecCli/docs/specs/DEVSESSION_FORMAT.md).
 
-```bash
-./reccli-v2.py chat --api-key sk-ant-temporary-key-...
-```
+## What This Doc Does Not Cover
 
----
+This guide does not define:
 
-## Comparison: Wrapper vs Native
+- retrieval architecture
+- compaction behavior
+- `.devproject` design
+- future auth or settings UX
 
-### Old Way (Wrapper Mode)
-```bash
-$ reccli record -- claude
-# RecCli spawns claude CLI
-# Records terminal I/O (messy with ANSI codes)
-# Need to parse terminal output to extract conversation
-# .devsession has terminal_recording + conversation
-```
+Use these docs for that:
 
-### New Way (Native LLM) ⭐
-```bash
-$ reccli chat
-# RecCli IS the LLM interface
-# Calls API directly
-# Already have clean conversation objects
-# .devsession just has conversation (clean!)
-```
-
-**Native is simpler, cleaner, and better for .devsession.**
-
----
-
-## Troubleshooting
-
-### "anthropic package not installed"
-
-```bash
-pip3 install anthropic
-```
-
-### "openai package not installed"
-
-```bash
-pip3 install openai
-```
-
-### "Anthropic API key not found"
-
-```bash
-./reccli-v2.py config --anthropic-key sk-ant-YOUR_KEY
-```
-
-### "OpenAI API key not found"
-
-```bash
-./reccli-v2.py config --openai-key sk-YOUR_KEY
-```
-
----
-
-## What's Next?
-
-This is **Phase 0.5** of the RecCli project. Coming soon:
-
-- **Phase 4**: AI-powered summary generation for .devsession files
-- **Phase 5**: Vector embeddings for semantic search across conversations
-- **Phase 6**: Memory middleware (context hydration from .devsession)
-- **Phase 7**: Preemptive compaction at 190K tokens
-
-**The native LLM is just the beginning!**
-
----
-
-## Files Created
-
-```
-packages/reccli-core/
-├── reccli/
-│   ├── llm.py          # LLMSession class (300 lines)
-│   ├── config.py       # Config management (65 lines)
-│   └── cli.py          # Updated with chat/ask/config commands
-│
-└── ui/
-```
-
----
-
-**You're all set! Start chatting with:**
-
-```bash
-./reccli-v2.py chat
-```
-
-🎉
+- [CONTEXT_LOADING.md](/Users/will/coding-projects/RecCli/docs/architecture/CONTEXT_LOADING.md)
+- [SETTINGS_AND_AUTH.md](/Users/will/coding-projects/RecCli/docs/reference/SETTINGS_AND_AUTH.md)
+- [DEVPROJECT_FORMAT.md](/Users/will/coding-projects/RecCli/docs/specs/DEVPROJECT_FORMAT.md)

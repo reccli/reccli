@@ -4,7 +4,9 @@
 
 RecCli is a temporal memory engine for coding agents.
 
-It preserves full conversation history, compacts active context into a small working summary, and maintains a project-level outline that persists across sessions. The key difference is that these layers are linked: the compacted summary and project outline can point back to exact spans in the original conversation, so context can be reduced aggressively without becoming lossy.
+It preserves full conversation history, compacts active context into a small working summary, and can maintain a project-level outline that persists across sessions. The key difference is that these layers are linked: the compacted summary and project outline can point back to exact spans in the original conversation, so context can be reduced aggressively without becoming lossy.
+
+In the current repo, the session-summary and full-conversation layers are the implemented core. The project-level outline is an optional layer: the middleware can read `.devproject` if present, but the main CLI path does not depend on it and can generate value without any project bootstrap step.
 
 In practical terms, RecCli is designed to give AI coding systems long-horizon continuity without forcing them to carry the entire conversation in the prompt window.
 
@@ -121,7 +123,7 @@ In this model:
 
 - OpenClaw provides the host UX, session surface, and plugin runtime,
 - RecCli provides memory ingestion, compaction, retrieval, indexing, and temporal linking,
-- `.devsession` and `.devproject` remain the source of truth.
+- `.devsession` is the required source of truth and `.devproject` is an optional project-outline companion.
 
 ## Why It Could Spread
 

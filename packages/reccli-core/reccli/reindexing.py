@@ -277,7 +277,10 @@ def validate_reindexing(
     """
     from .summary_verification import SummaryVerifier
 
-    verifier = SummaryVerifier(conversation)
+    from .summary_schema import ensure_summary_span_links
+
+    spans = ensure_summary_span_links(summary)
+    verifier = SummaryVerifier(conversation, spans)
     is_valid, errors_by_category = verifier.verify_summary(summary)
 
     # Flatten errors
@@ -307,7 +310,10 @@ def auto_remove_invalid_items(
     """
     from .summary_verification import SummaryVerifier
 
-    verifier = SummaryVerifier(conversation)
+    from .summary_schema import ensure_summary_span_links
+
+    spans = ensure_summary_span_links(summary)
+    verifier = SummaryVerifier(conversation, spans)
     cleaned_summary = summary.copy()
     removed = []
 

@@ -4,8 +4,10 @@ CLI - Command-line interface for RecCli
 
 import sys
 import argparse
+import json
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 from .recorder import watch_terminals
 from .wal_recorder import record_session_wal
@@ -19,10 +21,13 @@ from .vector_index import (
     get_index_stats
 )
 from .search import search, expand_result
+from .devproject import DevProjectManager, discover_project_root, resolve_session_project_root
 
 
 def cmd_record(args):
     """Record a new terminal session"""
+    config = Config()
+
     # Determine output path
     if args.output:
         output_path = Path(args.output)
@@ -30,7 +35,7 @@ def cmd_record(args):
         # Auto-generate filename
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         name = args.name or f"session_{timestamp}"
-        output_dir = Path.home() / 'reccli' / 'sessions'
+        output_dir = config.get_sessions_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{name}.devsession"
 
@@ -41,7 +46,8 @@ def cmd_record(args):
 
 def cmd_list(args):
     """List recorded sessions"""
-    sessions_dir = Path.home() / 'reccli' / 'sessions'
+    config = Config()
+    sessions_dir = config.get_sessions_dir()
 
     if not sessions_dir.exists():
         print("No sessions found. Record your first session with: reccli record")
@@ -87,7 +93,8 @@ def cmd_show(args):
 
     # If not absolute path, look in sessions directory
     if not session_path.is_absolute():
-        sessions_dir = Path.home() / 'reccli' / 'sessions'
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
         if not session_path.suffix:
             session_path = sessions_dir / f"{session_path}.devsession"
         else:
@@ -136,7 +143,8 @@ def cmd_export(args):
 
     # If not absolute path, look in sessions directory
     if not session_path.is_absolute():
-        sessions_dir = Path.home() / 'reccli' / 'sessions'
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
         if not session_path.suffix:
             session_path = sessions_dir / f"{session_path}.devsession"
         else:
@@ -268,9 +276,241 @@ def cmd_config(args):
     return 0
 
 
+def _resolve_session_path(session_arg: str) -> Path:
+    session_path = Path(session_arg)
+    if not session_path.is_absolute():
+        config = Config()
+        sessions_dir = config.get_sessions_dir()
+        if not session_path.suffix:
+            session_path = sessions_dir / f"{session_path}.devsession"
+        else:
+            session_path = sessions_dir / session_path
+    return session_path
+
+
+def _resolve_project_root_arg(project_root_arg: str = None) -> Optional[Path]:
+    if project_root_arg:
+        return Path(project_root_arg).expanduser().resolve()
+    return discover_project_root(Path.cwd())
+
+
 def cmd_watch(args):
     """Watch for new terminal windows and auto-launch GUI"""
     return watch_terminals()
+
+
+def cmd_project_show(args):
+    """Show .devproject summary or raw JSON."""
+    project_root = _resolve_project_root_arg(args.project_root)
+    if project_root is None:
+        print("❌ No project root found (.git or .devproject)", file=sys.stderr)
+        return 1
+
+    manager = DevProjectManager(project_root)
+    document = manager.load_or_create()
+
+    if args.json:
+        print(json.dumps(document, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"\n📘 Project Dashboard: {project_root / '.devproject'}\n")
+    project = document.get("project", {})
+    print(f"Name: {project.get('name', project_root.name)}")
+    print(f"Status: {project.get('status', 'unknown')}")
+    print(f"Features: {len(document.get('features', []))}")
+    print(f"Sessions linked: {len(document.get('session_index', []))}")
+    print(f"Pending proposals: {len(document.get('proposals', []))}")
+    print()
+
+    for feature in document.get("features", []):
+        print(f"- {feature.get('feature_id')}: {feature.get('title')}")
+        print(f"  Status: {feature.get('status')} | Version: {feature.get('feature_version', 1)}")
+        print(f"  Files touched: {len(feature.get('files_touched', []))}")
+        print(f"  Sessions: {len(feature.get('session_ids', []))}")
+    print()
+    return 0
+
+
+def cmd_project_init(args):
+    """Initialize .devproject from the existing codebase."""
+    project_root = _resolve_project_root_arg(args.project_root) or Path.cwd().resolve()
+    manager = DevProjectManager(project_root)
+    project_context = (args.description or "").strip() or manager.suggest_init_project_context()
+
+    if not project_context and sys.stdin.isatty():
+        try:
+            project_context = input("Describe your project in 1-2 sentences: ").strip() or None
+        except EOFError:
+            project_context = None
+
+    try:
+        document = manager.initialize_from_codebase(
+            force=args.force,
+            model=args.model,
+            project_context=project_context,
+        )
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+    except RuntimeError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+
+    print(f"\n✅ Initialized .devproject from codebase: {manager.path}\n")
+    print(f"Project: {document['project'].get('name', project_root.name)}")
+    print(f"Features detected: {len(document.get('features', []))}")
+    print()
+    for feature in document.get("features", [])[:10]:
+        print(f"- {feature.get('feature_id')}: {feature.get('title')} ({len(feature.get('files_touched', []))} files)")
+    if len(document.get("features", [])) > 10:
+        print(f"... and {len(document['features']) - 10} more")
+    print()
+
+    if sys.stdin.isatty() and not args.no_review:
+        try:
+            missing = input("Are any features missing from this list? Leave blank if not: ").strip()
+        except EOFError:
+            missing = ""
+        if missing:
+            try:
+                document = manager.initialize_from_codebase(
+                    force=True,
+                    model=args.model,
+                    project_context=project_context,
+                    missing_feature_hints=[missing],
+                )
+            except RuntimeError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                return 1
+
+            print("\n🔁 Rebuilt .devproject with missing-feature hint:\n")
+            print(f"Project: {document['project'].get('name', project_root.name)}")
+            print(f"Features detected: {len(document.get('features', []))}")
+            print()
+            for feature in document.get("features", [])[:10]:
+                print(f"- {feature.get('feature_id')}: {feature.get('title')} ({len(feature.get('files_touched', []))} files)")
+            if len(document.get("features", [])) > 10:
+                print(f"... and {len(document['features']) - 10} more")
+            print()
+    return 0
+
+
+def cmd_project_sync(args):
+    """Scan the codebase and propose .devproject updates."""
+    project_root = _resolve_project_root_arg(args.project_root)
+    if project_root is None:
+        print("❌ No project root found (.git or .devproject)", file=sys.stderr)
+        return 1
+
+    manager = DevProjectManager(project_root)
+    document, proposal = manager.generate_sync_proposal_from_codebase()
+
+    if proposal is None:
+        print("\n✅ .devproject already matches the scanned codebase.\n")
+        return 0
+
+    print(f"\n📝 Proposed codebase sync update: {proposal['proposal_id']}\n")
+    for op in proposal.get("diff", []):
+        print(json.dumps(op, indent=2, ensure_ascii=False))
+
+    if args.apply:
+        _, accepted = manager.apply_proposal(proposal["proposal_id"])
+        print(f"\n✅ Applied proposal: {accepted['proposal_id']}\n")
+    else:
+        print(f"\nUse 'reccli project apply {proposal['proposal_id']}' to accept it.\n")
+
+    return 0
+
+
+def cmd_project_proposals(args):
+    """List pending .devproject proposals."""
+    project_root = _resolve_project_root_arg(args.project_root)
+    if project_root is None:
+        print("❌ No project root found (.git or .devproject)", file=sys.stderr)
+        return 1
+
+    manager = DevProjectManager(project_root)
+    document = manager.load_or_create()
+    proposals = document.get("proposals", [])
+
+    if not proposals:
+        print("\nNo pending .devproject proposals.\n")
+        return 0
+
+    print(f"\n📝 Pending .devproject proposals for {project_root}\n")
+    for proposal in proposals:
+        print(f"{proposal['proposal_id']} [{proposal.get('status', 'pending')}]")
+        print(f"  Source session: {proposal.get('source_session_id')}")
+        for op in proposal.get("diff", []):
+            print(f"  - {op.get('op')}")
+        print()
+    return 0
+
+
+def cmd_project_update(args):
+    """Generate a .devproject proposal from a session."""
+    from .summarizer import SessionSummarizer
+
+    session_path = _resolve_session_path(args.session)
+    if not session_path.exists():
+        print(f"❌ Session not found: {session_path}", file=sys.stderr)
+        return 1
+
+    session = DevSession.load(session_path)
+    project_root = _resolve_project_root_arg(args.project_root) or resolve_session_project_root(session, Path.cwd())
+    if project_root is None:
+        print("❌ No project root found for this session", file=sys.stderr)
+        return 1
+
+    if not session.summary:
+        summarizer = SessionSummarizer(llm_client=None)
+        session.summary = summarizer.summarize_session(session.conversation, redact_secrets=False)
+        session.save(session_path, skip_validation=True)
+
+    manager = DevProjectManager(project_root)
+    _, proposal = manager.generate_proposal_for_session(session, session_path)
+
+    if proposal is None:
+        print("\n✅ .devproject already in sync.\n")
+        return 0
+
+    print(f"\n📝 Proposed .devproject update: {proposal['proposal_id']}\n")
+    for op in proposal.get("diff", []):
+        print(json.dumps(op, indent=2, ensure_ascii=False))
+
+    if args.apply:
+        _, accepted = manager.apply_proposal(proposal["proposal_id"])
+        print(f"\n✅ Applied proposal: {accepted['proposal_id']}\n")
+    else:
+        print(f"\nUse 'reccli project apply {proposal['proposal_id']}' to accept it.\n")
+
+    return 0
+
+
+def cmd_project_apply(args):
+    """Apply a pending .devproject proposal."""
+    project_root = _resolve_project_root_arg(args.project_root)
+    if project_root is None:
+        print("❌ No project root found (.git or .devproject)", file=sys.stderr)
+        return 1
+
+    manager = DevProjectManager(project_root)
+    _, proposal = manager.apply_proposal(args.proposal_id)
+    print(f"\n✅ Applied .devproject proposal: {proposal['proposal_id']}\n")
+    return 0
+
+
+def cmd_project_reject(args):
+    """Reject a pending .devproject proposal."""
+    project_root = _resolve_project_root_arg(args.project_root)
+    if project_root is None:
+        print("❌ No project root found (.git or .devproject)", file=sys.stderr)
+        return 1
+
+    manager = DevProjectManager(project_root)
+    _, proposal = manager.reject_proposal(args.proposal_id, reason=args.reason)
+    print(f"\n✅ Rejected .devproject proposal: {proposal['proposal_id']}\n")
+    return 0
 
 
 def cmd_index_build(args):
@@ -481,16 +721,7 @@ def cmd_expand(args):
 
 def cmd_embed(args):
     """Generate embeddings for a session"""
-    session_path = Path(args.session)
-
-    # If not absolute path, look in sessions directory
-    if not session_path.is_absolute():
-        config = Config()
-        sessions_dir = config.get_sessions_dir()
-        if not session_path.suffix:
-            session_path = sessions_dir / f"{session_path}.devsession"
-        else:
-            session_path = sessions_dir / session_path
+    session_path = _resolve_session_path(args.session)
 
     if not session_path.exists():
         print(f"❌ Session not found: {session_path}", file=sys.stderr)
@@ -529,16 +760,7 @@ def cmd_embed(args):
 
 def cmd_hydrate(args):
     """Test memory middleware context hydration"""
-    session_path = Path(args.session)
-
-    # If not absolute path, look in sessions directory
-    if not session_path.is_absolute():
-        config = Config()
-        sessions_dir = config.get_sessions_dir()
-        if not session_path.suffix:
-            session_path = sessions_dir / f"{session_path}.devsession"
-        else:
-            session_path = sessions_dir / session_path
+    session_path = _resolve_session_path(args.session)
 
     if not session_path.exists():
         print(f"❌ Session not found: {session_path}", file=sys.stderr)
@@ -634,16 +856,7 @@ def cmd_hydrate_streaming(args):
     import asyncio
     import time
 
-    session_path = Path(args.session)
-
-    # If not absolute path, look in sessions directory
-    if not session_path.is_absolute():
-        config = Config()
-        sessions_dir = config.get_sessions_dir()
-        if not session_path.suffix:
-            session_path = sessions_dir / f"{session_path}.devsession"
-        else:
-            session_path = sessions_dir / session_path
+    session_path = _resolve_session_path(args.session)
 
     if not session_path.exists():
         print(f"❌ Session not found: {session_path}", file=sys.stderr)
@@ -747,16 +960,7 @@ def cmd_compact(args):
     from .preemptive_compaction import PreemptiveCompactor
     from .config import Config
 
-    session_path = Path(args.session)
-
-    # If not absolute path, look in sessions directory
-    if not session_path.is_absolute():
-        config = Config()
-        sessions_dir = config.get_sessions_dir()
-        if not session_path.suffix:
-            session_path = sessions_dir / f"{session_path}.devsession"
-        else:
-            session_path = sessions_dir / session_path
+    session_path = _resolve_session_path(args.session)
 
     if not session_path.exists():
         print(f"❌ Session not found: {session_path}", file=sys.stderr)
@@ -800,16 +1004,7 @@ def cmd_check_tokens(args):
     from .preemptive_compaction import PreemptiveCompactor
     from .config import Config
 
-    session_path = Path(args.session)
-
-    # If not absolute path, look in sessions directory
-    if not session_path.is_absolute():
-        config = Config()
-        sessions_dir = config.get_sessions_dir()
-        if not session_path.suffix:
-            session_path = sessions_dir / f"{session_path}.devsession"
-        else:
-            session_path = sessions_dir / session_path
+    session_path = _resolve_session_path(args.session)
 
     if not session_path.exists():
         print(f"❌ Session not found: {session_path}", file=sys.stderr)
@@ -1080,7 +1275,6 @@ Examples:
   reccli chat                      # Start interactive chat (uses default model)
   reccli chat --model claude       # Chat with Claude
   reccli chat --model gpt5         # Chat with GPT-5
-  reccli chat --model gpt5-codex   # Chat with GPT-5 Codex (coding optimized)
   reccli ask "explain .devsession" # One-shot question
 
   # Configuration
@@ -1142,7 +1336,8 @@ Examples:
     config_parser.add_argument('--anthropic-key', help='Set Anthropic API key')
     config_parser.add_argument('--openai-key', help='Set OpenAI API key')
     config_parser.add_argument('--default-model', choices=[
-        'claude', 'gpt5', 'gpt5-chat', 'gpt5-codex', 'gpt4', 'gpt4o'
+        'claude', 'claude-sonnet', 'claude-opus', 'claude-haiku',
+        'gpt5', 'gpt5-mini', 'gpt5-nano', 'gpt4o'
     ], help='Set default model')
     config_parser.set_defaults(func=cmd_config)
 
@@ -1232,6 +1427,49 @@ Examples:
     compact_parser = subparsers.add_parser('compact', help='Manually trigger preemptive compaction')
     compact_parser.add_argument('session', help='Session name or path')
     compact_parser.set_defaults(func=cmd_compact)
+
+    # Project commands (.devproject)
+    project_parser = subparsers.add_parser('project', help='Manage .devproject dashboard and proposals')
+    project_subparsers = project_parser.add_subparsers(dest='project_command')
+
+    project_show_parser = project_subparsers.add_parser('show', help='Show .devproject summary')
+    project_show_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_show_parser.add_argument('--json', action='store_true', help='Print raw JSON')
+    project_show_parser.set_defaults(func=cmd_project_show)
+
+    project_init_parser = project_subparsers.add_parser('init', help='Initialize .devproject from the current codebase with LLM clustering')
+    project_init_parser.add_argument('--project-root', help='Project root to scan')
+    project_init_parser.add_argument('--force', action='store_true', help='Overwrite an existing .devproject')
+    project_init_parser.add_argument('--model', help='Model to use for semantic clustering (defaults to configured default model)')
+    project_init_parser.add_argument('--description', help='Optional 1-2 sentence project description to guide feature generation')
+    project_init_parser.add_argument('--no-review', action='store_true', help='Skip the post-init "what is missing?" review prompt')
+    project_init_parser.set_defaults(func=cmd_project_init)
+
+    project_sync_parser = project_subparsers.add_parser('sync', help='Scan codebase and propose .devproject updates')
+    project_sync_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_sync_parser.add_argument('--apply', action='store_true', help='Apply generated proposal immediately')
+    project_sync_parser.set_defaults(func=cmd_project_sync)
+
+    project_proposals_parser = project_subparsers.add_parser('proposals', help='List pending .devproject proposals')
+    project_proposals_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_proposals_parser.set_defaults(func=cmd_project_proposals)
+
+    project_update_parser = project_subparsers.add_parser('update', help='Generate a .devproject proposal from a session')
+    project_update_parser.add_argument('session', help='Session name or path')
+    project_update_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_update_parser.add_argument('--apply', action='store_true', help='Apply generated proposal immediately')
+    project_update_parser.set_defaults(func=cmd_project_update)
+
+    project_apply_parser = project_subparsers.add_parser('apply', help='Apply a pending .devproject proposal')
+    project_apply_parser.add_argument('proposal_id', help='Pending proposal ID')
+    project_apply_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_apply_parser.set_defaults(func=cmd_project_apply)
+
+    project_reject_parser = project_subparsers.add_parser('reject', help='Reject a pending .devproject proposal')
+    project_reject_parser.add_argument('proposal_id', help='Pending proposal ID')
+    project_reject_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_reject_parser.add_argument('--reason', help='Optional rejection reason')
+    project_reject_parser.set_defaults(func=cmd_project_reject)
 
     # Check tokens command (NEW - Phase 7: Check token count)
     check_tokens_parser = subparsers.add_parser('check-tokens', help='Show token count and compaction status')

@@ -567,7 +567,7 @@
                         </div>
                         <div class="terminal">
                             <div class="terminal-line">
-                                <span class="prompt">$</span> <span class="command">reccli gui</span>
+                                <span class="prompt">$</span> <span class="command">PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat</span>
                             </div>
                             <div class="terminal-line success">
                                 ✅ Starting reccli GUI...
@@ -594,7 +594,7 @@
                                 <span class="prompt">$</span> <span class="command">reccli stop</span>
                             </div>
                             <div class="terminal-line success">
-                                ✅ Recording saved: session_20240315_143022.cast
+                                ✅ Session saved: session_20240315_143022.devsession
                             </div>
                         </div>
 
@@ -761,11 +761,11 @@
 
                 <div class="faq-item">
                     <div class="faq-question" onclick="this.parentElement.classList.toggle('active')">
-                        <span>What about asciinema?</span>
+                        <span>How is this different from script or manual terminal logs?</span>
                         <span class="faq-toggle">▼</span>
                     </div>
                     <div class="faq-answer">
-                        asciinema is great! We actually use it under the hood. But it's still command-line based. reccli is about the UI/UX layer - the floating button that makes you actually USE recording instead of forgetting about it.
+                        RecCli uses native recording and session capture, but the bigger difference is workflow. The point is to make recording and continuity easy enough that you actually use it when the important debugging session happens.
                     </div>
                 </div>
 
@@ -785,7 +785,7 @@
                         <span class="faq-toggle">▼</span>
                     </div>
                     <div class="faq-answer">
-                        Locally on your machine in ~/.reccli/recordings/. Your data, your control. Cloud backup is coming soon as an option, but will never be required.
+                        Locally on your machine in ~/reccli/sessions/. Your data stays local by default.
                     </div>
                 </div>
 
@@ -807,12 +807,11 @@
                     <h2 class="section-title">Get Started in 30 Seconds</h2>
 
                     <div class="code-block" style="max-width: 650px; margin: 0 auto; font-size: 17px;">
-                        <div style="margin-bottom: 15px; opacity: 0.7;"># Quick install</div>
-                        <code>curl -sSL https://reccli.com/install.sh | bash</code>
-                        <div style="margin-top: 24px; margin-bottom: 15px; opacity: 0.7;"># Start GUI</div>
-                        <code>reccli gui</code>
-                        <div style="margin-top: 24px; margin-bottom: 15px; opacity: 0.7;"># Or use CLI mode</div>
-                        <code>reccli start</code>
+                        <div style="margin-bottom: 15px; opacity: 0.7;"># Local development install</div>
+                        <code>pip3 install -r requirements.txt</code><br>
+                        <code>cd packages/reccli-core/ui &amp;&amp; npm install &amp;&amp; npm run build</code>
+                        <div style="margin-top: 24px; margin-bottom: 15px; opacity: 0.7;"># Run chat</div>
+                        <code>PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat</code>
                     </div>
 
                     <div style="margin-top: 50px;">
