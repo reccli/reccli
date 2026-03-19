@@ -1091,6 +1091,58 @@ class DevSessionRegressionTests(unittest.TestCase):
             self.assertIn("Terminal UI (Ink)", candidate_titles)
             self.assertIn("Marketing Website", candidate_titles)
 
+    def test_devproject_inventory_extracts_framework_artifacts(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            (project_root / "apps" / "web" / "app" / "api" / "webhooks" / "stripe").mkdir(parents=True)
+            (project_root / "middleware").mkdir()
+            (project_root / "jobs").mkdir()
+            (project_root / "models").mkdir()
+            (project_root / "config").mkdir()
+
+            (project_root / "apps" / "web" / "app" / "api" / "webhooks" / "stripe" / "route.ts").write_text(
+                "export async function POST(request: Request) { return Response.json({ ok: true }); }\n",
+                encoding="utf-8",
+            )
+            (project_root / "middleware" / "auth.ts").write_text(
+                "export function middleware(request: Request) { return request; }\n",
+                encoding="utf-8",
+            )
+            (project_root / "jobs" / "sync.py").write_text(
+                "@app.task\n"
+                "def sync_index():\n    return True\n",
+                encoding="utf-8",
+            )
+            (project_root / "models" / "user.py").write_text(
+                "class UserModel(BaseModel):\n    pass\n",
+                encoding="utf-8",
+            )
+            (project_root / "config" / "schema.ts").write_text(
+                "export const envSchema = z.object({ API_KEY: z.string() });\n",
+                encoding="utf-8",
+            )
+
+            manager = DevProjectManager(project_root)
+            inventory = manager._build_codebase_inventory()
+            files_by_path = {
+                item["path"]: item
+                for item in inventory["files"]
+            }
+
+            webhook_artifacts = {(item["kind"], item["label"]) for item in files_by_path["apps/web/app/api/webhooks/stripe/route.ts"]["artifacts"]}
+            middleware_artifacts = {(item["kind"], item["label"]) for item in files_by_path["middleware/auth.ts"]["artifacts"]}
+            job_artifacts = {(item["kind"], item["label"]) for item in files_by_path["jobs/sync.py"]["artifacts"]}
+            model_artifacts = {(item["kind"], item["label"]) for item in files_by_path["models/user.py"]["artifacts"]}
+            config_artifacts = {(item["kind"], item["label"]) for item in files_by_path["config/schema.ts"]["artifacts"]}
+
+            self.assertIn(("route", "webhooks/stripe"), webhook_artifacts)
+            self.assertIn(("webhook", "webhooks/stripe"), webhook_artifacts)
+            self.assertIn(("middleware", "auth"), middleware_artifacts)
+            self.assertIn(("job", "sync"), job_artifacts)
+            self.assertIn(("model", "UserModel"), model_artifacts)
+            self.assertIn(("config_schema", "schema"), config_artifacts)
+
     def test_devproject_refines_broad_runtime_feature_with_artifact_candidates(self):
         with tempfile.TemporaryDirectory() as td:
             project_root = Path(td)

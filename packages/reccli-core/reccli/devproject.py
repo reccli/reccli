@@ -1583,6 +1583,24 @@ class DevProjectManager:
                     page_label = "/".join(parts[pages_idx + 1:]).rsplit(".", 1)[0]
                     add("page", page_label or rel_path.stem)
 
+        if "app" in parts:
+            try:
+                app_idx = parts.index("app")
+            except ValueError:
+                app_idx = -1
+            if app_idx >= 0 and app_idx + 1 < len(parts):
+                remainder = list(parts[app_idx + 1:])
+                filename = remainder[-1] if remainder else rel_path.name
+                stem = Path(filename).stem.lower()
+                if remainder and remainder[0] == "api":
+                    route_parts = remainder[1:-1]
+                    add("route", "/".join(route_parts) or rel_path.stem)
+                    if "webhook" in rel_path.as_posix().lower():
+                        add("webhook", "/".join(route_parts) or rel_path.stem)
+                elif stem in {"page", "layout"}:
+                    page_parts = remainder[:-1]
+                    add("page", "/".join(page_parts) or rel_path.parent.name or rel_path.stem)
+
         if "components" in parts or rel_path.suffix.lower() in {".tsx", ".jsx"}:
             for symbol in file_info.get("structural_symbols", []):
                 if symbol.startswith("class:") or symbol.startswith("function:"):
@@ -1595,6 +1613,12 @@ class DevProjectManager:
             lowered = name.lower()
             if kind in {"class", "interface", "type"} and ("schema" in lowered or "model" in lowered):
                 add("schema", name)
+            if kind == "class" and (
+                lowered.endswith("model")
+                or lowered.endswith("settings")
+                or lowered.endswith("config")
+            ):
+                add("model", name)
 
         if file_info.get("is_test"):
             imports = file_info.get("imports", [])
@@ -1612,13 +1636,46 @@ class DevProjectManager:
         except Exception:
             text = ""
 
+        lowered_path = rel_path.as_posix().lower()
+        lowered_text = text.lower()
+
+        if "middleware" in parts or rel_path.stem.lower() == "middleware":
+            add("middleware", rel_path.parent.name if rel_path.parent.name != "." else rel_path.stem)
+        if re.search(r"\bexport\s+function\s+middleware\b|\bdef\s+middleware\b", text):
+            add("middleware", rel_path.stem)
+
+        if "webhook" in lowered_path:
+            add("webhook", rel_path.stem)
+
         for match in re.findall(r"add_parser\(\s*['\"]([^'\"]+)['\"]", text):
             add("cli_command", match)
 
-        for match in re.findall(r"@(?:app|router)\.(?:get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", text):
+        for match in re.findall(r"@\w+\.(?:get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", text):
             add("route", match)
-        for match in re.findall(r"(?:app|router)\.(?:get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", text):
+            if "webhook" in match.lower():
+                add("webhook", match)
+        for match in re.findall(r"@\w+\.route\(\s*['\"]([^'\"]+)['\"]", text):
             add("route", match)
+            if "webhook" in match.lower():
+                add("webhook", match)
+        for match in re.findall(r"\w+\.(?:get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", text):
+            add("route", match)
+            if "webhook" in match.lower():
+                add("webhook", match)
+        for match in re.findall(r"\w+\.route\(\s*['\"]([^'\"]+)['\"]", text):
+            add("route", match)
+            if "webhook" in match.lower():
+                add("webhook", match)
+        for match in re.findall(r"app\.(?:use|middleware)\(\s*['\"]([^'\"]+)['\"]", text):
+            add("middleware", match)
+
+        if any(pattern in lowered_text for pattern in ("@app.task", "@shared_task", "schedule.every(", "add_job(", "repeat_every", "crontab(")):
+            add("job", rel_path.stem)
+
+        if any(pattern in lowered_text for pattern in ("basemodel", "db.model", "models.model", "sequelize.define(", "new schema(", "schema = z.object", "z.object(")):
+            add("schema", rel_path.stem)
+        if any(pattern in lowered_text for pattern in ("basesettings", "settingsconfigdict", "configdict", "envschema", "schema = z.object", "z.object(")):
+            add("config_schema", rel_path.stem)
 
         return artifacts
 
@@ -1629,7 +1686,7 @@ class DevProjectManager:
             " ".join(file_info.get("top_identifiers", [])),
             " ".join(file_info.get("semantic_tags", [])),
             " ".join(
-                artifact.get("label", "")
+                f"{artifact.get('kind', '')} {artifact.get('label', '')}"
                 for artifact in file_info.get("artifacts", [])
                 if isinstance(artifact, dict)
             ),
