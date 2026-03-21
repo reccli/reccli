@@ -467,6 +467,13 @@ class PreemptiveCompactor:
             include_wpc=True
         )
 
+        # Always re-inject project overview and folder tree after compaction
+        # so the agent retains spatial awareness and feature navigation
+        if 'project_overview' not in context:
+            project_overview = self.middleware._load_project_overview()
+            if project_overview:
+                context['project_overview'] = project_overview
+
         # Add WPC predictions
         context['wpc_predictions'] = wpc_predictions
 
