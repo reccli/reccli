@@ -405,47 +405,56 @@ class MemoryMiddleware:
             return False
 
     def _load_project_overview(self) -> Optional[Dict]:
-        """Load .devproject file and compact folder tree if available."""
-        from .devproject import resolve_devproject_path, generate_compact_tree
+        """Load .devproject file, validate file paths, and generate compact folder tree."""
+        from .devproject import resolve_devproject_path, generate_compact_tree, DevProjectManager
 
         project_root = self.session.metadata.get("project_root") if getattr(self.session, "metadata", None) else None
+
+        devproject_path = None
         resolved_root = None
 
         if project_root:
             resolved_root = Path(project_root).expanduser()
-            devproject_path = resolve_devproject_path(resolved_root)
-            if devproject_path.exists():
-                try:
-                    import json
-                    with open(devproject_path, 'r') as f:
-                        data = json.load(f)
-                    data["_folder_tree"] = generate_compact_tree(resolved_root)
-                    return data
-                except Exception:
-                    pass
+            candidate = resolve_devproject_path(resolved_root)
+            if candidate.exists():
+                devproject_path = candidate
 
-        # Look for .devproject in parent directories
-        current = self.sessions_dir.parent
+        if devproject_path is None:
+            current = self.sessions_dir.parent
+            for _ in range(5):
+                candidate = resolve_devproject_path(current)
+                if candidate.exists():
+                    devproject_path = candidate
+                    resolved_root = current
+                    break
+                parent = current.parent
+                if parent == current:
+                    break
+                current = parent
 
-        for _ in range(5):  # Search up to 5 levels
-            devproject_path = resolve_devproject_path(current)
-            if devproject_path.exists():
-                try:
-                    import json
-                    with open(devproject_path, 'r') as f:
-                        data = json.load(f)
-                    data["_folder_tree"] = generate_compact_tree(current)
-                    return data
-                except Exception:
-                    pass
+        if devproject_path is None or resolved_root is None:
+            return None
 
-            # Go up one level
-            parent = current.parent
-            if parent == current:  # Reached root
-                break
-            current = parent
+        try:
+            import json
+            with open(devproject_path, 'r') as f:
+                data = json.load(f)
+        except Exception:
+            return None
 
-        return None
+        # Validate and fix file paths against disk on every session load
+        try:
+            manager = DevProjectManager(resolved_root)
+            path_result = manager.validate_and_fix_file_paths()
+            if path_result["changed"]:
+                # Reload after fixes were saved
+                with open(devproject_path, 'r') as f:
+                    data = json.load(f)
+        except Exception:
+            pass
+
+        data["_folder_tree"] = generate_compact_tree(resolved_root)
+        return data
 
     def _vector_search_local(
         self,
