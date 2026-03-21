@@ -587,9 +587,12 @@ class MemoryMiddleware:
         sections.append("")
 
         # Project overview (if loaded)
+        # Wrapped in devproject-context tags so the compaction summarizer
+        # knows to skip this section — it's reference context, not session history.
         if 'project_overview' in context:
             proj = context['project_overview']
             project_meta = proj.get('project', {})
+            sections.append("<!-- devproject-context -->")
             sections.append("## Project Overview")
             sections.append(f"**Name**: {project_meta.get('name', proj.get('name', 'N/A'))}")
             sections.append(f"**Description**: {project_meta.get('description', proj.get('purpose', 'N/A'))}")
@@ -620,6 +623,7 @@ class MemoryMiddleware:
                 sections.append(folder_tree)
                 sections.append("```")
                 sections.append("")
+            sections.append("<!-- /devproject-context -->")
 
         # Session summary (if exists)
         if context.get('summary'):

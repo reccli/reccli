@@ -429,6 +429,72 @@ class DevProjectManager:
             document, _ = self.apply_proposal(proposal["proposal_id"])
         return document
 
+    def validate_and_fix_file_paths(self) -> Dict[str, Any]:
+        """Lightweight file path validation against the live codebase.
+
+        Checks every files_touched path in each feature. If a path no longer
+        exists on disk, attempts to find a same-named file elsewhere in the
+        project (rename/move detection). Returns a summary of what was fixed
+        and what was flagged.
+
+        This is fast (filesystem only, no LLM) and safe to run inline during
+        compaction.
+        """
+        document = self.load_or_create()
+        features = document.get("features", [])
+        fixed = []
+        missing = []
+        changed = False
+
+        # Build a filename-to-paths index for move detection
+        name_index: Dict[str, List[str]] = {}
+        for path in self.project_root.rglob("*"):
+            if not path.is_file():
+                continue
+            if any(part in IGNORED_DIRS for part in path.relative_to(self.project_root).parts):
+                continue
+            rel = path.relative_to(self.project_root).as_posix()
+            name_index.setdefault(path.name, []).append(rel)
+
+        for feature in features:
+            updated_files: List[str] = []
+            for file_path in feature.get("files_touched", []):
+                full_path = self.project_root / file_path
+                if full_path.exists():
+                    updated_files.append(file_path)
+                    continue
+
+                # Try to find the file by name elsewhere
+                filename = Path(file_path).name
+                candidates = name_index.get(filename, [])
+                if len(candidates) == 1:
+                    new_path = candidates[0]
+                    updated_files.append(new_path)
+                    fixed.append({
+                        "feature": feature.get("title", ""),
+                        "old_path": file_path,
+                        "new_path": new_path,
+                    })
+                    changed = True
+                else:
+                    missing.append({
+                        "feature": feature.get("title", ""),
+                        "path": file_path,
+                        "candidates": candidates[:5],
+                    })
+                    changed = True
+
+            feature["files_touched"] = sorted(set(updated_files))
+
+        if changed:
+            self.save(document)
+
+        return {
+            "fixed": fixed,
+            "missing": missing,
+            "changed": changed,
+        }
+
     def generate_sync_proposal_from_codebase(self) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         document = self.load_or_create()
         diff: List[Dict[str, Any]] = []

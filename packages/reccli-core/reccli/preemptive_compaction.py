@@ -236,7 +236,7 @@ class PreemptiveCompactor:
             self.session.save()
             print(f"   ✓ Saved to {self.session.session_id}.devsession")
 
-            # Step 9: Propose .devproject update if project context exists
+            # Step 9: Validate .devproject file paths and propose updates
             project_root = resolve_session_project_root(
                 self.session,
                 self.session.path.parent if self.session.path else Path.cwd(),
@@ -244,6 +244,17 @@ class PreemptiveCompactor:
             if project_root and self.session.path:
                 try:
                     manager = DevProjectManager(project_root)
+
+                    # Validate file paths against disk (fast, no LLM)
+                    path_result = manager.validate_and_fix_file_paths()
+                    if path_result["fixed"]:
+                        for fix in path_result["fixed"]:
+                            print(f"   ✓ File moved: {fix['old_path']} → {fix['new_path']} ({fix['feature']})")
+                    if path_result["missing"]:
+                        for miss in path_result["missing"]:
+                            print(f"   ⚠️  File missing: {miss['path']} ({miss['feature']})")
+
+                    # Propose session-level updates
                     _, proposal = manager.generate_proposal_for_session(self.session, self.session.path)
                     if proposal:
                         print(f"   ✓ Proposed .devproject update: {proposal['proposal_id']}")
