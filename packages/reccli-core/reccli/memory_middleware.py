@@ -405,18 +405,23 @@ class MemoryMiddleware:
             return False
 
     def _load_project_overview(self) -> Optional[Dict]:
-        """Load .devproject file if it exists"""
-        from .devproject import resolve_devproject_path
+        """Load .devproject file and compact folder tree if available."""
+        from .devproject import resolve_devproject_path, generate_compact_tree
 
         project_root = self.session.metadata.get("project_root") if getattr(self.session, "metadata", None) else None
+        resolved_root = None
+
         if project_root:
-            devproject_path = resolve_devproject_path(Path(project_root).expanduser())
+            resolved_root = Path(project_root).expanduser()
+            devproject_path = resolve_devproject_path(resolved_root)
             if devproject_path.exists():
                 try:
                     import json
                     with open(devproject_path, 'r') as f:
-                        return json.load(f)
-                except:
+                        data = json.load(f)
+                    data["_folder_tree"] = generate_compact_tree(resolved_root)
+                    return data
+                except Exception:
                     pass
 
         # Look for .devproject in parent directories
@@ -428,8 +433,10 @@ class MemoryMiddleware:
                 try:
                     import json
                     with open(devproject_path, 'r') as f:
-                        return json.load(f)
-                except:
+                        data = json.load(f)
+                    data["_folder_tree"] = generate_compact_tree(current)
+                    return data
+                except Exception:
                     pass
 
             # Go up one level
@@ -582,12 +589,37 @@ class MemoryMiddleware:
         # Project overview (if loaded)
         if 'project_overview' in context:
             proj = context['project_overview']
+            project_meta = proj.get('project', {})
             sections.append("## Project Overview")
-            sections.append(f"**Name**: {proj.get('name', 'N/A')}")
-            sections.append(f"**Purpose**: {proj.get('purpose', 'N/A')}")
-            if 'tech_stack' in proj:
-                sections.append(f"**Tech Stack**: {', '.join(proj.get('tech_stack', []))}")
+            sections.append(f"**Name**: {project_meta.get('name', proj.get('name', 'N/A'))}")
+            sections.append(f"**Description**: {project_meta.get('description', proj.get('purpose', 'N/A'))}")
             sections.append("")
+
+            features = proj.get('features', [])
+            if features:
+                sections.append("## Features")
+                for feature in features:
+                    status = feature.get('status', '')
+                    title = feature.get('title', 'Untitled')
+                    desc = feature.get('description', '')
+                    files = feature.get('files_touched', [])
+                    docs = [d.get('path', '') for d in feature.get('docs', []) if isinstance(d, dict)]
+                    sections.append(f"### {title} [{status}]")
+                    if desc:
+                        sections.append(desc)
+                    if files:
+                        sections.append(f"Files: {', '.join(files)}")
+                    if docs:
+                        sections.append(f"Docs: {', '.join(docs)}")
+                    sections.append("")
+
+            folder_tree = proj.get('_folder_tree', '')
+            if folder_tree:
+                sections.append("## Codebase Structure")
+                sections.append("```")
+                sections.append(folder_tree)
+                sections.append("```")
+                sections.append("")
 
         # Session summary (if exists)
         if context.get('summary'):

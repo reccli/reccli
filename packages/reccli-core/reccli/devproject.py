@@ -143,6 +143,62 @@ def _slugify(value: str) -> str:
     return slug.strip("_") or "feature"
 
 
+def generate_compact_tree(project_root: Path, max_depth: int = 6, collapse_threshold: int = 5) -> str:
+    """Generate a compact folder tree for session context injection.
+
+    Shows all directories. Shows individual files only in sparse directories
+    (fewer than collapse_threshold files). Dense directories are collapsed
+    to 'dirname/ (N files)'.
+
+    Excludes common noise directories (node_modules, .git, build artifacts, etc.).
+    """
+    root = Path(project_root).resolve()
+    lines: List[str] = []
+
+    def _walk(directory: Path, prefix: str, depth: int):
+        if depth > max_depth:
+            return
+        try:
+            entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except PermissionError:
+            return
+
+        dirs = [e for e in entries if e.is_dir() and e.name not in IGNORED_DIRS and not e.name.startswith(".")]
+        files = [e for e in entries if e.is_file() and not e.name.startswith(".")]
+
+        for d in dirs:
+            child_files = []
+            try:
+                child_files = [c for c in d.iterdir() if c.is_file() and not c.name.startswith(".")]
+            except PermissionError:
+                pass
+            child_dirs = []
+            try:
+                child_dirs = [c for c in d.iterdir() if c.is_dir() and c.name not in IGNORED_DIRS and not c.name.startswith(".")]
+            except PermissionError:
+                pass
+
+            if not child_files and not child_dirs:
+                lines.append(f"{prefix}{d.name}/")
+            elif len(child_files) > collapse_threshold and not child_dirs:
+                lines.append(f"{prefix}{d.name}/ ({len(child_files)} files)")
+            else:
+                lines.append(f"{prefix}{d.name}/")
+                _walk(d, prefix + "  ", depth + 1)
+
+        if len(files) <= collapse_threshold:
+            for f in files:
+                suffix = f.suffix.lower()
+                if suffix in CODE_EXTENSIONS or suffix in DOC_EXTENSIONS or f.name in {"package.json", "pyproject.toml", "tsconfig.json", "requirements.txt", ".gitignore"}:
+                    lines.append(f"{prefix}{f.name}")
+        elif files:
+            lines.append(f"{prefix}({len(files)} files)")
+
+    lines.append(f"{root.name}/")
+    _walk(root, "  ", 0)
+    return "\n".join(lines)
+
+
 def canonical_devproject_path(project_root: Path) -> Path:
     root = Path(project_root).resolve()
     return root / f"{root.name}.devproject"
