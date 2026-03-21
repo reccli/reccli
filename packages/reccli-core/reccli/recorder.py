@@ -20,6 +20,7 @@ from typing import Optional
 from datetime import datetime
 
 from .devsession import DevSession
+from .devproject import default_devsession_path
 
 # Tkinter imports (optional for GUI mode)
 try:
@@ -282,11 +283,7 @@ class BackgroundRecorder:
         self.terminal_id = terminal_id
 
         # Generate output path with .devsession extension
-        sessions_dir = Path.home() / 'reccli' / 'sessions'
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"session_{timestamp}.devsession"
-        self.output_path = sessions_dir / filename
+        self.output_path = default_devsession_path(Path.cwd())
 
         self.start_time = time.time()
 

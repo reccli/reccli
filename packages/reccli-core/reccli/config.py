@@ -24,7 +24,7 @@ class Config:
                 'openai': None,
             },
             'default_model': 'claude',
-            'sessions_dir': str(Path.home() / 'reccli' / 'sessions'),
+            'sessions_dir': str(Path.home() / 'reccli' / 'devsession'),
         }
 
         if self.config_file.exists():
@@ -68,6 +68,10 @@ class Config:
 
     def get_sessions_dir(self) -> Path:
         """Get sessions directory"""
-        sessions_dir = Path(self.data.get('sessions_dir', Path.home() / 'reccli' / 'sessions'))
+        try:
+            from .devproject import default_devsession_dir
+            sessions_dir = default_devsession_dir(Path.cwd())
+        except Exception:
+            sessions_dir = Path(self.data.get('sessions_dir', Path.home() / 'reccli' / 'devsession'))
         sessions_dir.mkdir(parents=True, exist_ok=True)
         return sessions_dir

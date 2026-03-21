@@ -1,0 +1,29 @@
+[
+  {
+    "name": "universal_rules_split_tests_and_routes_from_broad_feature",
+    "files": {
+      "src/core.py": "class CoreEngine:\n    pass\n",
+      "src/handler.py": "def handle_request():\n    return True\n",
+      "api/webhooks.py": "@app.route('/webhook')\ndef webhook_handler():\n    return True\n",
+      "tests/test_core.py": "def test_core():\n    assert True\n",
+      "tests/test_handler.py": "def test_handler():\n    assert True\n"
+    },
+    "initial_feature": {
+      "title": "Core",
+      "description": "Broad core feature."
+    },
+    "expected_titles": [
+      "API Routes",
+      "Testing"
+    ],
+    "expected_feature_files": {
+      "API Routes": [
+        "api/webhooks.py"
+      ],
+      "Testing": [
+        "tests/test_core.py",
+        "tests/test_handler.py"
+      ]
+    }
+  }
+]

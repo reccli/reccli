@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from reccli.llm import LLMSession
 from reccli.devsession import DevSession
+from reccli.devproject import default_devsession_path
 
 class RecCliBackend:
     def __init__(self):
@@ -40,7 +41,7 @@ class RecCliBackend:
                 session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         # Create output path for session
-        output_path = Path.cwd() / f"{session_name}.devsession"
+        output_path = default_devsession_path(Path.cwd())
 
         # Initialize .devsession file
         self.devsession = DevSession(session_name)

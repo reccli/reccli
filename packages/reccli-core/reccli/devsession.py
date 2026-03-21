@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from .devproject import default_devsession_path
+
 
 class DevSession:
     """Manages .devsession file format"""
@@ -225,8 +227,14 @@ class DevSession:
         """
         if path is None:
             if self.path is None:
-                raise ValueError("Cannot save DevSession without a path")
-            path = self.path
+                base_dir = None
+                if self.metadata.get("project_root"):
+                    base_dir = Path(self.metadata["project_root"])
+                elif self.metadata.get("working_directory"):
+                    base_dir = Path(self.metadata["working_directory"])
+                path = default_devsession_path(base_dir)
+            else:
+                path = self.path
 
         path = Path(path)
 

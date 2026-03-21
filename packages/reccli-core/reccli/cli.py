@@ -21,7 +21,13 @@ from .vector_index import (
     get_index_stats
 )
 from .search import search, expand_result
-from .devproject import DevProjectManager, discover_project_root, resolve_session_project_root
+from .devproject import (
+    DevProjectManager,
+    canonical_devproject_path,
+    default_devsession_path,
+    discover_project_root,
+    resolve_session_project_root,
+)
 
 
 def cmd_record(args):
@@ -32,12 +38,7 @@ def cmd_record(args):
     if args.output:
         output_path = Path(args.output)
     else:
-        # Auto-generate filename
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        name = args.name or f"session_{timestamp}"
-        output_dir = config.get_sessions_dir()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{name}.devsession"
+        output_path = default_devsession_path(Path.cwd())
 
     # Start recording using WAL pattern
     exit_code = record_session_wal(output_path, shell=args.shell)
@@ -236,8 +237,7 @@ def cmd_ask(args):
     if args.output:
         output_path = Path(args.output)
     else:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_path = config.get_sessions_dir() / f"ask_{timestamp}.devsession"
+        output_path = default_devsession_path(Path.cwd())
 
     # Ask question
     response = one_shot_query(model, args.question, output_path, api_key=args.api_key)
@@ -313,7 +313,7 @@ def cmd_project_show(args):
         print(json.dumps(document, indent=2, ensure_ascii=False))
         return 0
 
-    print(f"\n📘 Project Dashboard: {project_root / '.devproject'}\n")
+    print(f"\n📘 Project Dashboard: {canonical_devproject_path(project_root)}\n")
     project = document.get("project", {})
     print(f"Name: {project.get('name', project_root.name)}")
     print(f"Status: {project.get('status', 'unknown')}")

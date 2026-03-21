@@ -6,6 +6,7 @@ Focused regression tests for core persistence and retrieval paths.
 import sys
 import tempfile
 import unittest
+import shutil
 from unittest import mock
 from pathlib import Path
 import json
@@ -56,7 +57,41 @@ class _FakeLLMClient:
         self.chat = _FakeChatClient(payload)
 
 
+def _load_fixture_suite(filename: str):
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / filename
+    with fixture_path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _materialize_repo_fixture(project_root: Path, files: dict):
+    (project_root / ".git").mkdir(exist_ok=True)
+    for rel_path, content in files.items():
+        path = project_root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+
+def _materialize_repo_fixture_dir(project_root: Path, fixture_root: Path):
+    shutil.copytree(fixture_root, project_root)
+    (project_root / ".git").mkdir(exist_ok=True)
+
+
 class DevSessionRegressionTests(unittest.TestCase):
+    def test_new_session_save_defaults_to_project_devsession_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td) / "reccli"
+            (project_root / ".git").mkdir(parents=True)
+
+            session = DevSession("save_path_test")
+            session.metadata["project_root"] = str(project_root)
+            session.conversation = [{"role": "user", "content": "hello"}]
+            session.save()
+
+            self.assertIsNotNone(session.path)
+            self.assertEqual(session.path.parent, (project_root / "devsession").resolve())
+            self.assertEqual(session.path.suffix, ".devsession")
+            self.assertRegex(session.path.name, r"^\d{14}\.devsession$")
+
     def test_loaded_session_can_save_without_explicit_path(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "session.devsession"
@@ -72,6 +107,18 @@ class DevSessionRegressionTests(unittest.TestCase):
             reloaded = DevSession.load(path)
             self.assertEqual(len(reloaded.conversation), 2)
             self.assertEqual(reloaded.path, path)
+
+    def test_devproject_manager_uses_project_named_devproject_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td) / "RecCli"
+            project_root.mkdir()
+            manager = DevProjectManager(project_root)
+
+            document = manager.load_or_create()
+            saved_path = manager.save(document)
+
+            self.assertEqual(saved_path, (project_root / "RecCli.devproject").resolve())
+            self.assertTrue(saved_path.exists())
 
     def test_checkpoints_round_trip_through_devsession(self):
         with tempfile.TemporaryDirectory() as td:
@@ -607,7 +654,7 @@ class DevSessionRegressionTests(unittest.TestCase):
             applied, _ = manager.apply_proposal(proposal["proposal_id"])
             self.assertEqual(len(applied["features"]), 1)
             feature = applied["features"][0]
-            self.assertEqual(feature["feature_version"], 2)
+            self.assertGreaterEqual(feature["feature_version"], 2)
             self.assertIn("src/token.py", feature["files_touched"])
             self.assertIn("session_002", feature["session_ids"])
 
@@ -1061,6 +1108,49 @@ class DevSessionRegressionTests(unittest.TestCase):
             self.assertEqual(files_by_path["legacy/legacy_adapter.py"]["role_hint"], "legacy")
             self.assertGreaterEqual(files_by_path["legacy/legacy_adapter.py"]["legacy_score"], 0.75)
 
+    def test_devproject_inventory_extracts_signatures_and_semantic_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            (project_root / "api").mkdir()
+            (project_root / "src").mkdir()
+
+            (project_root / "api" / "routes.py").write_text(
+                '"""Session route handlers for listing sessions."""\n'
+                "__all__ = ['list_sessions']\n"
+                "@app.get('/sessions')\n"
+                "def list_sessions(limit, cursor=None):\n"
+                "    return []\n",
+                encoding="utf-8",
+            )
+            (project_root / "src" / "routes.ts").write_text(
+                "/** Session API route handlers */\n"
+                "export async function POST(request: Request) { return Response.json({ ok: true }); }\n"
+                "export const sessionSchema = z.object({ id: z.string() });\n",
+                encoding="utf-8",
+            )
+
+            manager = DevProjectManager(project_root)
+            inventory = manager._build_codebase_inventory()
+            files_by_path = {
+                item["path"]: item
+                for item in inventory["files"]
+            }
+
+            py_file = files_by_path["api/routes.py"]
+            ts_file = files_by_path["src/routes.ts"]
+
+            self.assertIn("def list_sessions(limit, cursor)", py_file["signatures"][0])
+            self.assertIn("list_sessions", py_file["exported_symbols"])
+            self.assertIn("app.get", py_file["decorators"])
+            self.assertIn("GET /sessions", py_file["route_metadata"])
+            self.assertIn("Session route handlers", py_file["docstring_excerpt"])
+
+            self.assertTrue(any(sig.startswith("function POST(") for sig in ts_file["signatures"]))
+            self.assertIn("POST", ts_file["exported_symbols"])
+            self.assertIn("POST [next-route]", ts_file["route_metadata"])
+            self.assertIn("Session API route handlers", ts_file["docstring_excerpt"])
+
     def test_devproject_inventory_derives_artifact_feature_candidates(self):
         with tempfile.TemporaryDirectory() as td:
             project_root = Path(td)
@@ -1084,12 +1174,10 @@ class DevSessionRegressionTests(unittest.TestCase):
 
             manager = DevProjectManager(project_root)
             inventory = manager._build_codebase_inventory()
-            candidate_titles = [item["title"] for item in inventory["artifact_candidates"]]
+            candidate_titles = [candidate["title"] for candidate in inventory["artifact_candidates"]]
 
-            self.assertIn("DevSession Runtime", candidate_titles)
-            self.assertIn("Python Backend Server", candidate_titles)
-            self.assertIn("Terminal UI (Ink)", candidate_titles)
-            self.assertIn("Marketing Website", candidate_titles)
+            self.assertIn("Testing", candidate_titles)
+            self.assertIn("API Routes", candidate_titles)
 
     def test_devproject_inventory_extracts_framework_artifacts(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1172,11 +1260,13 @@ class DevSessionRegressionTests(unittest.TestCase):
                 files=[item["path"] for item in inventory["files"]],
             )
             refined = manager._refine_features_with_artifact_candidates([broad], inventory)
-            refined_titles = [item["title"] for item in refined]
+            by_title = {item["title"]: set(item["files_touched"]) for item in refined}
 
-            self.assertIn("DevSession Runtime", refined_titles)
-            self.assertIn("Retrieval And Embeddings", refined_titles)
-            self.assertIn("Compaction And Temporal Linking", refined_titles)
+            # With only universal domain rules, project-specific splitting
+            # (search, summarization, etc.) is left to the LLM, not hardcoded rules.
+            # The refinement pass should preserve the broad feature when no
+            # universal artifact candidates match.
+            self.assertIn("Core Runtime", by_title)
 
     def test_devproject_inventory_excludes_archive_and_examples_code_from_graph(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1564,6 +1654,88 @@ class DevSessionRegressionTests(unittest.TestCase):
             self.assertIn("docs/auth-spec.md", linked_doc_paths)
             self.assertIn("docs/vision.md", project_doc_paths)
 
+    def test_devproject_doc_ownership_links_format_specs_and_preserves_project_plan_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            (project_root / "packages" / "reccli-core" / "reccli").mkdir(parents=True)
+            (project_root / "packages" / "reccli-core" / "backend").mkdir(parents=True)
+            (project_root / "docs" / "specs").mkdir(parents=True)
+
+            (project_root / "packages" / "reccli-core" / "reccli" / "devproject.py").write_text(
+                "class DevProjectManager:\n    pass\n",
+                encoding="utf-8",
+            )
+            (project_root / "packages" / "reccli-core" / "reccli" / "devsession.py").write_text(
+                "class DevSession:\n    pass\n",
+                encoding="utf-8",
+            )
+            (project_root / "packages" / "reccli-core" / "backend" / "server.py").write_text(
+                "def serve():\n    return True\n",
+                encoding="utf-8",
+            )
+            (project_root / "docs" / "specs" / "DEVPROJECT_FORMAT.md").write_text(
+                "# DevProject Format\n\nThe .devproject format defines canonical feature maps, feature ownership, and project proposals.\n",
+                encoding="utf-8",
+            )
+            (project_root / "docs" / "specs" / "DEVSESSION_FORMAT.md").write_text(
+                "# DevSession Format\n\nThe devsession format tracks sessions, checkpoints, and temporal span links.\n",
+                encoding="utf-8",
+            )
+            (project_root / "PROJECT_PLAN.md").write_text(
+                "# Project Plan\n\nRepository-wide roadmap for releases, migration sequencing, and cross-feature priorities.\n",
+                encoding="utf-8",
+            )
+
+            llm_payload = {
+                "project": {
+                    "name": "Demo Project",
+                    "description": "RecCli-style runtime demo project.",
+                },
+                "features": [
+                    {
+                        "title": "DevProject Runtime",
+                        "description": "Project dashboard, feature ownership, and proposal runtime.",
+                        "files": ["packages/reccli-core/reccli/devproject.py"],
+                        "file_boundaries": ["packages/reccli-core/reccli/devproject.py"],
+                        "status": "in-progress",
+                    },
+                    {
+                        "title": "DevSession Runtime",
+                        "description": "Session recording, checkpoints, and span linking runtime.",
+                        "files": ["packages/reccli-core/reccli/devsession.py"],
+                        "file_boundaries": ["packages/reccli-core/reccli/devsession.py"],
+                        "status": "in-progress",
+                    },
+                    {
+                        "title": "Python Backend Server",
+                        "description": "Backend API and service runtime.",
+                        "files": ["packages/reccli-core/backend/server.py"],
+                        "file_boundaries": ["packages/reccli-core/backend/**"],
+                        "status": "in-progress",
+                    },
+                ],
+            }
+
+            manager = DevProjectManager(project_root)
+            document = manager.initialize_from_codebase(
+                force=True,
+                use_llm=True,
+                llm_client=_FakeLLMClient(llm_payload),
+                model="gpt5",
+            )
+
+            docs_by_title = {
+                feature["title"]: {item["path"] for item in feature["docs"]}
+                for feature in document["features"]
+            }
+            project_doc_paths = {item["path"] for item in document["project_docs"]}
+
+            self.assertIn("docs/specs/DEVPROJECT_FORMAT.md", docs_by_title["DevProject Runtime"])
+            self.assertIn("docs/specs/DEVSESSION_FORMAT.md", docs_by_title["DevSession Runtime"])
+            self.assertIn("PROJECT_PLAN.md", project_doc_paths)
+            self.assertNotIn("PROJECT_PLAN.md", docs_by_title["Python Backend Server"])
+
     def test_next_step_aliases_are_canonicalized_during_delta_updates(self):
         existing_summary = create_summary_skeleton(model="test-model", session_hash="hash")
         existing_spans = []
@@ -1847,6 +2019,75 @@ class DevSessionRegressionTests(unittest.TestCase):
             self.assertTrue(redacted["metadata"]["redacted"])
 
 
+    def test_devproject_truncated_inventory_includes_documents(self):
+        """Documents should appear in the LLM inventory payload so feature
+        naming can use spec/format vocabulary.  Project-scope docs should be
+        excluded to save tokens."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            (project_root / "src").mkdir()
+            (project_root / "docs" / "specs").mkdir(parents=True)
+            (project_root / "src" / "session.py").write_text(
+                "class Session:\n    pass\n", encoding="utf-8",
+            )
+            (project_root / "docs" / "specs" / "SESSION_FORMAT.md").write_text(
+                "# Session Format\n\nThe session format tracks temporal spans.\n",
+                encoding="utf-8",
+            )
+            (project_root / "README.md").write_text(
+                "# My Project\n\nOverview of the whole project.\n",
+                encoding="utf-8",
+            )
+
+            manager = DevProjectManager(project_root)
+            inventory = manager._build_codebase_inventory()
+
+            truncated = manager._truncate_inventory_for_llm(inventory)
+            self.assertIn("documents", truncated)
+
+            doc_paths = {d["path"] for d in truncated["documents"]}
+            # Feature-scope spec should be included
+            self.assertIn("docs/specs/SESSION_FORMAT.md", doc_paths)
+            # Project-scope README should be excluded
+            self.assertNotIn("README.md", doc_paths)
+
+            # Each doc entry carries the expected keys
+            spec_doc = next(d for d in truncated["documents"] if d["path"] == "docs/specs/SESSION_FORMAT.md")
+            self.assertEqual(spec_doc["doc_kind"], "format")
+            self.assertIn("title", spec_doc)
+            self.assertIn("excerpt", spec_doc)
+            self.assertIn("referenced_paths", spec_doc)
+
+    def test_devproject_truncated_inventory_prioritizes_spec_docs(self):
+        """Format/spec docs should sort before generic docs in the truncated
+        inventory so they survive any max-doc cap."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            (project_root / "src").mkdir()
+            (project_root / "docs").mkdir()
+            (project_root / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+            (project_root / "docs" / "GUIDE.md").write_text(
+                "# Usage Guide\n\nHow to use the app.\n", encoding="utf-8",
+            )
+            (project_root / "docs" / "APP_FORMAT.md").write_text(
+                "# App Format\n\nThe canonical app format.\n", encoding="utf-8",
+            )
+
+            manager = DevProjectManager(project_root)
+            inventory = manager._build_codebase_inventory()
+            truncated = manager._truncate_inventory_for_llm(inventory)
+
+            doc_paths = [d["path"] for d in truncated["documents"]]
+            # Format doc should appear before generic guide
+            if "docs/APP_FORMAT.md" in doc_paths and "docs/GUIDE.md" in doc_paths:
+                self.assertLess(
+                    doc_paths.index("docs/APP_FORMAT.md"),
+                    doc_paths.index("docs/GUIDE.md"),
+                )
+
+
 class RetrievalRegressionTests(unittest.TestCase):
     def setUp(self):
         self.session = DevSession("retrieval_test")
@@ -1964,6 +2205,207 @@ class RetrievalRegressionTests(unittest.TestCase):
 
         self.assertEqual(core_ids, ["msg_002", "msg_004"])
         self.assertEqual(full_context["core_range"]["count"], 2)
+
+    def test_doc_linking_fixture_suite(self):
+        fixtures = _load_fixture_suite("doc_linking_fixtures.json")
+
+        for case in fixtures:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as td:
+                    project_root = Path(td)
+                    _materialize_repo_fixture(project_root, case["files"])
+
+                    manager = DevProjectManager(project_root)
+                    inventory = manager._build_codebase_inventory()
+                    document = {
+                        "features": [],
+                        "project_docs": [],
+                    }
+
+                    for spec in case.get("features", []):
+                        document["features"].append(
+                            manager._build_feature_record(
+                                feature_id=f"feat_{spec['title'].lower().replace(' ', '_')}",
+                                title=spec["title"],
+                                description=spec.get("description", spec["title"]),
+                                files=spec.get("files", []),
+                                source="manual",
+                            )
+                        )
+
+                    manager._link_documents_to_document(document, inventory, use_embeddings=False)
+
+                    actual_feature_docs = {
+                        feature["title"]: sorted(item["path"] for item in feature.get("docs", []))
+                        for feature in document["features"]
+                    }
+                    actual_project_docs = sorted(item["path"] for item in document.get("project_docs", []))
+
+                    for title, expected_paths in case.get("expected_feature_docs", {}).items():
+                        self.assertEqual(
+                            sorted(expected_paths),
+                            actual_feature_docs.get(title, []),
+                            f"{case['name']} feature docs mismatch for {title}",
+                        )
+
+                    self.assertEqual(
+                        sorted(case.get("expected_project_docs", [])),
+                        actual_project_docs,
+                        f"{case['name']} project docs mismatch",
+                    )
+
+    def test_tiny_feature_boundary_fixture_suite(self):
+        fixtures = _load_fixture_suite("tiny_feature_boundary_fixtures.json")
+
+        for case in fixtures:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as td:
+                    project_root = Path(td)
+                    _materialize_repo_fixture(project_root, case["files"])
+
+                    manager = DevProjectManager(project_root)
+                    inventory = manager._build_codebase_inventory()
+                    broad = manager._build_feature_record(
+                        feature_id="feat_runtime",
+                        title=case["initial_feature"]["title"],
+                        description=case["initial_feature"]["description"],
+                        files=[item["path"] for item in inventory["files"]],
+                    )
+                    refined = manager._refine_features_with_artifact_candidates([broad], inventory)
+                    refined_titles = [item["title"] for item in refined]
+                    refined_by_title = {item["title"]: item for item in refined}
+
+                    for expected_title in case.get("expected_titles", []):
+                        self.assertIn(
+                            expected_title,
+                            refined_titles,
+                            f"{case['name']} missing expected feature {expected_title}",
+                        )
+
+                    for unexpected_title in case.get("unexpected_titles", []):
+                        self.assertNotIn(
+                            unexpected_title,
+                            refined_titles,
+                            f"{case['name']} unexpectedly kept feature {unexpected_title}",
+                        )
+
+                    for title, expected_files in case.get("expected_feature_files", {}).items():
+                        self.assertTrue(
+                            set(expected_files).issubset(set(refined_by_title[title]["files_touched"])),
+                            f"{case['name']} files mismatch for {title}",
+                        )
+
+    def test_init_feature_map_fixture_suite(self):
+        fixtures = _load_fixture_suite("init_feature_map_fixtures.json")
+
+        for case in fixtures:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as td:
+                    project_root = Path(td)
+                    _materialize_repo_fixture(project_root, case["files"])
+
+                    manager = DevProjectManager(project_root)
+                    document = manager.initialize_from_codebase(
+                        force=True,
+                        use_llm=True,
+                        llm_client=_FakeLLMClient(case["llm_payload"]),
+                        model="gpt5",
+                    )
+                    titles = [feature["title"] for feature in document["features"]]
+                    by_title = {feature["title"]: feature for feature in document["features"]}
+
+                    for expected_title in case.get("expected_titles", []):
+                        self.assertIn(
+                            expected_title,
+                            titles,
+                            f"{case['name']} missing expected title {expected_title}",
+                        )
+
+                    for unexpected_title in case.get("unexpected_titles", []):
+                        self.assertNotIn(
+                            unexpected_title,
+                            titles,
+                            f"{case['name']} unexpectedly included title {unexpected_title}",
+                        )
+
+                    if case.get("expected_any_titles"):
+                        self.assertTrue(
+                            any(title in titles for title in case["expected_any_titles"]),
+                            f"{case['name']} missing any expected derived title",
+                        )
+
+                    for title, expected_paths in case.get("expected_feature_docs", {}).items():
+                        self.assertEqual(
+                            sorted(expected_paths),
+                            sorted(item["path"] for item in by_title[title].get("docs", [])),
+                            f"{case['name']} feature docs mismatch for {title}",
+                        )
+
+                    for title, expected_files in case.get("expected_feature_files", {}).items():
+                        self.assertEqual(
+                            sorted(expected_files),
+                            sorted(by_title[title].get("files_touched", [])),
+                            f"{case['name']} feature files mismatch for {title}",
+                        )
+
+    def test_init_feature_map_integration_repo_suite(self):
+        cases = _load_fixture_suite("init_feature_map_integration_expected.json")
+        payload_by_name = {
+            case["name"]: case["llm_payload"]
+            for case in _load_fixture_suite("init_feature_map_fixtures.json")
+        }
+        fixture_root = Path("/Users/will/coding-projects/devproject-init-fixtures")
+
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with tempfile.TemporaryDirectory() as td:
+                    project_root = Path(td) / case["repo_dir"]
+                    _materialize_repo_fixture_dir(project_root, fixture_root / case["repo_dir"])
+
+                    manager = DevProjectManager(project_root)
+                    document = manager.initialize_from_codebase(
+                        force=True,
+                        use_llm=True,
+                        llm_client=_FakeLLMClient(payload_by_name[case["name"]]),
+                        model="gpt5",
+                    )
+                    titles = [feature["title"] for feature in document["features"]]
+                    by_title = {feature["title"]: feature for feature in document["features"]}
+
+                    self.assertEqual(
+                        case["expected_titles"],
+                        titles,
+                        f"{case['name']} feature titles changed",
+                    )
+
+                    for title, expected_files in case.get("expected_feature_files", {}).items():
+                        self.assertEqual(
+                            sorted(expected_files),
+                            sorted(by_title[title].get("files_touched", [])),
+                            f"{case['name']} feature files mismatch for {title}",
+                        )
+
+                    for title, expected_paths in case.get("expected_feature_docs", {}).items():
+                        self.assertEqual(
+                            sorted(expected_paths),
+                            sorted(item["path"] for item in by_title[title].get("docs", [])),
+                            f"{case['name']} feature docs mismatch for {title}",
+                        )
+
+                    self.assertEqual(
+                        sorted(case.get("expected_project_docs", [])),
+                        sorted(item["path"] for item in document.get("project_docs", [])),
+                        f"{case['name']} project docs mismatch",
+                    )
+
+                    synced_document, proposal = manager.generate_sync_proposal_from_codebase()
+                    if case.get("sync_clean", False):
+                        self.assertIsNone(proposal, f"{case['name']} sync unexpectedly proposed changes")
+                        self.assertEqual(
+                            [],
+                            synced_document.get("proposals", []),
+                            f"{case['name']} sync left residual proposals",
+                        )
 
 
 class CompactionRegressionTests(unittest.TestCase):

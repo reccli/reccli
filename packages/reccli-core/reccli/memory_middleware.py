@@ -406,9 +406,11 @@ class MemoryMiddleware:
 
     def _load_project_overview(self) -> Optional[Dict]:
         """Load .devproject file if it exists"""
+        from .devproject import resolve_devproject_path
+
         project_root = self.session.metadata.get("project_root") if getattr(self.session, "metadata", None) else None
         if project_root:
-            devproject_path = Path(project_root).expanduser() / '.devproject'
+            devproject_path = resolve_devproject_path(Path(project_root).expanduser())
             if devproject_path.exists():
                 try:
                     import json
@@ -421,7 +423,7 @@ class MemoryMiddleware:
         current = self.sessions_dir.parent
 
         for _ in range(5):  # Search up to 5 levels
-            devproject_path = current / '.devproject'
+            devproject_path = resolve_devproject_path(current)
             if devproject_path.exists():
                 try:
                     import json

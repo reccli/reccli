@@ -856,16 +856,14 @@ Rules:
 
         model_id = self._resolve_model_name_for_client()
         if hasattr(self.llm_client, "messages"):
-            response = self.llm_client.messages.create(
+            # Use streaming for large requests to avoid Anthropic timeout
+            with self.llm_client.messages.stream(
                 model=model_id,
                 max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
-            )
-            text = "".join(
-                block.text for block in getattr(response, "content", [])
-                if hasattr(block, "text")
-            )
+            ) as stream:
+                text = stream.get_final_text()
             return self._extract_json_payload(text)
 
         if hasattr(self.llm_client, "chat"):

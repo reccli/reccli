@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import math
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -54,20 +55,57 @@ GENERIC_CLUSTER_TERMS = {
     "engine", "runtime", "system", "service", "services", "config", "models",
     "model", "middleware", "utils", "shared", "common",
 }
-FEATURE_DOMAIN_SEEDS = [
-    ("marketing_website", "Marketing Website", ["apps/web"], {"website", "web", "landing", "checkout", "license", "licensing", "payment", "payments", "webhook"}),
-    ("terminal_ui_ink", "Terminal UI (Ink)", ["packages/reccli-core/ui/src"], {"ui", "ink", "chat", "input", "message", "component", "components"}),
-    ("python_backend_server", "Python Backend Server", ["packages/reccli-core/backend"], {"backend", "server", "api"}),
-    ("testing_benchmarks", "Testing And Benchmarks", ["packages/reccli-core/tests", "tests"], {"test", "tests", "benchmark", "benchmarks"}),
-    ("export_and_ui_dialogs", "Export And UI Dialogs", ["src/export", "src/ui"], {"export", "exports", "dialog", "dialogs", "gui"}),
-    ("devproject_runtime", "DevProject Runtime", ["packages/reccli-core/reccli"], {"devproject", "project", "feature", "proposal", "dashboard"}),
-    ("retrieval_and_embeddings", "Retrieval And Embeddings", ["packages/reccli-core/reccli"], {"retrieval", "search", "embedding", "embeddings", "vector", "index"}),
-    ("compaction_and_temporal_linking", "Compaction And Temporal Linking", ["packages/reccli-core/reccli"], {"summary", "summarizer", "compaction", "span", "frontier", "verification", "verify", "temporal"}),
-    ("devsession_runtime", "DevSession Runtime", ["packages/reccli-core/reccli"], {"devsession", "session", "recorder", "recording", "checkpoint", "episode", "wal"}),
+# Universal structural patterns detectable across any codebase.
+# Project-specific domains should be discovered by the LLM from
+# tree-sitter symbols, semantic metadata, and project context —
+# not hardcoded here.
+FEATURE_DOMAIN_RULES = [
+    {
+        "tag": "api_routes",
+        "title": "API Routes",
+        "artifact_kinds": {"route", "webhook", "middleware"},
+        "terms": {"route", "routes", "endpoint", "endpoints", "handler", "handlers", "webhook", "webhooks"},
+    },
+    {
+        "tag": "jobs_and_workers",
+        "title": "Jobs And Workers",
+        "artifact_kinds": {"job"},
+        "terms": {"job", "jobs", "queue", "queues", "scheduler", "cron", "worker", "workers", "task", "tasks"},
+    },
+    {
+        "tag": "testing",
+        "title": "Testing",
+        "artifact_kinds": {"test_target"},
+        "terms": {"test", "tests", "testing", "benchmark", "benchmarks", "fixture", "fixtures"},
+    },
 ]
 CODE_NOISE_TERMS = {
     "class", "def", "return", "pass", "true", "false", "null", "none", "const",
     "let", "var", "function", "export", "import", "async", "await", "default",
+}
+TEXT_STOP_TERMS = {
+    "a", "an", "and", "are", "as", "at", "be", "been", "by", "for", "from",
+    "has", "have", "if", "in", "into", "is", "it", "its", "of", "on", "or",
+    "that", "the", "their", "this", "to", "via", "with", "without", "what",
+    "which", "while", "who", "why", "will", "would",
+}
+DOC_NOISE_TERMS = {
+    "doc", "docs", "document", "documents", "documentation",
+    "spec", "specs", "format", "formats", "guide", "guides",
+    "reference", "references", "overview", "design", "architecture",
+    "plan", "plans", "proposal", "proposals", "readme", "project",
+    "repository", "repo", "canonical",
+    "current", "status", "updated", "version", "file", "files",
+    "specification", "implementation", "implemented", "feature", "features",
+}
+PROJECT_SCOPE_DOC_STEMS = {
+    "readme", "contributing", "changelog", "roadmap", "vision",
+    "overview", "architecture", "project_plan", "plan",
+}
+PROJECT_SCOPE_DOC_PHRASES = {
+    "project_plan", "repository_plan", "repo_plan", "development_plan",
+    "implementation_plan", "project_overview", "repository_overview",
+    "architecture_overview", "system_overview",
 }
 ROLE_SCHEMA_TERMS = {
     "schema", "schemas", "model", "models", "type", "types", "typing",
@@ -108,6 +146,49 @@ def _slugify(value: str) -> str:
     return slug.strip("_") or "feature"
 
 
+def canonical_devproject_path(project_root: Path) -> Path:
+    root = Path(project_root).resolve()
+    return root / f"{root.name}.devproject"
+
+
+def resolve_devproject_path(path_or_root: Path) -> Path:
+    path_or_root = Path(path_or_root)
+    if path_or_root.name == ".devproject" or path_or_root.suffix == ".devproject":
+        return path_or_root
+
+    root = path_or_root.resolve()
+    canonical = canonical_devproject_path(root)
+    if canonical.exists():
+        return canonical
+
+    matches = sorted(candidate for candidate in root.glob("*.devproject") if candidate.is_file())
+    if matches:
+        return matches[0]
+
+    legacy = root / ".devproject"
+    if legacy.exists():
+        return legacy
+
+    return canonical
+
+
+def default_devsession_dir(start: Optional[Path] = None) -> Path:
+    base = Path(start or Path.cwd()).resolve()
+    project_root = discover_project_root(base)
+    if project_root is not None:
+        return project_root / "devsession"
+    return Path.home() / "reccli" / "devsession"
+
+
+def default_devsession_path(
+    start: Optional[Path] = None,
+    timestamp: Optional[datetime] = None,
+) -> Path:
+    dt = timestamp or datetime.now()
+    filename = f"{dt.strftime('%Y%m%d%H%M%S')}.devsession"
+    return default_devsession_dir(start) / filename
+
+
 def discover_project_root(start: Optional[Path] = None, max_levels: int = 10) -> Optional[Path]:
     """Search upward for a repository root or existing .devproject."""
     current = (start or Path.cwd()).resolve()
@@ -116,7 +197,7 @@ def discover_project_root(start: Optional[Path] = None, max_levels: int = 10) ->
 
     levels = 0
     while True:
-        if (current / ".devproject").exists() or (current / ".git").exists():
+        if resolve_devproject_path(current).exists() or (current / ".git").exists():
             return current
         parent = current.parent
         if parent == current or levels >= max_levels:
@@ -163,10 +244,7 @@ def resolve_session_project_root(session, fallback: Optional[Path] = None) -> Op
 
 
 def _coerce_project_path(path_or_root: Path) -> Path:
-    path_or_root = Path(path_or_root)
-    if path_or_root.name == ".devproject":
-        return path_or_root
-    return path_or_root / ".devproject"
+    return resolve_devproject_path(path_or_root)
 
 
 def _relative_or_absolute(path: Path, root: Path) -> str:
@@ -192,6 +270,7 @@ def create_devproject(project_root: Path) -> Dict[str, Any]:
         "features": [],
         "hub_files": [],
         "shared_infrastructure": [],
+        "unassigned": [],
         "project_docs": [],
         "session_index": [],
         "proposals": [],
@@ -207,6 +286,7 @@ def load_devproject(path_or_root: Path) -> Dict[str, Any]:
     data.setdefault("features", [])
     data.setdefault("hub_files", [])
     data.setdefault("shared_infrastructure", [])
+    data.setdefault("unassigned", [])
     data.setdefault("project_docs", [])
     data.setdefault("session_index", [])
     data.setdefault("proposals", [])
@@ -258,12 +338,13 @@ class DevProjectManager:
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root).resolve()
-        self.path = self.project_root / ".devproject"
+        self.path = canonical_devproject_path(self.project_root)
         self._tree_sitter_parser_cache: Dict[str, Any] = {}
 
     def load_or_create(self) -> Dict[str, Any]:
-        if self.path.exists():
-            return load_devproject(self.path)
+        existing_path = resolve_devproject_path(self.project_root)
+        if existing_path.exists():
+            return load_devproject(existing_path)
         return create_devproject(self.project_root)
 
     def save(self, document: Dict[str, Any]) -> Path:
@@ -278,9 +359,9 @@ class DevProjectManager:
         project_context: Optional[str] = None,
         missing_feature_hints: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        had_existing_document = self.path.exists()
+        had_existing_document = resolve_devproject_path(self.project_root).exists()
         if had_existing_document and not force:
-            raise ValueError(f".devproject already exists at {self.path}")
+            raise ValueError(f".devproject already exists at {resolve_devproject_path(self.project_root)}")
 
         document = self._build_document_from_codebase(
             use_llm=use_llm,
@@ -301,9 +382,18 @@ class DevProjectManager:
         diff: List[Dict[str, Any]] = []
         features = document.get("features", [])
         inventory = self._build_codebase_inventory()
-        excluded_paths = set(document.get("hub_files", [])) | set(document.get("shared_infrastructure", []))
+        excluded_paths = (
+            set(document.get("hub_files", []))
+            | set(document.get("shared_infrastructure", []))
+            | set(document.get("unassigned", []))
+        )
         additions_by_feature: Dict[str, List[str]] = {}
         uncovered_files: List[Dict[str, Any]] = []
+
+        known_inventory_paths = {item["path"] for item in inventory.get("files", [])}
+
+        # --- Staleness computation ---
+        self._compute_feature_staleness(features, known_inventory_paths, inventory)
 
         for file_info in inventory.get("files", []):
             path = file_info["path"]
@@ -314,7 +404,7 @@ class DevProjectManager:
             owner = self._find_covering_feature(features, path)
             if owner is None:
                 support_owner = self._find_support_feature_match(file_info, features)
-                if support_owner is not None:
+                if support_owner is not None and self._is_support_like_file(file_info):
                     additions_by_feature.setdefault(support_owner["feature_id"], []).append(path)
                     continue
                 if not self._should_backfill_uncategorized(path):
@@ -498,6 +588,15 @@ class DevProjectManager:
         for op in proposal.get("diff", []):
             self._apply_diff_op(document, op)
 
+        # Detect boundary overlaps after applying and attach as warnings
+        overlaps = self.detect_boundary_overlaps(document)
+        if overlaps:
+            proposal.setdefault("warnings", []).append({
+                "kind": "boundary_overlaps",
+                "count": len(overlaps),
+                "details": overlaps[:10],  # Cap detail output
+            })
+
         proposal["status"] = "accepted"
         document["last_updated_session"] = proposal.get("source_session_id")
         self._archive_proposal(document, proposal)
@@ -556,10 +655,12 @@ class DevProjectManager:
             document["features"] = clustered["features"]
             document["hub_files"] = clustered.get("hub_files", [])
             document["shared_infrastructure"] = clustered.get("shared_infrastructure", [])
+            document["unassigned"] = clustered.get("unassigned", [])
         else:
             document["features"] = self._scan_codebase_features(inventory)
             document["hub_files"] = []
             document["shared_infrastructure"] = []
+            document["unassigned"] = []
         if manual_features:
             document["features"] = self._preserve_manual_features(document["features"], manual_features)
         self._link_documents_to_document(
@@ -652,6 +753,26 @@ class DevProjectManager:
     def suggest_init_project_context(self) -> Optional[str]:
         return self._read_project_description()
 
+    def _read_readme_for_clustering(self, max_chars: int = 3000) -> Optional[str]:
+        """Read a larger README excerpt for use as the primary clustering context."""
+        readme_candidates = [
+            self.project_root / "README.md",
+            self.project_root / "README",
+            self.project_root / "readme.md",
+            self.project_root / "README.rst",
+            self.project_root / "README.txt",
+        ]
+        for path in readme_candidates:
+            if not path.exists():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if text.strip():
+                return text[:max_chars].rstrip()
+        return None
+
     def _read_project_description(self) -> Optional[str]:
         readme_candidates = [
             self.project_root / "README.md",
@@ -720,6 +841,7 @@ class DevProjectManager:
             kind = self._classify_inventory_kind(path)
             if kind == "code":
                 structural_symbols = self._extract_structural_symbols(path)
+                semantic_metadata = self._extract_file_semantic_metadata(path)
                 file_info = {
                     "path": rel,
                     "kind": "code",
@@ -730,9 +852,15 @@ class DevProjectManager:
                     "is_entrypoint": self._is_key_file(path),
                     "is_test": self._is_test_file(path),
                     "is_config": self._is_config_file(path),
-                    "snippet": self._read_key_file_snippet(path),
+                    "snippet": semantic_metadata.get("docstring_excerpt") or semantic_metadata.get("comment_excerpt") or self._read_key_file_snippet(path),
                     "top_identifiers": self._extract_top_identifiers(path, structural_symbols=structural_symbols),
                     "structural_symbols": structural_symbols,
+                    "signatures": semantic_metadata.get("signatures", []),
+                    "exported_symbols": semantic_metadata.get("exported_symbols", []),
+                    "decorators": semantic_metadata.get("decorators", []),
+                    "route_metadata": semantic_metadata.get("route_metadata", []),
+                    "docstring_excerpt": semantic_metadata.get("docstring_excerpt", ""),
+                    "comment_excerpt": semantic_metadata.get("comment_excerpt", ""),
                 }
                 files.append(file_info)
                 path_map[rel] = file_info
@@ -1043,9 +1171,15 @@ class DevProjectManager:
             file_info.get("path", ""),
             file_info.get("group_key", ""),
             file_info.get("snippet", ""),
+            file_info.get("docstring_excerpt", ""),
+            file_info.get("comment_excerpt", ""),
             file_info.get("role_hint", ""),
             " ".join(file_info.get("top_identifiers", [])),
             " ".join(file_info.get("structural_symbols", [])),
+            " ".join(file_info.get("signatures", [])),
+            " ".join(file_info.get("exported_symbols", [])),
+            " ".join(file_info.get("decorators", [])),
+            " ".join(file_info.get("route_metadata", [])),
             " ".join(file_info.get("semantic_tags", [])),
         ]
         parts.extend(file_info.get("imports", []))
@@ -1227,6 +1361,271 @@ class DevProjectManager:
         snippet = "\n".join(lines)
         return snippet[:max_chars]
 
+    def _extract_file_semantic_metadata(self, path: Path) -> Dict[str, Any]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return {
+                "signatures": [],
+                "exported_symbols": [],
+                "decorators": [],
+                "route_metadata": [],
+                "docstring_excerpt": "",
+                "comment_excerpt": "",
+            }
+
+        suffix = path.suffix.lower()
+        if suffix in PYTHON_EXTENSIONS:
+            return self._extract_python_semantic_metadata(text)
+        if suffix in JS_LIKE_EXTENSIONS:
+            metadata = self._extract_js_like_semantic_metadata(text)
+            # Augment with tree-sitter decorators if available
+            ts_decorators = self._extract_tree_sitter_decorators(text, self._detect_language(path))
+            if ts_decorators:
+                existing = set(metadata.get("decorators", []))
+                for dec in ts_decorators:
+                    if dec not in existing:
+                        metadata["decorators"].append(dec)
+                        existing.add(dec)
+                metadata["decorators"] = metadata["decorators"][:12]
+            return metadata
+        # For other languages with tree-sitter support, extract what we can
+        language = self._detect_language(path)
+        metadata = {
+            "signatures": [],
+            "exported_symbols": [],
+            "decorators": self._extract_tree_sitter_decorators(text, language),
+            "route_metadata": [],
+            "docstring_excerpt": self._extract_comment_excerpt(text, comment_prefixes=("#", "//")),
+            "comment_excerpt": self._extract_comment_excerpt(text, comment_prefixes=("#", "//")),
+        }
+        return metadata
+
+    def _extract_python_semantic_metadata(self, text: str, max_items: int = 12) -> Dict[str, Any]:
+        metadata = {
+            "signatures": [],
+            "exported_symbols": [],
+            "decorators": [],
+            "route_metadata": [],
+            "docstring_excerpt": "",
+            "comment_excerpt": self._extract_comment_excerpt(text),
+        }
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return metadata
+
+        metadata["docstring_excerpt"] = (ast.get_docstring(tree) or "")[:240]
+        exported: List[str] = []
+        explicit_exports: Optional[List[str]] = None
+
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                bases = [self._ast_node_name(base) for base in node.bases if self._ast_node_name(base)]
+                base_suffix = f"({', '.join(bases)})" if bases else ""
+                metadata["signatures"].append(f"class {node.name}{base_suffix}")
+                if not node.name.startswith("_"):
+                    exported.append(node.name)
+                for decorator in node.decorator_list:
+                    name = self._ast_node_name(decorator)
+                    if name:
+                        metadata["decorators"].append(name)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                args = [arg.arg for arg in node.args.args]
+                if node.args.vararg is not None:
+                    args.append(f"*{node.args.vararg.arg}")
+                if node.args.kwarg is not None:
+                    args.append(f"**{node.args.kwarg.arg}")
+                metadata["signatures"].append(f"{prefix} {node.name}({', '.join(args)})")
+                if not node.name.startswith("_"):
+                    exported.append(node.name)
+                for decorator in node.decorator_list:
+                    decorator_name = self._ast_node_name(decorator)
+                    if decorator_name:
+                        metadata["decorators"].append(decorator_name)
+                    route_meta = self._python_route_metadata_from_decorator(decorator)
+                    if route_meta:
+                        metadata["route_metadata"].append(route_meta)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "__all__":
+                        explicit_exports = self._extract_python_string_list(node.value)
+                    elif isinstance(target, ast.Name) and not target.id.startswith("_"):
+                        exported.append(target.id)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and not node.target.id.startswith("_"):
+                exported.append(node.target.id)
+            if len(metadata["signatures"]) >= max_items:
+                break
+
+        metadata["exported_symbols"] = (explicit_exports or exported)[:max_items]
+        metadata["decorators"] = list(dict.fromkeys(metadata["decorators"]))[:max_items]
+        metadata["route_metadata"] = list(dict.fromkeys(metadata["route_metadata"]))[:max_items]
+        return metadata
+
+    def _extract_js_like_semantic_metadata(self, text: str, max_items: int = 12) -> Dict[str, Any]:
+        metadata = {
+            "signatures": [],
+            "exported_symbols": [],
+            "decorators": [],
+            "route_metadata": [],
+            "docstring_excerpt": self._extract_js_docblock_excerpt(text),
+            "comment_excerpt": self._extract_comment_excerpt(text, comment_prefixes=("//",)),
+        }
+
+        signature_patterns = [
+            r"export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+            r"(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+            r"export\s+class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+extends\s+([A-Za-z_][A-Za-z0-9_]*))?",
+            r"export\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\(([^)]*)\)\s*=>",
+        ]
+        for pattern in signature_patterns:
+            for match in re.findall(pattern, text):
+                if not isinstance(match, tuple):
+                    match = (match,)
+                name = match[0]
+                extra = match[1] if len(match) > 1 else ""
+                if "class" in pattern:
+                    signature = f"class {name}" + (f" extends {extra}" if extra else "")
+                else:
+                    signature = f"function {name}({extra})"
+                if signature not in metadata["signatures"]:
+                    metadata["signatures"].append(signature)
+                if len(metadata["signatures"]) >= max_items:
+                    break
+            if len(metadata["signatures"]) >= max_items:
+                break
+
+        export_patterns = [
+            r"export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"export\s+class\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"export\s+const\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"export\s+\{\s*([^}]+)\s*\}",
+        ]
+        for pattern in export_patterns:
+            for match in re.findall(pattern, text):
+                if "," in match:
+                    for item in match.split(","):
+                        name = item.strip().split(" as ", 1)[0].strip()
+                        if name and name not in metadata["exported_symbols"]:
+                            metadata["exported_symbols"].append(name)
+                elif match and match not in metadata["exported_symbols"]:
+                    metadata["exported_symbols"].append(match)
+                if len(metadata["exported_symbols"]) >= max_items:
+                    break
+            if len(metadata["exported_symbols"]) >= max_items:
+                break
+
+        for match in re.findall(r"@([A-Za-z_][A-Za-z0-9_]*)", text):
+            if match not in metadata["decorators"]:
+                metadata["decorators"].append(match)
+            if len(metadata["decorators"]) >= max_items:
+                break
+
+        route_patterns = [
+            (r"export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\b", "next"),
+            (r"@\w+\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", "decorator"),
+            (r"\w+\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", "router"),
+            (r"fetch\(\s*['\"]([^'\"]+)['\"]", "fetch"),
+        ]
+        for pattern, kind in route_patterns:
+            for match in re.findall(pattern, text, flags=re.IGNORECASE):
+                if kind == "next":
+                    method = match[0] if isinstance(match, tuple) else match
+                    route_meta = f"{str(method).upper()} [next-route]"
+                elif isinstance(match, tuple):
+                    route_meta = f"{match[0].upper()} {match[1]}" if len(match) > 1 else str(match[0])
+                else:
+                    route_meta = f"FETCH {match}" if kind == "fetch" else str(match)
+                if route_meta not in metadata["route_metadata"]:
+                    metadata["route_metadata"].append(route_meta)
+                if len(metadata["route_metadata"]) >= max_items:
+                    break
+            if len(metadata["route_metadata"]) >= max_items:
+                break
+
+        metadata["signatures"] = metadata["signatures"][:max_items]
+        metadata["exported_symbols"] = metadata["exported_symbols"][:max_items]
+        metadata["decorators"] = metadata["decorators"][:max_items]
+        metadata["route_metadata"] = metadata["route_metadata"][:max_items]
+        return metadata
+
+    def _extract_comment_excerpt(
+        self,
+        text: str,
+        max_chars: int = 240,
+        comment_prefixes: Tuple[str, ...] = ("#", "//"),
+    ) -> str:
+        lines: List[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if any(line.startswith(prefix) for prefix in comment_prefixes):
+                for prefix in comment_prefixes:
+                    if line.startswith(prefix):
+                        line = line[len(prefix):].strip()
+                        break
+                if line:
+                    lines.append(line)
+            elif lines:
+                break
+            if len(" ".join(lines)) >= max_chars:
+                break
+        return " ".join(lines)[:max_chars]
+
+    def _extract_js_docblock_excerpt(self, text: str, max_chars: int = 240) -> str:
+        match = re.search(r"/\*\*(.*?)\*/", text, flags=re.DOTALL)
+        if not match:
+            return ""
+        lines = []
+        for raw_line in match.group(1).splitlines():
+            line = raw_line.strip().lstrip("*").strip()
+            if line:
+                lines.append(line)
+            if len(" ".join(lines)) >= max_chars:
+                break
+        return " ".join(lines)[:max_chars]
+
+    def _ast_node_name(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            parent = self._ast_node_name(node.value)
+            return f"{parent}.{node.attr}" if parent else node.attr
+        if isinstance(node, ast.Call):
+            return self._ast_node_name(node.func)
+        return ""
+
+    def _extract_python_string_list(self, node: ast.AST) -> List[str]:
+        if not isinstance(node, (ast.List, ast.Tuple)):
+            return []
+        items: List[str] = []
+        for elt in node.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                items.append(elt.value)
+        return items
+
+    def _python_route_metadata_from_decorator(self, decorator: ast.AST) -> str:
+        if not isinstance(decorator, ast.Call):
+            return ""
+        name = self._ast_node_name(decorator.func).lower()
+        methods = {
+            "get": "GET",
+            "post": "POST",
+            "put": "PUT",
+            "patch": "PATCH",
+            "delete": "DELETE",
+            "route": "ROUTE",
+        }
+        method = next((verb for key, verb in methods.items() if name.endswith(f".{key}") or name == key), "")
+        if not method:
+            return ""
+        if not decorator.args:
+            return method
+        first_arg = decorator.args[0]
+        if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+            return f"{method} {first_arg.value}"
+        return method
+
     def _extract_top_identifiers(
         self,
         path: Path,
@@ -1237,10 +1636,13 @@ class DevProjectManager:
             identifiers: List[str] = []
             for symbol in structural_symbols:
                 name = symbol.split(":", 1)[1] if ":" in symbol else symbol
+                name = re.sub(r"\(.*\)$", "", name).strip()
                 if name and name not in identifiers:
                     identifiers.append(name)
                 if len(identifiers) >= max_items:
                     return identifiers[:max_items]
+            if identifiers:
+                return identifiers[:max_items]
 
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -1330,14 +1732,26 @@ class DevProjectManager:
             "lexical_declaration": "variable",
             "assignment": "variable",
             "assignment_expression": "variable",
+            "enum_declaration": "enum",
+            "struct_definition": "struct",
+            "struct_item": "struct",
+            "impl_item": "impl",
         }
+
+        # Node types that carry decorators/annotations
+        decorator_parent_kinds = {
+            "function_definition", "function_declaration", "method_definition",
+            "class_definition", "class_declaration",
+        }
+
         symbols: List[str] = []
         seen: set[str] = set()
-        stack = [tree.root_node]
+        stack: List[Tuple[Any, Optional[str]]] = [(tree.root_node, None)]
 
         while stack and len(symbols) < max_items:
-            node = stack.pop()
+            node, parent_class = stack.pop()
             kind = symbol_kinds.get(node.type)
+
             if kind:
                 name_node = node.child_by_field_name("name")
                 if name_node is None and kind == "variable":
@@ -1349,20 +1763,137 @@ class DevProjectManager:
                         if child.type == "identifier":
                             name_node = child
                             break
+
                 if name_node is not None:
                     try:
                         name = text[name_node.start_byte:name_node.end_byte].strip()
                     except Exception:
                         name = ""
+
                     if name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-                        symbol = f"{kind}:{name}"
+                        # Build richer symbol with parameters when available
+                        symbol_label = kind
+                        if kind == "method" and parent_class:
+                            symbol_label = f"method"
+                            symbol_prefix = f"{parent_class}."
+                        else:
+                            symbol_prefix = ""
+
+                        # Extract parameters for functions/methods
+                        params_node = node.child_by_field_name("parameters")
+                        param_str = ""
+                        if params_node is not None:
+                            try:
+                                raw_params = text[params_node.start_byte:params_node.end_byte].strip()
+                                # Truncate overly long param lists
+                                if len(raw_params) > 80:
+                                    raw_params = raw_params[:77] + "..."
+                                param_str = raw_params
+                            except Exception:
+                                pass
+
+                        # Extract return type annotation if present
+                        return_type_node = node.child_by_field_name("return_type")
+                        return_str = ""
+                        if return_type_node is not None:
+                            try:
+                                return_str = text[return_type_node.start_byte:return_type_node.end_byte].strip()
+                                if len(return_str) > 40:
+                                    return_str = return_str[:37] + "..."
+                            except Exception:
+                                pass
+
+                        # Build the symbol string
+                        if param_str and kind in ("function", "method"):
+                            symbol = f"{symbol_label}:{symbol_prefix}{name}{param_str}"
+                            if return_str:
+                                symbol += f" -> {return_str}"
+                        elif kind == "class":
+                            # Check for superclass
+                            superclass_node = node.child_by_field_name("superclass") or node.child_by_field_name("superclasses")
+                            if superclass_node is None:
+                                # Try heritage for JS/TS
+                                for child in node.children:
+                                    if child.type in ("class_heritage", "superclass", "argument_list"):
+                                        superclass_node = child
+                                        break
+                            super_str = ""
+                            if superclass_node is not None:
+                                try:
+                                    raw_super = text[superclass_node.start_byte:superclass_node.end_byte].strip()
+                                    if len(raw_super) > 60:
+                                        raw_super = raw_super[:57] + "..."
+                                    super_str = raw_super
+                                except Exception:
+                                    pass
+                            symbol = f"{symbol_label}:{name}"
+                            if super_str:
+                                symbol += f"({super_str})"
+                        else:
+                            symbol = f"{symbol_label}:{symbol_prefix}{name}"
+
                         if symbol not in seen:
                             seen.add(symbol)
                             symbols.append(symbol)
 
-            stack.extend(reversed(list(node.children)))
+                        # Track class name for method hierarchy
+                        if kind == "class":
+                            parent_class = name
+
+            # Descend into children, passing parent class context
+            current_parent = parent_class
+            if node.type in ("class_definition", "class_declaration", "class_body"):
+                # Keep parent_class for children of class nodes
+                name_child = node.child_by_field_name("name")
+                if name_child is not None:
+                    try:
+                        current_parent = text[name_child.start_byte:name_child.end_byte].strip()
+                    except Exception:
+                        pass
+
+            stack.extend((child, current_parent) for child in reversed(list(node.children)))
 
         return symbols
+
+    def _extract_tree_sitter_decorators(self, text: str, language: str, max_items: int = 12) -> List[str]:
+        """Extract decorator/annotation names using tree-sitter for any supported language."""
+        parser = self._get_tree_sitter_parser(language)
+        if parser is None:
+            return []
+
+        try:
+            tree = parser.parse(text.encode("utf-8"))
+        except Exception:
+            return []
+
+        decorator_node_types = {
+            "decorator", "annotation", "attribute",
+            "decorator_expression", "attribute_item",
+        }
+        decorators: List[str] = []
+        seen: set[str] = set()
+        stack = [tree.root_node]
+
+        while stack and len(decorators) < max_items:
+            node = stack.pop()
+            if node.type in decorator_node_types:
+                try:
+                    raw = text[node.start_byte:node.end_byte].strip()
+                    # Clean up: remove leading @ or #[ or similar
+                    name = raw.lstrip("@#[").rstrip("]")
+                    # Extract just the name part before any arguments
+                    paren_idx = name.find("(")
+                    if paren_idx > 0:
+                        name = name[:paren_idx]
+                    name = name.strip()
+                    if name and len(name) < 80 and name not in seen:
+                        seen.add(name)
+                        decorators.append(name)
+                except Exception:
+                    pass
+            stack.extend(reversed(list(node.children)))
+
+        return decorators
 
     def _extract_python_structural_symbols(self, text: str, max_items: int = 16) -> List[str]:
         symbols: List[str] = []
@@ -1447,8 +1978,14 @@ class DevProjectManager:
         raw_terms = self._semantic_terms("\n".join([
             file_info.get("path", ""),
             file_info.get("snippet", ""),
+            file_info.get("docstring_excerpt", ""),
+            file_info.get("comment_excerpt", ""),
             " ".join(file_info.get("top_identifiers", [])),
             " ".join(file_info.get("structural_symbols", [])),
+            " ".join(file_info.get("signatures", [])),
+            " ".join(file_info.get("exported_symbols", [])),
+            " ".join(file_info.get("decorators", [])),
+            " ".join(file_info.get("route_metadata", [])),
         ]))
         tags: List[str] = []
         seen: set[str] = set()
@@ -1681,34 +2218,38 @@ class DevProjectManager:
 
     def _file_domain_seed(self, file_info: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         path = file_info.get("path", "")
+        artifact_kinds = {
+            artifact.get("kind", "")
+            for artifact in file_info.get("artifacts", [])
+            if isinstance(artifact, dict) and artifact.get("kind")
+        }
         terms = set(self._semantic_terms("\n".join([
             path,
             " ".join(file_info.get("top_identifiers", [])),
             " ".join(file_info.get("semantic_tags", [])),
+            " ".join(file_info.get("signatures", [])),
+            " ".join(file_info.get("exported_symbols", [])),
+            " ".join(file_info.get("route_metadata", [])),
             " ".join(
                 f"{artifact.get('kind', '')} {artifact.get('label', '')}"
                 for artifact in file_info.get("artifacts", [])
                 if isinstance(artifact, dict)
             ),
         ])))
+        if file_info.get("is_test"):
+            return "testing", "Testing"
 
-        for tag, title, prefixes, seed_terms in FEATURE_DOMAIN_SEEDS:
-            if any(path.startswith(prefix) for prefix in prefixes):
-                if tag in {"devproject_runtime", "retrieval_and_embeddings", "compaction_and_temporal_linking", "devsession_runtime"}:
-                    score = len(terms & seed_terms)
-                    if score >= 1:
-                        return tag, title
-                    continue
-                return tag, title
+        scored: List[Tuple[float, str, str]] = []
+        for rule in FEATURE_DOMAIN_RULES:
+            artifact_hits = len(artifact_kinds & rule["artifact_kinds"])
+            term_hits = len(terms & rule["terms"])
+            score = (artifact_hits * 2.5) + term_hits
+            if score >= 2.0:
+                scored.append((score, rule["tag"], rule["title"]))
 
-        scored: List[Tuple[int, str, str]] = []
-        for tag, title, _, seed_terms in FEATURE_DOMAIN_SEEDS:
-            score = len(terms & seed_terms)
-            if score > 0:
-                scored.append((score, tag, title))
         if not scored:
             return None
-        scored.sort(reverse=True)
+        scored.sort(key=lambda item: (-item[0], item[1]))
         _, tag, title = scored[0]
         return tag, title
 
@@ -1741,7 +2282,7 @@ class DevProjectManager:
             files_sorted = sorted(set(group["files"]))
             if (
                 len(files_sorted) < 2
-                and group["domain_tag"] == "testing_benchmarks"
+                and group["domain_tag"] == "testing"
                 and not any(kind in {"test_target", "route", "page", "cli_command"} for kind in group["artifact_kinds"])
             ):
                 continue
@@ -1760,16 +2301,30 @@ class DevProjectManager:
     def _build_document_item(self, path: Path, rel: str) -> Dict[str, Any]:
         content = self._read_document_excerpt(path)
         title = self._extract_document_title(content, Path(rel).stem.replace("_", " ").replace("-", " ").title())
+        doc_kind = self._classify_document_kind(rel, title)
+        title_terms = self._filtered_semantic_terms(
+            "\n".join([rel, title]),
+            extra_noise=DOC_NOISE_TERMS,
+        )
+        semantic_terms = self._filtered_semantic_terms(
+            "\n".join([title, content[:2000]]),
+            extra_noise=DOC_NOISE_TERMS,
+            drop_generic_cluster_terms=True,
+        )
         return {
             "path": rel,
             "kind": "doc",
             "language": path.suffix.lower().lstrip(".") or "text",
             "group_key": self._feature_group_key(Path(rel)),
             "title": title,
+            "doc_kind": doc_kind,
             "content": content,
             "snippet": content[:800],
             "token_count": len(content.split()),
             "referenced_paths": [],
+            "title_terms": title_terms,
+            "semantic_terms": semantic_terms,
+            "project_scope_signals": self._project_scope_doc_signals(rel, title),
         }
 
     def _read_document_excerpt(self, path: Path, max_chars: int = 3000) -> str:
@@ -1798,6 +2353,39 @@ class DevProjectManager:
                 references.append(candidate)
         return references
 
+    def _classify_document_kind(self, rel_path: str, title: str) -> str:
+        slug = _slugify(f"{rel_path} {title}")
+        if "format" in slug:
+            return "format"
+        if "spec" in slug or "contract" in slug:
+            return "spec"
+        if "roadmap" in slug or "plan" in slug or "milestone" in slug:
+            return "plan"
+        if "vision" in slug:
+            return "vision"
+        if "readme" in slug:
+            return "readme"
+        if "guide" in slug or "how_to" in slug:
+            return "guide"
+        if "architecture" in slug or "design" in slug:
+            return "architecture"
+        return "doc"
+
+    def _project_scope_doc_signals(self, rel_path: str, title: str) -> List[str]:
+        path = Path(rel_path)
+        stem_slug = _slugify(path.stem)
+        title_slug = _slugify(title)
+        signals: List[str] = []
+        is_root_doc = len(path.parts) <= 2
+
+        if is_root_doc and (stem_slug in PROJECT_SCOPE_DOC_STEMS or title_slug in PROJECT_SCOPE_DOC_STEMS):
+            signals.append("project_scope_doc_name")
+        if any(phrase in stem_slug or phrase in title_slug for phrase in PROJECT_SCOPE_DOC_PHRASES):
+            signals.append("project_scope_doc_phrase")
+        if is_root_doc and stem_slug in {"architecture", "overview"}:
+            signals.append("project_scope_root_overview")
+        return signals
+
     def _python_module_aliases(self, rel_path: str) -> List[str]:
         path = Path(rel_path)
         if path.suffix.lower() != ".py":
@@ -1810,9 +2398,6 @@ class DevProjectManager:
         for idx, part in enumerate(stem_parts):
             if part in {"src", "packages", "apps", "backend"} and idx + 1 < len(stem_parts):
                 aliases.add(".".join(stem_parts[idx + 1:]))
-        if "reccli" in stem_parts:
-            reccli_idx = stem_parts.index("reccli")
-            aliases.add(".".join(stem_parts[reccli_idx:]))
         return [alias for alias in aliases if alias]
 
     def _extract_local_imports(
@@ -1939,6 +2524,8 @@ class DevProjectManager:
         client = llm_client or create_llm_client_for_model(resolved_model)
         summarizer = SessionSummarizer(llm_client=client, model=resolved_model)
 
+        readme_content = self._read_readme_for_clustering()
+
         system_prompt = """You are initializing a `.devproject` file for an existing repository.
 
 Identify the repository's canonical project features for `.devproject` initialization.
@@ -1951,10 +2538,17 @@ Optimize for:
 - clean file ownership boundaries
 - preserving real internal project domains when they exist
 
-Use the provided project context as the primary semantic guide.
-If the project context names distinct domains, features, or subsystems, map files to those areas when the inventory supports it.
+## Domain discovery priority
 
-Use the scanned inventory, including paths, imports, entrypoints, top identifiers, structural symbols, semantic tags, role hints, hub scores, legacy/support signals, import clusters/subclusters, and artifact_candidates.
+1. **README content is the primary domain guide.** If a `readme_content` field is provided, read it carefully. The README describes what the project does and often names its main subsystems, capabilities, or architectural layers. Use those as your preferred feature candidates and map codebase files to them when the inventory supports it.
+
+2. **Tree-sitter evidence discovers domains the README does not mention.** The scanned inventory includes structural symbols, signatures, exported symbols, decorators, route metadata, semantic tags, role hints, and import relationships. Use these to identify additional features that the README omits — such as legacy code, testing infrastructure, UI surfaces, export utilities, or internal tooling.
+
+3. **If no README is provided or it is too thin to identify domains,** fall back entirely to the codebase inventory and tree-sitter evidence for domain discovery.
+
+The balance is: README sets the domain vocabulary, tree-sitter evidence does the file assignment and fills gaps.
+
+Use the scanned inventory, including paths, imports, entrypoints, top identifiers, structural symbols, signatures, exported symbols, decorators, route metadata, short docstrings/comments, semantic tags, role hints, hub scores, legacy/support signals, import clusters/subclusters, artifact_candidates, and documents (with titles, excerpts, classification, and referenced code paths).
 
 Treat artifact_candidates as strong seed groups. Prefer refining, merging, or lightly splitting them over inventing unrelated top-level features from scratch.
 
@@ -1966,6 +2560,7 @@ Rules:
 - Treat files marked as legacy or support/secondary surfaces as weaker feature candidates unless the inventory clearly shows they are recurring standalone work areas.
 - Prefer features whose files can be summarized by compact boundaries such as directories, globs, or small exact-file sets.
 - Avoid generic catch-all titles such as Core, Runtime, Engine, Backend, System, Misc, Utilities, Source, or Helpers unless the inventory truly supports no cleaner split.
+- When repository documents such as format specifications, design docs, or architecture guides describe a subsystem, prefer that document's vocabulary and naming when titling the feature whose files it references.
 
 Anti-collapse rules:
 - Do not merge a large runtime/core/backend area into one feature when the inventory shows multiple distinct internal domains.
@@ -2004,14 +2599,22 @@ Return valid JSON only:
 """
 
         llm_input = {
+            "readme_content": readme_content or "",
             "project_context": project_context or inventory.get("project_description") or "",
             "missing_feature_hints": [hint for hint in (missing_feature_hints or []) if isinstance(hint, str) and hint.strip()],
-            "inventory": inventory,
+            "inventory": self._truncate_inventory_for_llm(inventory),
         }
+        serialized = json.dumps(llm_input, indent=2, ensure_ascii=False)
+
+        # If still too large, reduce further with compact formatting
+        if len(serialized) > 180_000:
+            llm_input["inventory"] = self._truncate_inventory_for_llm(inventory, aggressive=True)
+            serialized = json.dumps(llm_input, ensure_ascii=False)
+
         response = summarizer._call_json_llm(
             system_prompt,
-            json.dumps(llm_input, indent=2, ensure_ascii=False),
-            max_tokens=6000,
+            serialized,
+            max_tokens=self._max_output_tokens_for_model(resolved_model),
         )
         normalized = self._normalize_llm_cluster_output(response, inventory)
         normalized["features"] = self._refine_features_with_artifact_candidates(
@@ -2072,6 +2675,206 @@ Return valid JSON only:
         if role_hint == "test" or file_info.get("support_score", 0.0) >= 0.75:
             return "support"
         return "feature"
+
+    def _truncate_inventory_for_llm(
+        self,
+        inventory: Dict[str, Any],
+        aggressive: bool = False,
+        max_files: int = 400,
+    ) -> Dict[str, Any]:
+        """Produce a lighter inventory for LLM consumption.
+
+        Prioritizes entrypoints, high hub-score files, and files with rich
+        semantic signals.  Drops low-signal fields when *aggressive* is set.
+        """
+        files = list(inventory.get("files", []))
+
+        # Score each file by information value to the LLM
+        def file_priority(f: Dict[str, Any]) -> float:
+            score = 0.0
+            if f.get("is_entrypoint"):
+                score += 5.0
+            score += f.get("hub_score", 0.0) * 3.0
+            score += len(f.get("structural_symbols", [])) * 0.3
+            score += len(f.get("route_metadata", [])) * 0.5
+            score += len(f.get("artifacts", [])) * 0.4
+            if f.get("snippet"):
+                score += 0.5
+            if f.get("role_hint") == "domain_logic":
+                score += 0.3
+            if f.get("is_test"):
+                score -= 0.5
+            if f.get("legacy_score", 0.0) >= 0.5:
+                score -= 0.5
+            return score
+
+        if len(files) > max_files:
+            files.sort(key=file_priority, reverse=True)
+            files = files[:max_files]
+
+        # Strip heavy fields to reduce token count
+        truncated_files = []
+        for item in files:
+            entry: Dict[str, Any] = {
+                "path": item["path"],
+                "language": item.get("language"),
+                "group_key": item.get("group_key"),
+                "is_entrypoint": item.get("is_entrypoint", False),
+                "is_test": item.get("is_test", False),
+                "role_hint": item.get("role_hint"),
+                "hub_score": item.get("hub_score", 0.0),
+                "semantic_tags": item.get("semantic_tags", [])[:6],
+                "top_identifiers": item.get("top_identifiers", [])[:8],
+                "structural_symbols": item.get("structural_symbols", [])[:10],
+                "imports": item.get("imports", []),
+                "imported_by": item.get("imported_by", []),
+            }
+            if not aggressive:
+                entry["signatures"] = item.get("signatures", [])[:8]
+                entry["exported_symbols"] = item.get("exported_symbols", [])[:8]
+                entry["decorators"] = item.get("decorators", [])[:6]
+                entry["route_metadata"] = item.get("route_metadata", [])[:6]
+                entry["snippet"] = (item.get("snippet") or "")[:400]
+                entry["docstring_excerpt"] = (item.get("docstring_excerpt") or "")[:160]
+                entry["artifacts"] = item.get("artifacts", [])[:6]
+                entry["support_score"] = item.get("support_score", 0.0)
+                entry["legacy_score"] = item.get("legacy_score", 0.0)
+            truncated_files.append(entry)
+
+        # Truncate cluster data too
+        clusters = inventory.get("import_clusters", [])
+        truncated_clusters = []
+        for cluster in clusters:
+            c: Dict[str, Any] = {
+                "cluster_id": cluster.get("cluster_id"),
+                "size": cluster.get("size"),
+                "files": cluster.get("files", []),
+                "group_keys": cluster.get("group_keys", []),
+                "entrypoints": cluster.get("entrypoints", []),
+                "granularity_hint": cluster.get("granularity_hint"),
+                "cluster_terms": cluster.get("cluster_terms", [])[:8],
+            }
+            if not aggressive:
+                c["subclusters"] = [
+                    {
+                        "subcluster_id": sc.get("subcluster_id"),
+                        "size": sc.get("size"),
+                        "files": sc.get("files", []),
+                        "group_keys": sc.get("group_keys", []),
+                        "granularity_hint": sc.get("granularity_hint"),
+                        "cluster_terms": sc.get("cluster_terms", [])[:6],
+                    }
+                    for sc in cluster.get("subclusters", [])
+                ]
+            truncated_clusters.append(c)
+
+        # Include feature-scope documents so the LLM can use spec/format
+        # vocabulary when naming features.
+        doc_kind_priority = {"format": 0, "spec": 0, "architecture": 1}
+        sorted_docs = sorted(
+            inventory.get("documents", []),
+            key=lambda d: (doc_kind_priority.get(d.get("doc_kind", "doc"), 2), d.get("path", "")),
+        )
+        excerpt_limit = 200 if aggressive else 400
+        max_docs = 20 if aggressive else 40
+        truncated_docs: List[Dict[str, Any]] = []
+        for doc in sorted_docs:
+            if doc.get("project_scope_signals"):
+                continue
+            content = (doc.get("content", "") or "").strip()
+            if not content:
+                continue
+            truncated_docs.append({
+                "path": doc["path"],
+                "title": doc.get("title", ""),
+                "doc_kind": doc.get("doc_kind", "doc"),
+                "excerpt": content[:excerpt_limit],
+                "referenced_paths": doc.get("referenced_paths", [])[:10],
+            })
+            if len(truncated_docs) >= max_docs:
+                break
+
+        return {
+            "project_root": inventory.get("project_root"),
+            "project_name": inventory.get("project_name"),
+            "project_description": inventory.get("project_description"),
+            "files": sorted(truncated_files, key=lambda f: f["path"]),
+            "documents": truncated_docs,
+            "import_clusters": truncated_clusters,
+            "artifact_candidates": inventory.get("artifact_candidates", []),
+            "total_files_in_repo": len(inventory.get("files", [])),
+            "files_truncated": len(files) < len(inventory.get("files", [])),
+        }
+
+    @staticmethod
+    def _max_output_tokens_for_model(model: str) -> int:
+        """Return the max output token limit for a given model.
+
+        Defaults conservatively when the model is unrecognized so the API
+        itself becomes the ceiling rather than a hardcoded guess.
+        """
+        model_lower = model.lower() if model else ""
+
+        # --- Anthropic models ---
+        if "opus" in model_lower:
+            # Opus 4.6: 128k output, Opus 4.5 and earlier: 32k
+            if any(tag in model_lower for tag in ("4.6", "4-6")):
+                return 128000
+            return 32000
+        if "sonnet" in model_lower:
+            # Sonnet 4.6 / 4.5 / 4: 64k output
+            if any(tag in model_lower for tag in ("4.6", "4-6", "4.5", "4-5")):
+                return 64000
+            # Sonnet 4 base (e.g. claude-sonnet-4-20250514)
+            if "sonnet-4" in model_lower:
+                return 64000
+            # Sonnet 3.7: 16k output
+            if any(tag in model_lower for tag in ("3.7", "3-7")):
+                return 16000
+            # Fallback for future Sonnet versions
+            return 64000
+        if "haiku" in model_lower:
+            # Haiku 4.5: 8k
+            return 8192
+
+        # --- OpenAI models ---
+        # GPT-5.x family (5, 5.2, 5.3, 5.4, mini, nano, pro): 128k output
+        if "gpt-5" in model_lower:
+            return 128000
+        # GPT-4.1: 32k output
+        if "gpt-4.1" in model_lower or "gpt-4-1" in model_lower:
+            return 32768
+        # GPT-4o: 16k output
+        if "gpt-4o" in model_lower:
+            return 16384
+        # GPT-4 / GPT-4 Turbo: 4k output
+        if "gpt-4" in model_lower:
+            return 4096
+        # o-series reasoning models (o1, o3, o4): 100k output
+        if model_lower.startswith("o1") or model_lower.startswith("o3") or model_lower.startswith("o4"):
+            return 100000
+
+        # --- Moonshot / Kimi models ---
+        # Kimi K2 / K2.5: 128k context, practical output cap ~16k
+        if "kimi" in model_lower or "moonshot" in model_lower:
+            return 16000
+
+        # --- DeepSeek models ---
+        if "deepseek" in model_lower:
+            return 16000
+
+        # --- Google Gemini models ---
+        if "gemini" in model_lower:
+            # Gemini 3.x (3.1 Pro, 3.0 Pro, Flash-Lite): 65k output
+            if "3" in model_lower:
+                return 65536
+            # Gemini 2.5 Pro/Flash: 65k output
+            if "2.5" in model_lower or "2-5" in model_lower:
+                return 65536
+            return 8192
+
+        # Unknown model — set high and let the API enforce its own limit
+        return 32000
 
     def _default_domain_tag_for_file(self, file_info: Dict[str, Any], bucket: str) -> str:
         path = file_info.get("path", "")
@@ -2225,7 +3028,11 @@ Return valid JSON only:
             path for path in ((default_shared_infrastructure or []) + (payload.get("shared_infrastructure", []) or []))
             if isinstance(path, str) and path in known_files
         })
-        non_feature_files = set(hub_files) | set(shared_infrastructure)
+        unassigned = sorted({
+            path for path in (payload.get("unassigned", []) or [])
+            if isinstance(path, str) and path in known_files
+        })
+        non_feature_files = set(hub_files) | set(shared_infrastructure) | set(unassigned)
 
         raw_features = payload.get("features", [])
 
@@ -2251,6 +3058,16 @@ Return valid JSON only:
             suggested_boundaries = raw_feature.get("suggested_file_boundaries", [])
             if not suggested_boundaries:
                 suggested_boundaries = raw_feature.get("file_boundaries", [])
+            if suggested_boundaries:
+                boundary_feature = {"file_boundaries": suggested_boundaries}
+                boundary_matched = [
+                    path for path in files
+                    if self._path_matches_feature_boundaries(path, boundary_feature)
+                ]
+                if boundary_matched:
+                    files = boundary_matched
+                    if not files:
+                        continue
 
             features.append(self._build_feature_record(
                 feature_id=feature_id,
@@ -2283,6 +3100,7 @@ Return valid JSON only:
             "features": self._deduplicate_features(features),
             "hub_files": hub_files,
             "shared_infrastructure": shared_infrastructure,
+            "unassigned": unassigned,
         }
 
     def _refine_features_with_artifact_candidates(
@@ -2316,9 +3134,9 @@ Return valid JSON only:
                     overlapping.append((domain_tag, candidate, overlap))
 
             should_split = (
-                len(overlapping) >= 2
-                and len(feature_files) >= 8
-                and (title_terms & generic_titles or len(feature_files) >= 12)
+                len(overlapping) >= 1
+                and len(feature_files) >= 4
+                and (title_terms & generic_titles or len(feature_files) >= 8)
             )
             if not should_split:
                 refined.append(feature)
@@ -2380,6 +3198,17 @@ Return valid JSON only:
             unresolved_docs.append(doc)
 
         if unresolved_docs:
+            ownership_links, project_scope_docs, still_unresolved = self._ownership_link_documents(
+                unresolved_docs,
+                document.get("features", []),
+                inventory,
+            )
+            for feature_id, doc_link in ownership_links:
+                feature_map[feature_id]["docs"].append(doc_link)
+            project_docs.extend(project_scope_docs)
+            unresolved_docs = still_unresolved
+
+        if unresolved_docs:
             bm25_links, still_unresolved = self._bm25_link_documents(unresolved_docs, feature_profiles)
             for feature_id, doc_link in bm25_links:
                 feature_map[feature_id]["docs"].append(doc_link)
@@ -2419,6 +3248,199 @@ Return valid JSON only:
             })
         return profiles
 
+    def _build_feature_doc_profiles(
+        self,
+        features: List[Dict[str, Any]],
+        inventory: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        file_lookup = {item["path"]: item for item in inventory.get("files", [])}
+        profiles: List[Dict[str, Any]] = []
+
+        for feature in features:
+            title_terms = set(self._filtered_semantic_terms(
+                feature.get("title", ""),
+                extra_noise=DOC_NOISE_TERMS,
+            ))
+            alias_terms = set(title_terms)
+            semantic_terms = set(title_terms)
+            semantic_terms.update(self._filtered_semantic_terms(
+                feature.get("description", ""),
+                extra_noise=DOC_NOISE_TERMS,
+                drop_generic_cluster_terms=True,
+            ))
+
+            alias_terms.update(self._filtered_semantic_terms(
+                " ".join(feature.get("file_boundaries", [])),
+                extra_noise=DOC_NOISE_TERMS,
+                drop_generic_cluster_terms=True,
+            ))
+
+            for path in feature.get("files_touched", []):
+                alias_terms.update(self._filtered_semantic_terms(
+                    path,
+                    extra_noise=DOC_NOISE_TERMS,
+                    drop_generic_cluster_terms=True,
+                ))
+                file_info = file_lookup.get(path)
+                if not file_info:
+                    continue
+                alias_terms.update(self._filtered_semantic_terms(
+                    " ".join(file_info.get("top_identifiers", []) + file_info.get("exported_symbols", []) + file_info.get("semantic_tags", [])),
+                    extra_noise=DOC_NOISE_TERMS,
+                    drop_generic_cluster_terms=True,
+                ))
+                semantic_terms.update(self._filtered_semantic_terms(
+                    "\n".join([
+                        file_info.get("path", ""),
+                        file_info.get("snippet", ""),
+                        " ".join(file_info.get("top_identifiers", [])),
+                        " ".join(file_info.get("structural_symbols", [])),
+                        " ".join(file_info.get("signatures", [])),
+                        " ".join(file_info.get("exported_symbols", [])),
+                        " ".join(file_info.get("route_metadata", [])),
+                        " ".join(file_info.get("semantic_tags", [])),
+                    ]),
+                    extra_noise=DOC_NOISE_TERMS,
+                    drop_generic_cluster_terms=True,
+                ))
+
+            profiles.append({
+                "feature_id": feature["feature_id"],
+                "title_terms": title_terms,
+                "alias_terms": alias_terms,
+                "semantic_terms": semantic_terms,
+                "files": set(feature.get("files_touched", [])),
+            })
+
+        return profiles
+
+    def _ownership_link_documents(
+        self,
+        documents: List[Dict[str, Any]],
+        features: List[Dict[str, Any]],
+        inventory: Dict[str, Any],
+    ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        profiles = self._build_feature_doc_profiles(features, inventory)
+        profile_map = {profile["feature_id"]: profile for profile in profiles}
+        term_df: Dict[str, int] = {}
+        for profile in profiles:
+            for term in profile.get("title_terms", set()) | profile.get("alias_terms", set()) | profile.get("semantic_terms", set()):
+                term_df[term] = term_df.get(term, 0) + 1
+        links: List[Tuple[str, Dict[str, Any]]] = []
+        project_docs: List[Dict[str, Any]] = []
+        unresolved: List[Dict[str, Any]] = []
+
+        for doc in documents:
+            project_scope_signals = doc.get("project_scope_signals", [])
+            doc_kind = doc.get("doc_kind", "doc")
+            strong_project_scope = (
+                doc_kind in {"plan", "vision", "architecture"}
+                and any(
+                    signal in project_scope_signals
+                    for signal in {"project_scope_doc_name", "project_scope_doc_phrase", "project_scope_root_overview"}
+                )
+            )
+
+            if strong_project_scope:
+                project_docs.append({
+                    "path": doc["path"],
+                    "title": doc.get("title", ""),
+                    "scope": "project",
+                    "signals": ["project_scope_doc"] + project_scope_signals,
+                })
+                continue
+
+            scored: List[Tuple[float, str, List[str]]] = []
+            for feature in features:
+                profile = profile_map.get(feature["feature_id"])
+                if not profile:
+                    continue
+                score, signals = self._doc_feature_ownership_score(doc, profile, term_df)
+                if score > 0:
+                    scored.append((score, feature["feature_id"], signals))
+
+            scored.sort(key=lambda item: item[0], reverse=True)
+            best_score = scored[0][0] if scored else 0.0
+            second_score = scored[1][0] if len(scored) > 1 else 0.0
+
+            if scored and best_score >= 2.2 and (best_score - second_score) >= 0.35:
+                feature_id = scored[0][1]
+                relevance = "primary" if best_score >= 3.2 or doc_kind in {"format", "spec"} else "reference"
+                links.append((feature_id, {
+                    "path": doc["path"],
+                    "title": doc.get("title", ""),
+                    "relevance": relevance,
+                    "score": round(best_score, 4),
+                    "signals": scored[0][2],
+                }))
+                continue
+
+            if doc.get("project_scope_signals") and best_score < 2.8:
+                project_docs.append({
+                    "path": doc["path"],
+                    "title": doc.get("title", ""),
+                    "scope": "project",
+                    "signals": ["project_scope_doc"] + doc.get("project_scope_signals", []),
+                })
+                continue
+
+            unresolved.append(doc)
+
+        return links, project_docs, unresolved
+
+    def _doc_feature_ownership_score(
+        self,
+        doc: Dict[str, Any],
+        feature_profile: Dict[str, Any],
+        term_df: Dict[str, int],
+    ) -> Tuple[float, List[str]]:
+        score = 0.0
+        signals: List[str] = []
+
+        title_terms = set(doc.get("title_terms", []))
+        semantic_terms = set(doc.get("semantic_terms", []))
+        path_terms = set(self._filtered_semantic_terms(
+            doc.get("path", ""),
+            extra_noise=DOC_NOISE_TERMS,
+            drop_generic_cluster_terms=True,
+        ))
+        feature_title_terms = feature_profile.get("title_terms", set())
+        feature_alias_terms = feature_profile.get("alias_terms", set())
+        feature_semantic_terms = feature_profile.get("semantic_terms", set())
+
+        title_overlap = title_terms & feature_title_terms
+        if title_overlap:
+            title_weight = sum(1.0 / max(1, term_df.get(term, 1)) for term in title_overlap)
+            score += 1.8 + min(1.8, 1.4 * title_weight)
+            signals.append("doc_title_matches_feature_terms")
+
+        alias_overlap = (title_terms | path_terms) & feature_alias_terms
+        alias_overlap -= title_overlap
+        if alias_overlap:
+            alias_weight = sum(1.0 / max(1, term_df.get(term, 1)) for term in alias_overlap)
+            score += 0.8 + min(1.6, 1.2 * alias_weight)
+            signals.append("doc_name_matches_feature_alias")
+
+        semantic_overlap = semantic_terms & feature_semantic_terms
+        semantic_overlap -= title_overlap
+        semantic_overlap -= alias_overlap
+        if semantic_overlap:
+            semantic_weight = sum(1.0 / max(1, term_df.get(term, 2)) for term in semantic_overlap)
+            score += min(1.8, 0.6 * semantic_weight)
+            signals.append("doc_semantic_matches_feature")
+
+        referenced_paths = set(doc.get("referenced_paths", []))
+        if referenced_paths & feature_profile.get("files", set()):
+            score += 0.8
+            signals.append("doc_references_feature_files")
+
+        doc_kind = doc.get("doc_kind", "doc")
+        if doc_kind in {"format", "spec", "architecture"} and (title_overlap or alias_overlap):
+            score += 0.6
+            signals.append("typed_doc_feature_owner")
+
+        return score, signals
+
     def _deterministic_doc_feature_links(
         self,
         doc: Dict[str, Any],
@@ -2429,6 +3451,7 @@ Return valid JSON only:
         doc_title_slug = _slugify(doc.get("title", ""))
         doc_text = doc.get("content", "")
         referenced_paths = set(doc.get("referenced_paths", []))
+        is_project_scope_doc = bool(doc.get("project_scope_signals"))
 
         for feature in features:
             signals: List[str] = []
@@ -2447,6 +3470,15 @@ Return valid JSON only:
             if feature_slug and feature_slug in _slugify(doc_text[:600]):
                 signals.append("doc_text_matches_feature")
                 score += 0.5
+            if (
+                is_project_scope_doc
+                and file_hits
+                and not any(
+                    signal in signals
+                    for signal in {"doc_in_boundary", "doc_name_matches_feature", "doc_text_matches_feature"}
+                )
+            ):
+                continue
             if score >= 1.0:
                 relevance = "primary" if score >= 1.5 else "reference"
                 results.append((feature["feature_id"], relevance, score, signals))
@@ -2561,12 +3593,44 @@ Return valid JSON only:
 
     def _semantic_terms(self, text: str) -> List[str]:
         terms: List[str] = []
-        for token in self._tokenize_text(text):
-            terms.append(token)
-            for part in re.split(r"[._/\-]+", token):
-                if len(part) > 2:
-                    terms.append(part)
+        for raw_token in re.findall(r"[A-Za-z0-9_./-]+", text or ""):
+            token = _normalize_text(raw_token)
+            if len(token) > 2:
+                terms.append(token)
+            split_parts = re.split(r"[._/\-]+", raw_token)
+            for part in split_parts:
+                lowered_part = _normalize_text(part)
+                if len(lowered_part) > 2:
+                    terms.append(lowered_part)
+                camel_parts = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+", part)
+                for camel_part in camel_parts:
+                    lowered_camel = _normalize_text(camel_part)
+                    if len(lowered_camel) > 2:
+                        terms.append(lowered_camel)
         return terms
+
+    def _filtered_semantic_terms(
+        self,
+        text: str,
+        extra_noise: Optional[set[str]] = None,
+        drop_generic_cluster_terms: bool = False,
+    ) -> List[str]:
+        noise = set(CODE_NOISE_TERMS) | set(TEXT_STOP_TERMS) | {"py", "ts", "tsx", "js", "jsx", "md", "rst", "txt", "adoc"}
+        if extra_noise:
+            noise.update(extra_noise)
+        if drop_generic_cluster_terms:
+            noise.update(GENERIC_CLUSTER_TERMS)
+
+        filtered: List[str] = []
+        seen: set[str] = set()
+        for term in self._semantic_terms(text):
+            if len(term) <= 2 or term in noise:
+                continue
+            if term in seen:
+                continue
+            seen.add(term)
+            filtered.append(term)
+        return filtered
 
     def _bm25_score(
         self,
@@ -2588,7 +3652,7 @@ Return valid JSON only:
             tf = doc_tokens.count(term)
             if tf == 0:
                 continue
-            idf = max(0.0, __import__("math").log((total_docs - df[term] + 0.5) / (df[term] + 0.5) + 1.0))
+            idf = max(0.0, math.log((total_docs - df[term] + 0.5) / (df[term] + 0.5) + 1.0))
             denom = tf + k1 * (1 - b + b * (doc_len / avg_doc_len if avg_doc_len else 1.0))
             score += idf * ((tf * (k1 + 1)) / denom)
         return score
@@ -2619,20 +3683,29 @@ Return valid JSON only:
         features: List[Dict[str, Any]],
     ) -> None:
         file_lookup = {item["path"]: item for item in inventory.get("files", [])}
-        for path in sorted(list(remaining)):
-            if not self._should_expose_file_in_feature(path):
-                continue
-            file_info = file_lookup.get(path)
-            if not file_info:
-                continue
-            match = self._find_support_feature_match(file_info, features)
-            if match is None:
-                continue
-            match["files_touched"] = sorted(set(match.get("files_touched", [])) | {path})
-            parent = Path(path).parent
-            if parent != Path("."):
-                match["file_boundaries"] = sorted(set(match.get("file_boundaries", [])) | {parent.as_posix() + "/**"})
-            remaining.discard(path)
+        changed = True
+        while changed:
+            changed = False
+            for path in sorted(list(remaining)):
+                if not self._should_expose_file_in_feature(path):
+                    continue
+                file_info = file_lookup.get(path)
+                if not file_info:
+                    continue
+                match = self._find_support_feature_match(file_info, features)
+                if match is None:
+                    continue
+                if not (
+                    self._is_support_like_file(file_info)
+                    or self._is_strong_shadow_match(file_info, match)
+                ):
+                    continue
+                match["files_touched"] = sorted(set(match.get("files_touched", [])) | {path})
+                parent = Path(path).parent
+                if parent != Path("."):
+                    match["file_boundaries"] = sorted(set(match.get("file_boundaries", [])) | {parent.as_posix() + "/**"})
+                remaining.discard(path)
+                changed = True
 
     def _find_support_feature_match(
         self,
@@ -2654,6 +3727,23 @@ Return valid JSON only:
         if len(top_matches) != 1:
             return None
         return top_matches[0]
+
+    def _is_support_like_file(self, file_info: Dict[str, Any]) -> bool:
+        role_hint = file_info.get("role_hint")
+        if role_hint in {"test", "config", "legacy"}:
+            return True
+        return file_info.get("support_score", 0.0) >= 0.5
+
+    def _is_strong_shadow_match(self, file_info: Dict[str, Any], feature: Dict[str, Any]) -> bool:
+        score = self._support_similarity_score(file_info, feature)
+        if score < 8:
+            return False
+        feature_files = set(feature.get("files_touched", []))
+        import_links = len((set(file_info.get("imports", [])) | set(file_info.get("imported_by", []))) & feature_files)
+        if import_links > 0:
+            return True
+        generic_stems = {"app", "index", "layout", "main", "page", "route", "server", "__init__"}
+        return Path(file_info.get("path", "")).stem.lower() not in generic_stems
 
     def _support_similarity_score(self, file_info: Dict[str, Any], feature: Dict[str, Any]) -> int:
         path = file_info["path"]
@@ -2681,22 +3771,38 @@ Return valid JSON only:
         return import_links * 10 + same_group * 2 + duplicate_basename * 4 + stem_overlap * 3 + parent_overlap * 2
 
     def _should_backfill_uncategorized(self, path: str) -> bool:
+        """Whether an uncovered file should be backfilled into fallback features.
+
+        More permissive than _should_expose_file_in_feature — allows test and
+        config files to be backfilled so they land in *some* feature rather
+        than being silently dropped.
+        """
         rel = Path(path)
         if not rel.parts:
             return False
         if rel.parts[0] in NON_FEATURE_TOP_LEVEL_DIRS:
             return False
         if rel.name in NON_FEATURE_FILENAMES:
+            return False
+        if rel.name == "__init__.py":
             return False
         return True
 
     def _should_expose_file_in_feature(self, path: str) -> bool:
+        """Whether a file should be listed in a feature's files_touched.
+
+        Stricter than backfill — excludes top-level config files and
+        non-feature directories so features stay focused on domain code.
+        """
         rel = Path(path)
         if not rel.parts:
             return False
         if rel.parts[0] in NON_FEATURE_TOP_LEVEL_DIRS:
             return False
         if rel.name in NON_FEATURE_FILENAMES:
+            return False
+        # Top-level config files without a directory are infrastructure, not features
+        if len(rel.parts) == 1 and self._is_config_file(self.project_root / path):
             return False
         return True
 
@@ -2705,12 +3811,9 @@ Return valid JSON only:
         for feature in features:
             merged = False
             for existing in deduped:
+                same_id = existing["feature_id"] == feature["feature_id"]
                 same_files = set(existing["files_touched"]) == set(feature["files_touched"])
-                subset_overlap = (
-                    set(existing["files_touched"]).issubset(set(feature["files_touched"]))
-                    or set(feature["files_touched"]).issubset(set(existing["files_touched"]))
-                )
-                if existing["feature_id"] == feature["feature_id"] or same_files or subset_overlap:
+                if same_id or same_files:
                     existing["files_touched"] = sorted(set(existing["files_touched"]) | set(feature["files_touched"]))
                     existing["file_boundaries"] = sorted(set(existing["file_boundaries"]) | set(feature["file_boundaries"]))
                     merged = True
@@ -2819,6 +3922,120 @@ Return valid JSON only:
                 },
             }]
         return []
+
+    def _compute_feature_staleness(
+        self,
+        features: List[Dict[str, Any]],
+        known_paths: set[str],
+        inventory: Dict[str, Any],
+    ) -> None:
+        """Compute staleness signals for each feature based on codebase state."""
+        now = _utc_now()
+        inventory_file_set = {item["path"] for item in inventory.get("files", [])}
+
+        for feature in features:
+            signals: List[str] = []
+            files_touched = set(feature.get("files_touched", []))
+            file_boundaries = feature.get("file_boundaries", [])
+            status = feature.get("status", "in-progress")
+
+            # Signal: files in files_touched that no longer exist
+            deleted_files = files_touched - known_paths
+            if deleted_files:
+                signals.append(f"deleted_files:{len(deleted_files)}")
+
+            # Signal: files_touched outside declared file_boundaries
+            if file_boundaries and files_touched:
+                boundary_violations = [
+                    path for path in files_touched
+                    if path in known_paths and not self._path_matches_feature_boundaries(path, feature)
+                ]
+                if boundary_violations:
+                    signals.append(f"files_outside_boundaries:{len(boundary_violations)}")
+
+            # Signal: feature marked complete but files still changing
+            # (detected by checking if inventory files in boundary have recent modifications)
+            if status == "complete" and files_touched:
+                # If we have session_ids, a complete feature shouldn't be getting new sessions
+                # This is a lightweight heuristic; full detection needs session timestamps
+                pass
+
+            # Signal: feature marked in-progress but all files deleted
+            if status == "in-progress" and files_touched and not (files_touched & known_paths):
+                signals.append("all_files_removed")
+
+            # Signal: planned feature with files that now exist
+            if status == "planned" and not files_touched:
+                # Check if any boundary files appeared
+                for path in inventory_file_set:
+                    if self._path_matches_feature_boundaries(path, feature):
+                        signals.append("planned_feature_has_code")
+                        break
+
+            if signals:
+                staleness_status = "stale"
+            elif deleted_files or not files_touched:
+                staleness_status = "unknown"
+            else:
+                staleness_status = "current"
+
+            feature["staleness"] = {
+                "status": staleness_status,
+                "checked_at": now,
+                "signals": signals,
+            }
+
+    def detect_boundary_overlaps(self, document: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Detect files or boundaries claimed by multiple features.
+
+        Returns a list of overlap records, each with the file path and the
+        feature_ids that claim it.
+        """
+        if document is None:
+            document = self.load_or_create()
+
+        features = document.get("features", [])
+        if len(features) < 2:
+            return []
+
+        # Check files_touched overlaps
+        file_owners: Dict[str, List[str]] = {}
+        for feature in features:
+            fid = feature.get("feature_id", "")
+            for path in feature.get("files_touched", []):
+                file_owners.setdefault(path, []).append(fid)
+
+        overlaps: List[Dict[str, Any]] = []
+        for path, owners in sorted(file_owners.items()):
+            if len(owners) > 1:
+                overlaps.append({
+                    "path": path,
+                    "kind": "files_touched",
+                    "feature_ids": sorted(owners),
+                })
+
+        # Check file_boundaries overlaps (by expanding boundaries to actual files)
+        inventory = self._build_codebase_inventory()
+        all_paths = {item["path"] for item in inventory.get("files", [])}
+        boundary_owners: Dict[str, List[str]] = {}
+
+        for feature in features:
+            fid = feature.get("feature_id", "")
+            for path in all_paths:
+                if self._path_matches_feature_boundaries(path, feature):
+                    boundary_owners.setdefault(path, []).append(fid)
+
+        for path, owners in sorted(boundary_owners.items()):
+            if len(owners) > 1:
+                # Don't duplicate if already caught by files_touched
+                if not any(o["path"] == path and o["kind"] == "files_touched" for o in overlaps):
+                    overlaps.append({
+                        "path": path,
+                        "kind": "file_boundaries",
+                        "feature_ids": sorted(owners),
+                    })
+
+        return overlaps
 
     def _candidate_title(self, files: List[str], description: str) -> str:
         if description:
@@ -2935,14 +4152,21 @@ Return valid JSON only:
         document["update_history"] = document["update_history"][-MAX_UPDATE_HISTORY:]
 
     def _diff_op_is_noop(self, op: Dict[str, Any]) -> bool:
-        if op.get("op") == "update_feature":
+        kind = op.get("op")
+        if kind == "update_feature":
             changes = op.get("changes", {})
             return not any(
                 value for key, value in changes.items()
-                if key.endswith("_add")
+                if key.endswith("_add") or key in ("status", "title", "description")
             )
-        if op.get("op") == "update_project_docs":
+        if kind == "update_project_docs":
             return not op.get("docs_add")
+        if kind == "mark_status":
+            return not op.get("status")
+        if kind == "archive_feature":
+            return not op.get("feature_id")
+        if kind == "unlink_session":
+            return not op.get("session_id")
         return False
 
     def _apply_diff_op(self, document: Dict[str, Any], op: Dict[str, Any]) -> None:
@@ -2962,16 +4186,58 @@ Return valid JSON only:
                 return
 
             changes = op.get("changes", {})
+            material_change = False
             for field in ("files_touched_add", "file_boundaries_add", "session_ids_add"):
                 if field in changes:
                     target = field.replace("_add", "")
-                    feature[target] = sorted(set(feature.get(target, [])) | set(changes[field]))
+                    new_values = set(changes[field]) - set(feature.get(target, []))
+                    if new_values:
+                        feature[target] = sorted(set(feature.get(target, [])) | new_values)
+                        if field != "session_ids_add":
+                            material_change = True
             if "docs_add" in changes:
                 feature["docs"] = self._deduplicate_doc_links(feature.get("docs", []) + changes["docs_add"])
+            if "status" in changes and changes["status"] != feature.get("status"):
+                feature["status"] = changes["status"]
+                material_change = True
+            if "title" in changes and changes["title"] != feature.get("title"):
+                feature["title"] = changes["title"]
+                material_change = True
+            if "description" in changes and changes["description"] != feature.get("description"):
+                feature["description"] = changes["description"]
+                material_change = True
             if "last_updated_session" in changes:
                 feature["last_updated_session"] = changes["last_updated_session"]
             if "updated_at" in changes:
                 feature["updated_at"] = changes["updated_at"]
+            if material_change:
+                feature["feature_version"] = feature.get("feature_version", 1) + 1
+            return
+
+        if kind == "mark_status":
+            feature = next(
+                (item for item in document.get("features", []) if item.get("feature_id") == op.get("feature_id")),
+                None,
+            )
+            if feature is None:
+                return
+            new_status = op.get("status")
+            if new_status and new_status != feature.get("status"):
+                feature["status"] = new_status
+                feature["updated_at"] = op.get("updated_at") or _utc_now()
+                feature["feature_version"] = feature.get("feature_version", 1) + 1
+            return
+
+        if kind == "archive_feature":
+            feature_id = op.get("feature_id")
+            feature = next(
+                (item for item in document.get("features", []) if item.get("feature_id") == feature_id),
+                None,
+            )
+            if feature is not None:
+                feature["status"] = "archived"
+                feature["updated_at"] = op.get("updated_at") or _utc_now()
+                feature["feature_version"] = feature.get("feature_version", 1) + 1
             return
 
         if kind == "update_project_docs":
@@ -2992,3 +4258,18 @@ Return valid JSON only:
             for field in ("path", "started_at", "ended_at", "feature_ids"):
                 if field in payload:
                     existing[field] = payload[field]
+            return
+
+        if kind == "unlink_session":
+            session_id = op.get("session_id")
+            if not session_id:
+                return
+            document["session_index"] = [
+                entry for entry in document.get("session_index", [])
+                if entry.get("session_id") != session_id
+            ]
+            # Also remove session references from features
+            for feature in document.get("features", []):
+                if session_id in feature.get("session_ids", []):
+                    feature["session_ids"] = [sid for sid in feature["session_ids"] if sid != session_id]
+            return

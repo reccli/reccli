@@ -1,0 +1,55 @@
+[
+  {
+    "name": "spec_docs_attach_to_runtime_features",
+    "files": {
+      "packages/reccli-core/reccli/devsession.py": "class DevSession:\n    pass\n",
+      "packages/reccli-core/reccli/checkpoints.py": "def create_checkpoint():\n    return True\n",
+      "packages/reccli-core/reccli/devproject.py": "class DevProjectManager:\n    pass\n",
+      "packages/reccli-core/reccli/proposal_queue.py": "def enqueue_proposal():\n    return True\n",
+      "packages/reccli-core/backend/server.py": "def validate_license():\n    return True\n",
+      "docs/specs/DEVSESSION_FORMAT.md": "# DevSession Format\nThe .devsession file tracks conversation spans, checkpoints, and summary state for DevSession runtime files like packages/reccli-core/reccli/devsession.py and packages/reccli-core/reccli/checkpoints.py.\n",
+      "docs/specs/DEVPROJECT_FORMAT.md": "# DevProject Format\nThe .devproject file tracks features, proposals, and canonical project state for packages/reccli-core/reccli/devproject.py and packages/reccli-core/reccli/proposal_queue.py.\n",
+      "PROJECT_PLAN.md": "# Project Plan\nThe Python Backend Server feature includes license validation in packages/reccli-core/backend/server.py.\n",
+      "docs/architecture/OVERVIEW.md": "# Architecture Overview\nRecCli combines session memory, project tracking, and retrieval systems across the whole repository.\n"
+    },
+    "features": [
+      {
+        "title": "DevSession Runtime",
+        "description": "Session persistence and checkpoints.",
+        "files": [
+          "packages/reccli-core/reccli/devsession.py",
+          "packages/reccli-core/reccli/checkpoints.py"
+        ]
+      },
+      {
+        "title": "DevProject Runtime",
+        "description": "Project dashboard and proposal management.",
+        "files": [
+          "packages/reccli-core/reccli/devproject.py",
+          "packages/reccli-core/reccli/proposal_queue.py"
+        ]
+      },
+      {
+        "title": "Python Backend Server",
+        "description": "Backend licensing and validation endpoints.",
+        "files": [
+          "packages/reccli-core/backend/server.py"
+        ]
+      }
+    ],
+    "expected_feature_docs": {
+      "DevSession Runtime": [
+        "docs/specs/DEVSESSION_FORMAT.md"
+      ],
+      "DevProject Runtime": [
+        "docs/specs/DEVPROJECT_FORMAT.md"
+      ],
+      "Python Backend Server": [
+        "PROJECT_PLAN.md"
+      ]
+    },
+    "expected_project_docs": [
+      "docs/architecture/OVERVIEW.md"
+    ]
+  }
+]

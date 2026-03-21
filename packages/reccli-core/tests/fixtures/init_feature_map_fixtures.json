@@ -1,0 +1,281 @@
+[
+  {
+    "name": "small_crud_app_init",
+    "files": {
+      "api/auth.py": "def login_user(email, password):\n    return {'token': 'abc'}\n",
+      "api/billing.py": "def charge_invoice(invoice_id):\n    return True\n",
+      "frontend/dashboard.tsx": "export function DashboardHome() { return null }\n",
+      "docs/auth-spec.md": "# Authentication Spec\nThis feature documents api/auth.py and the Authentication flow.\n"
+    },
+    "llm_payload": {
+      "project": {
+        "name": "Demo CRUD",
+        "description": "A small CRUD application."
+      },
+      "features": [
+        {
+          "title": "Authentication",
+          "description": "Login and session issuance.",
+          "files": ["api/auth.py"],
+          "suggested_file_boundaries": ["api/auth.py"],
+          "rationale": "Distinct auth work area."
+        },
+        {
+          "title": "Billing",
+          "description": "Billing and invoices.",
+          "files": ["api/billing.py"],
+          "suggested_file_boundaries": ["api/billing.py"],
+          "rationale": "Distinct billing work area."
+        },
+        {
+          "title": "Dashboard",
+          "description": "Dashboard frontend surface.",
+          "files": ["frontend/dashboard.tsx"],
+          "suggested_file_boundaries": ["frontend/**"],
+          "rationale": "Distinct dashboard work area."
+        }
+      ],
+      "hub_files": [],
+      "shared_infrastructure": [],
+      "unassigned": [],
+      "notes": []
+    },
+    "expected_titles": [
+      "Authentication",
+      "Billing",
+      "Dashboard"
+    ],
+    "expected_feature_docs": {
+      "Authentication": [
+        "docs/auth-spec.md"
+      ]
+    }
+  },
+  {
+    "name": "cli_tooling_repo_init",
+    "files": {
+      "cli.py": "from commands.sync import run_sync\nfrom storage.session_store import SessionStore\n",
+      "commands/sync.py": "def run_sync(target='default'):\n    return target\n",
+      "storage/session_store.py": "class SessionStore:\n    def load_session(self, session_id):\n        return session_id\n",
+      "docs/cli-guide.md": "# CLI Guide\nThe CLI Commands feature uses cli.py and commands/sync.py.\n"
+    },
+    "llm_payload": {
+      "project": {
+        "name": "Demo CLI",
+        "description": "A CLI and storage tooling repository."
+      },
+      "features": [
+        {
+          "title": "CLI Commands",
+          "description": "User-facing commands and dispatch.",
+          "files": ["cli.py", "commands/sync.py"],
+          "suggested_file_boundaries": ["cli.py", "commands/**"],
+          "rationale": "Distinct CLI surface."
+        },
+        {
+          "title": "Session Storage",
+          "description": "Storage and session persistence.",
+          "files": ["storage/session_store.py"],
+          "suggested_file_boundaries": ["storage/**"],
+          "rationale": "Distinct storage work area."
+        }
+      ],
+      "hub_files": [],
+      "shared_infrastructure": [],
+      "unassigned": [],
+      "notes": []
+    },
+    "expected_titles": [
+      "CLI Commands",
+      "Session Storage"
+    ],
+    "expected_feature_docs": {
+      "CLI Commands": [
+        "docs/cli-guide.md"
+      ]
+    }
+  },
+  {
+    "name": "architecture_heavy_repo_init",
+    "files": {
+      "engine/checkpoints.py": "def create_session_checkpoint(session_id):\n    return session_id\n",
+      "engine/vector_index.py": "class VectorIndex:\n    def search_embeddings(self):\n        return []\n",
+      "engine/summary_verification.py": "def verify_summary_temporal_links(summary):\n    return True\n",
+      "engine/proposal_queue.py": "def enqueue_feature_proposal(feature_id):\n    return feature_id\n",
+      "ui/chat.tsx": "export function ChatPanel() { return null }\n",
+      "backend/server.py": "def validate_license(key):\n    return True\n",
+      "docs/specs/engine-spec.md": "# Engine Spec\nThe core runtime includes engine/checkpoints.py, engine/vector_index.py, engine/summary_verification.py, and engine/proposal_queue.py.\n"
+    },
+    "llm_payload": {
+      "project": {
+        "name": "Architecture Heavy Demo",
+        "description": "A layered architecture-heavy repository."
+      },
+      "features": [
+        {
+          "title": "Core Runtime",
+          "description": "The main engine runtime.",
+          "files": [
+            "engine/checkpoints.py",
+            "engine/vector_index.py",
+            "engine/summary_verification.py",
+            "engine/proposal_queue.py"
+          ],
+          "suggested_file_boundaries": ["engine/**"],
+          "rationale": "Broad core runtime area."
+        },
+        {
+          "title": "Terminal UI",
+          "description": "Chat interface.",
+          "files": ["ui/chat.tsx"],
+          "suggested_file_boundaries": ["ui/**"],
+          "rationale": "Distinct UI surface."
+        },
+        {
+          "title": "Backend Server",
+          "description": "Backend validation API.",
+          "files": ["backend/server.py"],
+          "suggested_file_boundaries": ["backend/**"],
+          "rationale": "Distinct backend surface."
+        }
+      ],
+      "hub_files": [],
+      "shared_infrastructure": [],
+      "unassigned": [],
+      "notes": []
+    },
+    "expected_titles": [
+      "Terminal UI",
+      "Backend Server"
+    ],
+    "expected_any_titles": [
+      "Core Runtime"
+    ]
+  },
+  {
+    "name": "medium_webapp_init",
+    "files": {
+      "app/api/orders/route.ts": "export async function GET(request: Request) { return Response.json([]); }\nexport async function POST(request: Request) { return Response.json({ ok: true }); }\n",
+      "app/api/webhooks/stripe/route.ts": "export async function POST(request: Request) { return Response.json({ ok: true }); }\n",
+      "jobs/invoice_sync.py": "@app.task\ndef sync_invoices():\n    return True\n",
+      "models/order.py": "class OrderModel(BaseModel):\n    pass\n",
+      "frontend/orders/page.tsx": "export default function OrdersPage() { return null }\n",
+      "frontend/billing/page.tsx": "export default function BillingPage() { return null }\n",
+      "docs/orders-spec.md": "# Orders Spec\nThe Orders feature includes app/api/orders/route.ts and models/order.py.\n"
+    },
+    "llm_payload": {
+      "project": {
+        "name": "Medium Webapp",
+        "description": "A web app with orders, billing, jobs, and webhooks."
+      },
+      "features": [
+        {
+          "title": "Orders API",
+          "description": "Order endpoints and order models.",
+          "files": ["app/api/orders/route.ts", "models/order.py"],
+          "suggested_file_boundaries": ["app/api/orders/**", "models/order.py"],
+          "rationale": "Orders are a durable API work area."
+        },
+        {
+          "title": "Billing Surfaces",
+          "description": "Billing UI and Stripe webhook handling.",
+          "files": ["frontend/billing/page.tsx", "app/api/webhooks/stripe/route.ts"],
+          "suggested_file_boundaries": ["frontend/billing/**", "app/api/webhooks/**"],
+          "rationale": "Billing is a distinct surface."
+        },
+        {
+          "title": "Background Jobs",
+          "description": "Recurring back-office synchronization tasks.",
+          "files": ["jobs/invoice_sync.py"],
+          "suggested_file_boundaries": ["jobs/**"],
+          "rationale": "Jobs are a recurring standalone work area."
+        }
+      ],
+      "hub_files": [],
+      "shared_infrastructure": [],
+      "unassigned": [],
+      "notes": []
+    },
+    "expected_titles": [
+      "Orders API",
+      "Billing Surfaces",
+      "Background Jobs"
+    ],
+    "expected_feature_files": {
+      "Orders API": [
+        "app/api/orders/route.ts",
+        "models/order.py"
+      ],
+      "Billing Surfaces": [
+        "app/api/webhooks/stripe/route.ts",
+        "frontend/billing/page.tsx"
+      ],
+      "Background Jobs": [
+        "jobs/invoice_sync.py"
+      ]
+    },
+    "expected_feature_docs": {
+      "Orders API": [
+        "docs/orders-spec.md"
+      ]
+    }
+  },
+  {
+    "name": "dirty_repo_init",
+    "files": {
+      "src/auth.py": "def login_user(email, password):\n    return {'token': 'abc'}\n",
+      "src/billing.py": "def create_invoice(customer_id):\n    return {'id': 'inv_1'}\n",
+      "legacy/old_auth.py": "def old_login():\n    return None\n",
+      "backup_server.py": "def backup_server():\n    return True\n",
+      "archive/demo.py": "print('old demo')\n",
+      "docs/auth-guide.md": "# Auth Guide\nThe Authentication feature uses src/auth.py.\n"
+    },
+    "llm_payload": {
+      "project": {
+        "name": "Dirty Repo",
+        "description": "A repo with live auth and billing features plus stale legacy files."
+      },
+      "features": [
+        {
+          "title": "Authentication",
+          "description": "Current authentication code.",
+          "files": ["src/auth.py", "legacy/old_auth.py"],
+          "suggested_file_boundaries": ["src/auth.py"],
+          "rationale": "Auth is a real feature; legacy file should not dominate it."
+        },
+        {
+          "title": "Billing",
+          "description": "Current billing code.",
+          "files": ["src/billing.py", "backup_server.py"],
+          "suggested_file_boundaries": ["src/billing.py"],
+          "rationale": "Billing is a real feature; backup file should be excluded."
+        }
+      ],
+      "hub_files": [],
+      "shared_infrastructure": [],
+      "unassigned": ["legacy/old_auth.py", "backup_server.py"],
+      "notes": []
+    },
+    "expected_titles": [
+      "Authentication",
+      "Billing"
+    ],
+    "expected_feature_files": {
+      "Authentication": [
+        "src/auth.py"
+      ],
+      "Billing": [
+        "src/billing.py"
+      ]
+    },
+    "unexpected_titles": [
+      "Legacy",
+      "Backup Server"
+    ],
+    "expected_feature_docs": {
+      "Authentication": [
+        "docs/auth-guide.md"
+      ]
+    }
+  }
+]

@@ -1,0 +1,148 @@
+[
+  {
+    "name": "small_crud_app_init",
+    "repo_dir": "small-crud-app",
+    "expected_titles": [
+      "Authentication",
+      "Billing",
+      "Dashboard"
+    ],
+    "expected_feature_files": {
+      "Authentication": [
+        "api/auth.py"
+      ],
+      "Billing": [
+        "api/billing.py"
+      ],
+      "Dashboard": [
+        "frontend/dashboard.tsx"
+      ]
+    },
+    "expected_feature_docs": {
+      "Authentication": [
+        "docs/auth-spec.md"
+      ]
+    },
+    "expected_project_docs": [
+      "README.md"
+    ],
+    "sync_clean": true
+  },
+  {
+    "name": "cli_tooling_repo_init",
+    "repo_dir": "cli-tooling-repo",
+    "expected_titles": [
+      "CLI Commands",
+      "Session Storage"
+    ],
+    "expected_feature_files": {
+      "CLI Commands": [
+        "cli.py",
+        "commands/sync.py"
+      ],
+      "Session Storage": [
+        "storage/session_store.py"
+      ]
+    },
+    "expected_feature_docs": {
+      "CLI Commands": [
+        "README.md",
+        "docs/cli-guide.md"
+      ]
+    },
+    "expected_project_docs": [],
+    "sync_clean": true
+  },
+  {
+    "name": "architecture_heavy_repo_init",
+    "repo_dir": "architecture-heavy-repo",
+    "expected_titles": [
+      "Core Runtime",
+      "Terminal UI",
+      "Backend Server"
+    ],
+    "expected_feature_files": {
+      "Core Runtime": [
+        "engine/checkpoints.py",
+        "engine/proposal_queue.py",
+        "engine/summary_verification.py",
+        "engine/vector_index.py"
+      ],
+      "Terminal UI": [
+        "ui/chat.tsx"
+      ],
+      "Backend Server": [
+        "backend/server.py"
+      ]
+    },
+    "expected_feature_docs": {
+      "Core Runtime": [
+        "docs/specs/engine-spec.md"
+      ]
+    },
+    "expected_project_docs": [
+      "README.md"
+    ],
+    "sync_clean": true
+  },
+  {
+    "name": "medium_webapp_init",
+    "repo_dir": "medium-webapp",
+    "expected_titles": [
+      "Orders API",
+      "Billing Surfaces",
+      "Background Jobs",
+      "Frontend"
+    ],
+    "expected_feature_files": {
+      "Orders API": [
+        "app/api/orders/route.ts",
+        "models/order.py"
+      ],
+      "Billing Surfaces": [
+        "app/api/webhooks/stripe/route.ts",
+        "frontend/billing/page.tsx"
+      ],
+      "Background Jobs": [
+        "jobs/invoice_sync.py"
+      ],
+      "Frontend": [
+        "frontend/orders/page.tsx"
+      ]
+    },
+    "expected_feature_docs": {
+      "Orders API": [
+        "docs/orders-spec.md"
+      ]
+    },
+    "expected_project_docs": [
+      "README.md"
+    ],
+    "sync_clean": true
+  },
+  {
+    "name": "dirty_repo_init",
+    "repo_dir": "dirty-repo",
+    "expected_titles": [
+      "Authentication",
+      "Billing"
+    ],
+    "expected_feature_files": {
+      "Authentication": [
+        "src/auth.py"
+      ],
+      "Billing": [
+        "src/billing.py"
+      ]
+    },
+    "expected_feature_docs": {
+      "Authentication": [
+        "docs/auth-guide.md"
+      ]
+    },
+    "expected_project_docs": [
+      "README.md"
+    ],
+    "sync_clean": true
+  }
+]
