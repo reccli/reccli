@@ -753,13 +753,14 @@ class DevSessionRegressionTests(unittest.TestCase):
             auto_features = [feature for feature in rebuilt["features"] if feature["source"] == "auto"]
             self.assertTrue(all("packages/core/devsession.py" not in feature["files_touched"] for feature in auto_features))
 
-    def test_devproject_init_runs_and_applies_sync_only_for_cold_start(self):
+    def test_devproject_init_always_runs_sync(self):
         with tempfile.TemporaryDirectory() as td:
             project_root = Path(td)
             (project_root / ".git").mkdir()
             (project_root / "src").mkdir()
             (project_root / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
 
+            # Cold start: sync should run
             manager = DevProjectManager(project_root)
             with mock.patch.object(
                 manager,
@@ -775,15 +776,20 @@ class DevSessionRegressionTests(unittest.TestCase):
             mocked_sync.assert_called_once()
             mocked_apply.assert_called_once_with("projupd_test")
 
-            manager.save(manager.load_or_create())
-            with mock.patch.object(manager, "generate_sync_proposal_from_codebase") as mocked_sync, mock.patch.object(
+            # Force reinit: sync should also run
+            with mock.patch.object(
+                manager,
+                "generate_sync_proposal_from_codebase",
+                return_value=({}, {"proposal_id": "projupd_test2"}),
+            ) as mocked_sync, mock.patch.object(
                 manager,
                 "apply_proposal",
+                return_value=({"features": []}, {"proposal_id": "projupd_test2"}),
             ) as mocked_apply:
                 manager.initialize_from_codebase(force=True, use_llm=False)
 
-            mocked_sync.assert_not_called()
-            mocked_apply.assert_not_called()
+            mocked_sync.assert_called_once()
+            mocked_apply.assert_called_once_with("projupd_test2")
 
     def test_devproject_init_llm_clustering_groups_cross_directory_files(self):
         with tempfile.TemporaryDirectory() as td:

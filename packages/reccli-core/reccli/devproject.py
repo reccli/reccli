@@ -368,10 +368,9 @@ class DevProjectManager:
             missing_feature_hints=missing_feature_hints,
         )
         self.save(document)
-        if not had_existing_document:
-            _, proposal = self.generate_sync_proposal_from_codebase()
-            if proposal is not None:
-                document, _ = self.apply_proposal(proposal["proposal_id"])
+        _, proposal = self.generate_sync_proposal_from_codebase()
+        if proposal is not None:
+            document, _ = self.apply_proposal(proposal["proposal_id"])
         return document
 
     def generate_sync_proposal_from_codebase(self) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
