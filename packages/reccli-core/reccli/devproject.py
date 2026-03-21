@@ -93,8 +93,8 @@ DOC_NOISE_TERMS = {
     "doc", "docs", "document", "documents", "documentation",
     "spec", "specs", "format", "formats", "guide", "guides",
     "reference", "references", "overview", "design", "architecture",
-    "plan", "plans", "proposal", "proposals", "readme", "project",
-    "repository", "repo", "canonical",
+    "plan", "plans", "readme", "project",
+    "repository", "repo",
     "current", "status", "updated", "version", "file", "files",
     "specification", "implementation", "implemented", "feature", "features",
 }
@@ -109,7 +109,7 @@ PROJECT_SCOPE_DOC_PHRASES = {
 }
 ROLE_SCHEMA_TERMS = {
     "schema", "schemas", "model", "models", "type", "types", "typing",
-    "validator", "validation", "contract", "contracts", "state",
+    "validator", "validation", "contract", "contracts",
 }
 ROLE_SHARED_INFRA_TERMS = {
     "config", "configs", "token", "tokens", "util", "utils", "shared", "common",
@@ -122,14 +122,11 @@ LEGACY_TERMS = {
 SUPPORT_TERMS = {
     "test", "tests", "benchmark", "benchmarks", "bench", "fixture", "fixtures",
     "mock", "mocks", "stub", "stubs", "seed", "seeds", "migration", "migrations",
-    "export", "exports", "exporter", "exporters", "dialog", "dialogs",
 }
 HUB_CANDIDATE_FILENAMES = {
     "main.py", "main.ts", "main.tsx", "main.js",
     "app.py", "app.ts", "app.tsx", "app.js",
-    "server.py", "server.ts", "server.js",
     "cli.py", "cli.ts", "cli.js",
-    "routes.py", "routes.ts", "routes.js",
 }
 
 
@@ -2567,7 +2564,7 @@ Anti-collapse rules:
 - If a broad area contains different domain vocabularies, schemas, responsibilities, entrypoints, or likely co-change patterns, split it into separate features even when tightly connected by imports.
 - A dense connected component is not a valid reason to keep a feature broad.
 - Do not collapse distinct internal domains merely because they share a package, orchestrator files, or runtime.
-- If artifact_candidates already isolate routes, UI surfaces, backend/server files, retrieval/indexing files, summarization/compaction files, project/dashboard files, or testing surfaces into distinct groups, preserve those boundaries unless they are clearly unstable.
+- If artifact_candidates already isolate distinct groups such as routes, UI surfaces, or testing, preserve those boundaries unless they are clearly unstable.
 
 Granularity:
 - Your default task is to find real internal feature boundaries, not to minimize the number of features.
