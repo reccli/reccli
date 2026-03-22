@@ -194,6 +194,39 @@ class LLMSession:
         # Conversation history for context
         self.messages = []
 
+        # Initialize memory middleware for .devproject + tree context
+        self._project_context = self._load_project_context()
+
+    def _load_project_context(self) -> str:
+        """Load .devproject features + file tree as formatted context for the system message."""
+        try:
+            from .memory_middleware import MemoryMiddleware
+            middleware = MemoryMiddleware(self.session, self.session_path.parent)
+            overview = middleware._load_project_overview()
+            if not overview:
+                return ""
+            return middleware._format_project_context(overview)
+        except Exception:
+            return ""
+
+    def _build_system_message(self) -> str:
+        """Build the full system message with project context and retrieval instructions."""
+        base = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
+
+        parts = []
+        if self._project_context:
+            parts.append(self._project_context)
+
+        if len(self.session.conversation) > 10:
+            parts.append(RETRIEVAL_SYSTEM_PROMPT)
+
+        parts.append(base)
+        return "\n\n".join(parts)
+
+    def refresh_project_context(self):
+        """Reload .devproject context, e.g. after compaction."""
+        self._project_context = self._load_project_context()
+
     def _init_anthropic(self, api_key: Optional[str]):
         """Initialize Anthropic client"""
         try:
@@ -841,14 +874,7 @@ class LLMSession:
             }
         ]
 
-        # Build system message with retrieval instructions
-        base_system_message = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
-
-        # Add retrieval prompt if session has enough history
-        if len(self.session.conversation) > 10:
-            system_message = RETRIEVAL_SYSTEM_PROMPT + "\n\n" + base_system_message
-        else:
-            system_message = base_system_message
+        system_message = self._build_system_message()
 
         try:
             response = self.client.messages.create(
@@ -961,14 +987,7 @@ class LLMSession:
             }
         ]
 
-        # Build system message with retrieval instructions
-        base_system_message = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
-
-        # Add retrieval prompt if session has enough history
-        if len(self.session.conversation) > 10:
-            system_message = RETRIEVAL_SYSTEM_PROMPT + "\n\n" + base_system_message
-        else:
-            system_message = base_system_message
+        system_message = self._build_system_message()
 
         try:
             response = self.client.messages.create(
@@ -1198,14 +1217,7 @@ class LLMSession:
             }
         ]
 
-        # Build system message with retrieval instructions
-        base_system_message = "You are a helpful AI assistant with access to conversation history through retrieval tools. Use them when needed to provide accurate, detailed answers."
-
-        # Add retrieval prompt if session has enough history
-        if len(self.session.conversation) > 10:
-            system_message = RETRIEVAL_SYSTEM_PROMPT + "\n\n" + base_system_message
-        else:
-            system_message = base_system_message
+        system_message = self._build_system_message()
 
         # OpenAI uses system message as first message in array
         messages_with_system = [{"role": "system", "content": system_message}] + self.messages
@@ -1463,9 +1475,9 @@ class LLMSession:
                     if compactor:
                         compacted_context = compactor.check_and_compact()
                         if compacted_context:
-                            # TODO: In future, inject compacted_context into LLM
-                            # For now, just continue - full session is saved
-                            pass
+                            # Refresh project context after compaction so the
+                            # LLM retains spatial awareness and feature navigation
+                            self.refresh_project_context()
 
                     # Get user input using PromptSession
                     try:

@@ -456,6 +456,48 @@ class MemoryMiddleware:
         data["_folder_tree"] = generate_compact_tree(resolved_root)
         return data
 
+    def _format_project_context(self, proj: Dict) -> str:
+        """Format .devproject data + folder tree as context for the LLM system message.
+
+        Wrapped in devproject-context tags so the compaction summarizer
+        knows to skip this section — it's reference context, not session history.
+        """
+        sections = []
+        project_meta = proj.get('project', {})
+        sections.append("<!-- devproject-context -->")
+        sections.append("## Project Overview")
+        sections.append(f"**Name**: {project_meta.get('name', proj.get('name', 'N/A'))}")
+        sections.append(f"**Description**: {project_meta.get('description', proj.get('purpose', 'N/A'))}")
+        sections.append("")
+
+        features = proj.get('features', [])
+        if features:
+            sections.append("## Features")
+            for feature in features:
+                status = feature.get('status', '')
+                title = feature.get('title', 'Untitled')
+                desc = feature.get('description', '')
+                files = feature.get('files_touched', [])
+                docs = [d.get('path', '') for d in feature.get('docs', []) if isinstance(d, dict)]
+                sections.append(f"### {title} [{status}]")
+                if desc:
+                    sections.append(desc)
+                if files:
+                    sections.append(f"Files: {', '.join(files)}")
+                if docs:
+                    sections.append(f"Docs: {', '.join(docs)}")
+                sections.append("")
+
+        folder_tree = proj.get('_folder_tree', '')
+        if folder_tree:
+            sections.append("## Codebase Structure")
+            sections.append("```")
+            sections.append(folder_tree)
+            sections.append("```")
+            sections.append("")
+        sections.append("<!-- /devproject-context -->")
+        return "\n".join(sections)
+
     def _vector_search_local(
         self,
         messages: List[Dict],
@@ -596,43 +638,8 @@ class MemoryMiddleware:
         sections.append("")
 
         # Project overview (if loaded)
-        # Wrapped in devproject-context tags so the compaction summarizer
-        # knows to skip this section — it's reference context, not session history.
         if 'project_overview' in context:
-            proj = context['project_overview']
-            project_meta = proj.get('project', {})
-            sections.append("<!-- devproject-context -->")
-            sections.append("## Project Overview")
-            sections.append(f"**Name**: {project_meta.get('name', proj.get('name', 'N/A'))}")
-            sections.append(f"**Description**: {project_meta.get('description', proj.get('purpose', 'N/A'))}")
-            sections.append("")
-
-            features = proj.get('features', [])
-            if features:
-                sections.append("## Features")
-                for feature in features:
-                    status = feature.get('status', '')
-                    title = feature.get('title', 'Untitled')
-                    desc = feature.get('description', '')
-                    files = feature.get('files_touched', [])
-                    docs = [d.get('path', '') for d in feature.get('docs', []) if isinstance(d, dict)]
-                    sections.append(f"### {title} [{status}]")
-                    if desc:
-                        sections.append(desc)
-                    if files:
-                        sections.append(f"Files: {', '.join(files)}")
-                    if docs:
-                        sections.append(f"Docs: {', '.join(docs)}")
-                    sections.append("")
-
-            folder_tree = proj.get('_folder_tree', '')
-            if folder_tree:
-                sections.append("## Codebase Structure")
-                sections.append("```")
-                sections.append(folder_tree)
-                sections.append("```")
-                sections.append("")
-            sections.append("<!-- /devproject-context -->")
+            sections.append(self._format_project_context(context['project_overview']))
 
         # Session summary (if exists)
         if context.get('summary'):
