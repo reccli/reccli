@@ -13,14 +13,14 @@ from pathlib import Path
 import hashlib
 import json
 
-from .tokens import TokenCounter
+from ..runtime.tokens import TokenCounter
 from .summarizer import SessionSummarizer
-from .embeddings import OpenAIEmbeddings
-from .memory_middleware import MemoryMiddleware
-from .wpc import WorkPackageContinuity
-from .search import search
+from ..retrieval.embeddings import OpenAIEmbeddings
+from ..retrieval.memory_middleware import MemoryMiddleware
+from ..runtime.wpc import WorkPackageContinuity
+from ..retrieval.search import search
 from .compaction_log import CompactionLog
-from .devproject import DevProjectManager, resolve_session_project_root
+from ..project.devproject import DevProjectManager, resolve_session_project_root
 
 
 class PreemptiveCompactor:
@@ -401,7 +401,7 @@ class PreemptiveCompactor:
                 self.session.save(skip_validation=True)
 
         # Rebuild the unified index so the compactor searches against the current canonical state.
-        from .vector_index import build_unified_index
+        from ..retrieval.vector_index import build_unified_index
         index = build_unified_index(self.sessions_dir, verbose=False)
         self.session.vector_index = index
 

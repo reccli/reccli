@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from .devsession import DevSession
-from .devproject import discover_project_root
+from ..devsession import DevSession
+from ..project.devproject import discover_project_root
 
 
 class WALRecorder:

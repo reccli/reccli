@@ -23,5 +23,5 @@ echo
 echo "RecCli local install complete."
 echo
 echo "Run commands from the repo root like:"
-echo "  PYTHONPATH=packages/reccli-core python3 -m reccli.cli --help"
-echo "  PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat"
+echo "  PYTHONPATH=packages python3 -m reccli.runtime.cli --help"
+echo "  PYTHONPATH=packages python3 -m reccli.runtime.cli chat"

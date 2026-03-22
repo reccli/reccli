@@ -406,7 +406,7 @@ class MemoryMiddleware:
 
     def _load_project_overview(self) -> Optional[Dict]:
         """Load .devproject file, validate file paths, and generate compact folder tree."""
-        from .devproject import resolve_devproject_path, generate_compact_tree, DevProjectManager
+        from ..project.devproject import resolve_devproject_path, generate_compact_tree, DevProjectManager
 
         project_root = self.session.metadata.get("project_root") if getattr(self.session, "metadata", None) else None
 

@@ -238,7 +238,7 @@ def count_devsession_tokens(devsession_path: Path, model: str = "claude-3-5-sonn
             "total": int
         }
     """
-    from .devsession import DevSession
+    from ..devsession import DevSession
 
     counter = TokenCounter(model)
     session = DevSession.load(devsession_path)

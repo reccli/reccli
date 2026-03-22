@@ -20,9 +20,9 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from .devsession import DevSession
+from ..devsession import DevSession
 from .config import Config
-from .devproject import initialize_session_project_metadata
+from ..project.devproject import initialize_session_project_metadata
 
 
 # Phase 8: Retrieval System Prompt
@@ -200,7 +200,7 @@ class LLMSession:
     def _load_project_context(self) -> str:
         """Load .devproject features + file tree as formatted context for the system message."""
         try:
-            from .memory_middleware import MemoryMiddleware
+            from ..retrieval.memory_middleware import MemoryMiddleware
             middleware = MemoryMiddleware(self.session, self.session_path.parent)
             overview = middleware._load_project_overview()
             if not overview:
@@ -465,7 +465,7 @@ class LLMSession:
         Returns:
             Retrieved contexts formatted for LLM
         """
-        from .retrieval import ContextRetriever
+        from ..retrieval.retrieval import ContextRetriever
 
         retriever = ContextRetriever(self.session)
         results = []
@@ -508,7 +508,7 @@ class LLMSession:
         Returns:
             Search results with message_range links
         """
-        from .search import search
+        from ..retrieval.search import search
 
         # Get sessions_dir from session path
         sessions_dir = self.session_path.parent if hasattr(self, 'session_path') else Path.cwd()
@@ -1427,7 +1427,7 @@ class LLMSession:
         compactor = None
         if enable_compaction:
             try:
-                from .preemptive_compaction import PreemptiveCompactor
+                from ..summarization.preemptive_compaction import PreemptiveCompactor
                 sessions_dir = self.session_path.parent
                 compactor = PreemptiveCompactor(
                     self.session,

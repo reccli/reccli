@@ -69,7 +69,7 @@ class Config:
     def get_sessions_dir(self) -> Path:
         """Get sessions directory"""
         try:
-            from .devproject import default_devsession_dir
+            from ..project.devproject import default_devsession_dir
             sessions_dir = default_devsession_dir(Path.cwd())
         except Exception:
             sessions_dir = Path(self.data.get('sessions_dir', Path.home() / 'reccli' / 'devsession'))

@@ -275,9 +275,9 @@ def validate_reindexing(
     Returns:
         (is_valid, errors)
     """
-    from .summary_verification import SummaryVerifier
+    from .summarization.summary_verification import SummaryVerifier
 
-    from .summary_schema import ensure_summary_span_links
+    from .summarization.summary_schema import ensure_summary_span_links
 
     spans = ensure_summary_span_links(summary)
     verifier = SummaryVerifier(conversation, spans)
@@ -308,9 +308,9 @@ def auto_remove_invalid_items(
     Returns:
         (cleaned_summary, removed_items)
     """
-    from .summary_verification import SummaryVerifier
+    from .summarization.summary_verification import SummaryVerifier
 
-    from .summary_schema import ensure_summary_span_links
+    from .summarization.summary_schema import ensure_summary_span_links
 
     spans = ensure_summary_span_links(summary)
     verifier = SummaryVerifier(conversation, spans)

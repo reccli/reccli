@@ -213,7 +213,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
             print(f"  Processing {session_file.name}...")
 
         # Load session
-        from .devsession import DevSession
+        from ..devsession import DevSession
         try:
             session = DevSession.load(session_file)
             if getattr(session, "embedding_storage", {}).get("mode") == "external" and not getattr(session, "embedding_storage", {}).get("loaded"):
@@ -429,7 +429,7 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
         return index
 
     # Load new session
-    from .devsession import DevSession
+    from ..devsession import DevSession
     try:
         session = DevSession.load(session_file)
         if getattr(session, "embedding_storage", {}).get("mode") == "external" and not getattr(session, "embedding_storage", {}).get("loaded"):

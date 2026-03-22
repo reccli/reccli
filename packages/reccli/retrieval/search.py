@@ -586,7 +586,7 @@ def filter_deleted_results(sessions_dir: Path, results: List[Dict]) -> List[Dict
     Filter stale index results against canonical session files so tombstoned or redacted
     messages do not surface from outdated vector caches.
     """
-    from .devsession import DevSession
+    from ..devsession import DevSession
 
     session_cache: Dict[str, DevSession] = {}
     filtered: List[Dict] = []
@@ -745,7 +745,7 @@ def expand_result(sessions_dir: Path, result_id: str, context_window: int = 5) -
     if not session_file.exists():
         return None
 
-    from .devsession import DevSession
+    from ..devsession import DevSession
     session = DevSession.load(session_file)
 
     # Get message index

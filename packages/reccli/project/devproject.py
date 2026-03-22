@@ -360,7 +360,7 @@ def save_devproject(document: Dict[str, Any], path_or_root: Path) -> Path:
 
 def create_llm_client_for_model(model: str):
     """Create an Anthropic or OpenAI client for project clustering."""
-    from .config import Config
+    from ..runtime.config import Config
 
     config = Config()
     if model.startswith("claude"):
@@ -623,8 +623,8 @@ class DevProjectManager:
         document = self.load_or_create()
 
         if ensure_summary and not getattr(session, "summary", None):
-            from .summarizer import SessionSummarizer
-            from .summary_schema import ensure_summary_span_links
+            from ..summarization.summarizer import SessionSummarizer
+            from ..summarization.summary_schema import ensure_summary_span_links
 
             summarizer = SessionSummarizer(llm_client=None)
             session.summary = summarizer.summarize_session(
@@ -2634,8 +2634,8 @@ class DevProjectManager:
         project_context: Optional[str] = None,
         missing_feature_hints: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        from .config import Config
-        from .summarizer import SessionSummarizer
+        from ..runtime.config import Config
+        from ..summarization.summarizer import SessionSummarizer
 
         cfg = Config()
         resolved_model = model or cfg.get_default_model()
@@ -3657,7 +3657,7 @@ Return valid JSON only:
         documents: List[Dict[str, Any]],
         feature_profiles: List[Dict[str, Any]],
     ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Dict[str, Any]]]:
-        from .embeddings import cosine_similarity, get_embedding_provider, normalize_vector
+        from ..retrieval.embeddings import cosine_similarity, get_embedding_provider, normalize_vector
 
         if not documents or not feature_profiles:
             return [], documents

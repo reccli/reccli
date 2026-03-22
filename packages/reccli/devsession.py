@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from .devproject import default_devsession_path
+from .project.devproject import default_devsession_path
 
 
 class DevSession:
@@ -247,8 +247,8 @@ class DevSession:
 
         # Validate summary before writing (Safeguard #7)
         if not skip_validation and self.summary and self.conversation:
-            from .summary_verification import SummaryVerifier
-            from .summary_schema import ensure_summary_span_links
+            from .summarization.summary_verification import SummaryVerifier
+            from .summarization.summary_schema import ensure_summary_span_links
             from .reindexing import tag_messages_with_ids
 
             # Ensure messages have IDs (needed for validation)
@@ -525,7 +525,7 @@ class DevSession:
 
     def get_pending_token_count(self, start_index: Optional[int] = None, model: str = "claude-3-5-sonnet-20241022") -> int:
         """Estimate token count for uncompacted messages beyond the frontier."""
-        from .tokens import TokenCounter
+        from .runtime.tokens import TokenCounter
 
         frontier = self.get_summary_frontier_index() if start_index is None else start_index
         pending = [
@@ -541,7 +541,7 @@ class DevSession:
         Replace any existing open tail span with a new one starting at `start_index`.
         Returns the new open span or None if no tail exists.
         """
-        from .summary_schema import create_span, sort_spans
+        from .summarization.summary_schema import create_span, sort_spans
 
         self.spans = [span for span in self.spans if span.get("status") != "open"]
 
@@ -628,7 +628,7 @@ class DevSession:
         Returns:
             Conversation array with user/assistant messages
         """
-        from .parser import parse_conversation
+        from .recording.parser import parse_conversation
         return parse_conversation(self.terminal_recording["events"])
 
     def auto_parse_conversation(self) -> bool:
@@ -654,7 +654,7 @@ class DevSession:
         Returns:
             Dict with token counts for each layer
         """
-        from .tokens import TokenCounter
+        from .runtime.tokens import TokenCounter
 
         counter = TokenCounter(model)
 
@@ -703,7 +703,7 @@ class DevSession:
         Returns:
             Warning message if approaching limit, None otherwise
         """
-        from .tokens import TokenCounter
+        from .runtime.tokens import TokenCounter
 
         # Calculate current tokens
         counts = self.calculate_tokens(model)
@@ -727,7 +727,7 @@ class DevSession:
         Returns:
             True if summary was generated successfully
         """
-        from .summarizer import SessionSummarizer
+        from .summarization.summarizer import SessionSummarizer
         import hashlib
 
         # Check if we have a conversation to summarize
@@ -751,7 +751,7 @@ class DevSession:
             session_hash=session_hash,
             redact_secrets=redact_secrets
         )
-        from .summary_schema import ensure_summary_span_links
+        from .summarization.summary_schema import ensure_summary_span_links
 
         self.spans = ensure_summary_span_links(self.summary, self.spans)
         self.refresh_summary_sync()
@@ -774,7 +774,7 @@ class DevSession:
             session.generate_embeddings()  # Use default OpenAI
             session.generate_embeddings(LocalEmbeddings())  # Use local model
         """
-        from .embeddings import get_embedding_provider
+        from .retrieval.embeddings import get_embedding_provider
         from datetime import datetime
 
         if not self.conversation:
@@ -924,7 +924,7 @@ class DevSession:
         Returns:
             True if item was found and pinned
         """
-        from .summary_schema import add_audit_entry
+        from .summarization.summary_schema import add_audit_entry
 
         if not self.summary:
             return False
@@ -942,7 +942,7 @@ class DevSession:
 
     def unpin_summary_item(self, item_id: str) -> bool:
         """Unpin a summary item"""
-        from .summary_schema import add_audit_entry
+        from .summarization.summary_schema import add_audit_entry
 
         if not self.summary:
             return False
@@ -967,7 +967,7 @@ class DevSession:
         Returns:
             True if item was found and locked
         """
-        from .summary_schema import add_audit_entry
+        from .summarization.summary_schema import add_audit_entry
 
         if not self.summary:
             return False
@@ -984,7 +984,7 @@ class DevSession:
 
     def unlock_summary_item(self, item_id: str) -> bool:
         """Unlock a summary item"""
-        from .summary_schema import add_audit_entry
+        from .summarization.summary_schema import add_audit_entry
 
         if not self.summary:
             return False

@@ -39,8 +39,8 @@ If your environment already has the needed Python dependencies installed, you ca
 
 ```bash
 pip3 install -r requirements.txt
-PYTHONPATH=packages/reccli-core python3 -m reccli.cli --help
-PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat --help
+PYTHONPATH=packages python3 -m reccli.runtime.cli --help
+PYTHONPATH=packages python3 -m reccli.runtime.cli chat --help
 ```
 
 The TypeScript terminal UI lives in `packages/reccli-core/ui`:
@@ -55,7 +55,7 @@ Then launch chat through the Python entry point:
 
 ```bash
 cd /path/to/RecCli
-PYTHONPATH=packages/reccli-core python3 -m reccli.cli chat
+PYTHONPATH=packages python3 -m reccli.runtime.cli chat
 ```
 
 ## Repo Layout

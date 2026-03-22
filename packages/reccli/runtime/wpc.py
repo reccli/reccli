@@ -133,7 +133,7 @@ class WorkPackageContinuity:
             items: Artifact IDs to prefetch
             budget: Token budget for prefetch
         """
-        from .search import expand_result
+        from ..retrieval.search import expand_result
 
         staged = []
         tokens_used = 0

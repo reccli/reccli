@@ -16,13 +16,13 @@ from copy import deepcopy
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from reccli.devsession import DevSession
-from reccli.devproject import DevProjectManager
-from reccli.preemptive_compaction import PreemptiveCompactor
-from reccli.retrieval import ContextRetriever
-from reccli.search import filter_deleted_results
-from reccli.summarizer import SessionSummarizer
-from reccli.summary_verification import SummaryVerifier
-from reccli.summary_schema import (
+from reccli.project.devproject import DevProjectManager
+from reccli.summarization.preemptive_compaction import PreemptiveCompactor
+from reccli.retrieval.retrieval import ContextRetriever
+from reccli.retrieval.search import filter_deleted_results
+from reccli.summarization.summarizer import SessionSummarizer
+from reccli.summarization.summary_verification import SummaryVerifier
+from reccli.summarization.summary_schema import (
     create_summary_skeleton,
     create_decision_item,
     create_open_issue_item,
