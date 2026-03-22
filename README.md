@@ -1,100 +1,77 @@
-# RecCli
+# reccli
 
-RecCli is a temporal memory engine for coding agents.
+reccli is a temporal memory engine for coding agents.
 
 Its core idea is a tri-layer memory system:
 
-- project outline for cross-session context,
-- compacted session summary for active working memory,
-- full conversation history as the source of truth,
+- `.devproject` — project outline for cross-session context
+- `.devsession` summary — compacted session working memory
+- `.devsession` full conversation — source of truth
 
-with temporal links between the layers so an agent can recover exact prior reasoning instead of relying on lossy compaction or flat retrieval.
+with temporal-semantic links between the layers so an agent can recover exact prior reasoning instead of relying on lossy compaction or flat retrieval.
 
-Today, the repo fully implements the session-summary and full-conversation layers. The project-outline layer exists today as an optional augmentation path: the middleware can read a `.devproject` file if one exists, but the main CLI does not require it and can operate entirely from `.devsession`.
+## MCP Server
 
-## What Exists Today
-
-The current repo contains a working implementation of the core memory stack:
-
-- pure Python PTY terminal recording
-- `.devsession` session storage
-- conversation parsing and token counting
-- summary generation and reference verification
-- unified vector indexing and hybrid retrieval
-- memory middleware and streaming retrieval
-- preemptive compaction, checkpoints, and episodes
-- a TypeScript + Ink terminal UI layered over the Python core through a packaged JSON-RPC backend
-
-## Current Repo Status
-
-This repository has evolved significantly, but the current docs and plan now treat the live codebase rather than the historical phase notes as the source of truth.
-
-The canonical code now lives under [packages/reccli-core](/Users/will/coding-projects/RecCli/packages/reccli-core), and the documentation has been reorganized under [docs](/Users/will/coding-projects/RecCli/docs).
-
-If you are evaluating the project, start with [PROJECT_PLAN.md](/Users/will/coding-projects/RecCli/PROJECT_PLAN.md) and the docs index rather than older install scripts or historical progress notes.
-
-## Quick Start
-
-If your environment already has the needed Python dependencies installed, you can invoke the CLI directly:
+reccli runs as an MCP server, giving any compatible agent (Claude Code, Cursor, Windsurf) persistent project memory.
 
 ```bash
-pip3 install -r requirements.txt
+pip install -r requirements.txt
+claude mcp add --scope user reccli -- python -m reccli.mcp_server
+```
+
+**Tools exposed:**
+
+| Tool | What it does |
+|------|-------------|
+| `load_project_context` | Load project features, folder tree, and last session summary at conversation start |
+| `project_init` | Scan codebase with Tree-sitter + LLM to generate `.devproject` feature map |
+| `search_history` | Hybrid search (dense + BM25 + RRF) across past `.devsession` files |
+| `expand_search_result` | Drill into a search result to see full conversation context |
+| `save_session_notes` | Persist decisions, problems solved, and next steps from current session |
+
+## What it does
+
+1. **First session**: `project_init` scans your codebase, clusters files into features, and creates a `.devproject` file
+2. **Every session**: `load_project_context` loads the project map + folder tree + last session summary — the agent starts with full understanding
+3. **During work**: `search_history` finds past decisions, problems, and code changes across sessions
+4. **End of session**: `save_session_notes` persists what happened so the next session picks up where you left off
+
+The result: session #10 on a project is dramatically better than session #1, because the agent accumulates structured memory instead of starting cold every time.
+
+## Standalone CLI
+
+reccli also works as a standalone CLI for direct session management:
+
+```bash
 PYTHONPATH=packages python3 -m reccli.runtime.cli --help
-PYTHONPATH=packages python3 -m reccli.runtime.cli chat --help
+PYTHONPATH=packages python3 -m reccli.runtime.cli project init
+PYTHONPATH=packages python3 -m reccli.runtime.cli project show
+PYTHONPATH=packages python3 -m reccli.runtime.cli search "auth middleware decision"
 ```
 
-The TypeScript terminal UI lives in `packages/reccli-core/ui`:
+## Repo layout
 
-```bash
-cd packages/reccli-core/ui
-npm install
-npm run build
+```
+packages/reccli/
+  session/          .devsession file format manager
+  recording/        PTY terminal recording, WAL safety
+  summarization/    LLM summarization, delta ops, compaction
+  retrieval/        hybrid search, embeddings, memory middleware
+  project/          .devproject manager, Tree-sitter init
+  runtime/          CLI, LLM chat, config
+  tests/            58 tests
+  backend/          JSON-RPC bridge for TypeScript UI
+  ui/               TypeScript + Ink terminal UI
+  mcp_server.py     MCP server entry point
+docs/
+  specs/            .devsession and .devproject format specs
+  architecture/     system architecture docs
 ```
 
-Then launch chat through the Python entry point:
+## Format specs
 
-```bash
-cd /path/to/RecCli
-PYTHONPATH=packages python3 -m reccli.runtime.cli chat
-```
-
-## Repo Layout
-
-```text
-RecCli/
-├── packages/
-│   └── reccli-core/
-│       ├── reccli/              # Python core
-│       ├── backend/             # Python backend for the TypeScript UI bridge
-│       ├── tests/               # Python tests and benchmarks
-│       └── ui/                  # TypeScript + Ink terminal UI
-├── docs/                        # Architecture, specs, product, reference, history
-├── apps/                        # Ancillary app surfaces
-├── examples/
-└── PROJECT_PLAN.md
-```
-
-## Documentation
-
-Start here:
-
-- [Docs Index](docs/README.md)
-- [One-Pager](docs/product/RECCLI_ONE_PAGER.md)
-- [Architecture](docs/architecture/ARCHITECTURE.md)
-- [`.devsession` Format](docs/specs/DEVSESSION_FORMAT.md)
-- [Unified Vector Index](docs/specs/UNIFIED_VECTOR_INDEX.md)
-- [Project Plan](PROJECT_PLAN.md)
-- [Terminal UI Architecture](docs/architecture/RECCLI_CLI_UI.md)
-
-## Positioning
-
-RecCli should be thought of as memory infrastructure, not primarily as a standalone chat UI.
-
-The strongest product direction is likely:
-
-- RecCli as the canonical memory engine
-- `.devsession` as the required source-of-truth format, with `.devproject` as an optional project-outline companion that can be generated later
-- host integrations, such as an OpenClaw plugin/context engine, as the main distribution surface
+- [`.devsession` format](docs/specs/DEVSESSION_FORMAT.md) — open session format (CC0 license)
+- [`.devproject` format](docs/specs/DEVPROJECT_FORMAT.md) — project-level memory spec
 
 ## License
 
