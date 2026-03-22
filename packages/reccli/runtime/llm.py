@@ -20,7 +20,7 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from ..devsession import DevSession
+from ..session.devsession import DevSession
 from .config import Config
 from ..project.devproject import initialize_session_project_metadata
 

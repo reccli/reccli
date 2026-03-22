@@ -10,8 +10,8 @@ from datetime import datetime
 # Add package root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from reccli.summarizer import SessionSummarizer
-from reccli.tokens import TokenCounter
+from reccli.summarization.summarizer import SessionSummarizer
+from reccli.runtime.tokens import TokenCounter
 
 
 def test_temporal_extraction():

@@ -13,9 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from reccli.devsession import DevSession
-from reccli.retrieval import ContextRetriever, format_context_for_llm
-from reccli.summary_schema import create_summary_skeleton, create_decision_item
+from reccli.session.devsession import DevSession
+from reccli.retrieval.retrieval import ContextRetriever, format_context_for_llm
+from reccli.summarization.summary_schema import create_summary_skeleton, create_decision_item
 
 
 def create_mock_session():

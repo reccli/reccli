@@ -9,8 +9,8 @@ from pathlib import Path
 # Add package root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from reccli.devsession import DevSession
-from reccli.tokens import TokenCounter
+from reccli.session.devsession import DevSession
+from reccli.runtime.tokens import TokenCounter
 
 
 def test_token_counter():

@@ -11,17 +11,17 @@ from pathlib import Path
 # Add package root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from reccli.devsession import DevSession
-from reccli.summary_schema import (
+from reccli.session.devsession import DevSession
+from reccli.summarization.summary_schema import (
     create_summary_skeleton,
     create_decision_item,
     create_code_change_item,
     validate_summary_schema,
     add_audit_entry,
 )
-from reccli.summary_verification import SummaryVerifier
-from reccli.redaction import SecretRedactor
-from reccli.code_change_detector import CodeChangeDetector
+from reccli.summarization.summary_verification import SummaryVerifier
+from reccli.summarization.redaction import SecretRedactor
+from reccli.summarization.code_change_detector import CodeChangeDetector
 
 
 def test_summary_schema():

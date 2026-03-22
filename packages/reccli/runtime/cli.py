@@ -11,7 +11,7 @@ from typing import Optional
 
 from ..recording.recorder import watch_terminals
 from ..recording.wal_recorder import record_session_wal
-from ..devsession import DevSession
+from ..session.devsession import DevSession
 from .llm import chat_session, one_shot_query
 from .config import Config
 from ..retrieval.vector_index import (
@@ -615,7 +615,7 @@ def cmd_search(args):
         if getattr(args, 'episode', None):
             scope_filter['episode_id'] = args.episode
         elif args.session and not getattr(args, 'all_episodes', False):
-            from ..devsession import DevSession
+            from ..session.devsession import DevSession
             session_path = Path(args.session)
             if not session_path.is_absolute():
                 sessions_dir_cfg = config.get_sessions_dir()
@@ -863,7 +863,7 @@ def cmd_hydrate_streaming(args):
         return 1
 
     # Load session
-    from ..devsession import DevSession
+    from ..session.devsession import DevSession
     session = DevSession.load(session_path)
 
     # Load memory middleware
@@ -956,7 +956,7 @@ def cmd_hydrate_streaming(args):
 
 def cmd_compact(args):
     """Manually trigger preemptive compaction"""
-    from ..devsession import DevSession
+    from ..session.devsession import DevSession
     from ..summarization.preemptive_compaction import PreemptiveCompactor
     from .config import Config
 
@@ -1000,7 +1000,7 @@ def cmd_compact(args):
 
 def cmd_check_tokens(args):
     """Show token count and compaction status"""
-    from ..devsession import DevSession
+    from ..session.devsession import DevSession
     from ..summarization.preemptive_compaction import PreemptiveCompactor
     from .config import Config
 
@@ -1054,8 +1054,8 @@ def cmd_check_tokens(args):
 
 def cmd_checkpoint_add(args):
     """Add a checkpoint"""
-    from ..devsession import DevSession
-    from ..checkpoints import CheckpointManager
+    from ..session.devsession import DevSession
+    from ..session.checkpoints import CheckpointManager
     from .config import Config
 
     # Find session
@@ -1110,8 +1110,8 @@ def cmd_checkpoint_add(args):
 
 def cmd_checkpoint_list(args):
     """List all checkpoints"""
-    from ..devsession import DevSession
-    from ..checkpoints import CheckpointManager
+    from ..session.devsession import DevSession
+    from ..session.checkpoints import CheckpointManager
     from .config import Config
 
     # Find session
@@ -1173,8 +1173,8 @@ def cmd_checkpoint_list(args):
 
 def cmd_checkpoint_diff(args):
     """Show changes since checkpoint"""
-    from ..devsession import DevSession
-    from ..checkpoints import CheckpointManager, format_checkpoint_diff
+    from ..session.devsession import DevSession
+    from ..session.checkpoints import CheckpointManager, format_checkpoint_diff
     from .config import Config
 
     # Find session
@@ -1225,7 +1225,7 @@ def cmd_checkpoint_diff(args):
 
 
 def cmd_episode_new(args):
-    from ..devsession import DevSession
+    from ..session.devsession import DevSession
     from .config import Config
     if args.session:
         session_path = Path(args.session)

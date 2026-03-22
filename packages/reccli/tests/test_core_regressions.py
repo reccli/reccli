@@ -15,7 +15,7 @@ from copy import deepcopy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from reccli.devsession import DevSession
+from reccli.session.devsession import DevSession
 from reccli.project.devproject import DevProjectManager
 from reccli.summarization.preemptive_compaction import PreemptiveCompactor
 from reccli.retrieval.retrieval import ContextRetriever

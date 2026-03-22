@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from ..devsession import DevSession
+from ..session.devsession import DevSession
 from ..project.devproject import discover_project_root
 
 
