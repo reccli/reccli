@@ -23,6 +23,7 @@ recordings/
 # DevProject file (project overview - gitignored by default for privacy)
 # Remove this line to track .devproject for team-wide context sharing
 .devproject
+*.devproject
 
 # Config
 .reccli/

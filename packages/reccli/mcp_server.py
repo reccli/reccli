@@ -1,0 +1,514 @@
+"""
+RecCli MCP Server
+
+Exposes RecCli's temporal memory engine to any MCP-compatible agent
+(Claude Code, Cursor, Windsurf, etc.) as callable tools.
+
+Transport: stdio (stdout is the MCP channel — never print() to stdout)
+"""
+
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("reccli")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_root(working_directory: str) -> Optional[Path]:
+    from .project.devproject import discover_project_root
+    return discover_project_root(Path(working_directory).expanduser().resolve())
+
+
+def _sessions_dir(project_root: Path) -> Path:
+    d = project_root / "devsession"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _format_features(features: list) -> str:
+    if not features:
+        return "No features detected."
+    lines = []
+    for f in features:
+        title = f.get("title", "Untitled")
+        status = f.get("status", "unknown")
+        files = f.get("files_touched", [])
+        desc = f.get("description", "")
+        lines.append(f"### {title} [{status}]")
+        if desc:
+            lines.append(desc)
+        if files:
+            lines.append(f"Files: {', '.join(files[:15])}")
+            if len(files) > 15:
+                lines.append(f"  ... and {len(files) - 15} more")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_search_results(results: list) -> str:
+    if not results:
+        return "No results found."
+    lines = []
+    for i, r in enumerate(results, 1):
+        content = (r.get("content") or "")[:200]
+        score = r.get("final_score") or r.get("rrf_score") or r.get("cosine_score", 0)
+        result_id = r.get("result_id", "")
+        session = r.get("session_id", "")
+        badges = r.get("badges", [])
+        badge_str = f" [{', '.join(badges)}]" if badges else ""
+        lines.append(f"{i}. [{session}] (score: {score:.3f}){badge_str}")
+        lines.append(f"   {content}")
+        if result_id:
+            lines.append(f"   result_id: {result_id}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _latest_session_summary(sessions_dir: Path) -> Optional[str]:
+    """Load summary from the most recent .devsession file."""
+    session_files = sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not session_files:
+        return None
+    try:
+        from .session.devsession import DevSession
+        session = DevSession.load(session_files[0], verify_checksums=False)
+        if not session.summary:
+            return None
+        summary = session.summary
+        parts = []
+        if summary.get("overview"):
+            parts.append(f"**Last session overview**: {summary['overview']}")
+        for category, label in [
+            ("decisions", "Decisions"),
+            ("problems_solved", "Problems solved"),
+            ("open_issues", "Open issues"),
+            ("next_steps", "Next steps"),
+        ]:
+            items = summary.get(category, [])
+            if items:
+                parts.append(f"\n**{label}**:")
+                for item in items[:5]:
+                    text = (
+                        item.get("decision")
+                        or item.get("problem")
+                        or item.get("issue")
+                        or item.get("action")
+                        or str(item)
+                    )
+                    parts.append(f"- {text}")
+        return "\n".join(parts) if parts else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def load_project_context(working_directory: str) -> str:
+    """Load project context for session start. Call this at the beginning of every conversation.
+
+    Returns the project feature map, folder tree, and last session summary
+    so the agent has full project understanding without re-explanation.
+
+    Args:
+        working_directory: Path to the project or any subdirectory within it.
+    """
+    from .project.devproject import (
+        DevProjectManager,
+        generate_compact_tree,
+        resolve_devproject_path,
+    )
+
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return (
+            "No project root found (no .git or .devproject). "
+            "Run `project_init` first to initialize project memory."
+        )
+
+    manager = DevProjectManager(project_root)
+
+    # Load or create .devproject
+    devproject_path = resolve_devproject_path(project_root)
+    if not devproject_path.exists():
+        return (
+            f"No .devproject found at {project_root}. "
+            "Run `project_init` to scan the codebase and create one."
+        )
+
+    document = manager.load_or_create()
+
+    # Silent file path validation
+    try:
+        manager.validate_and_fix_file_paths()
+        document = manager.load_or_create()
+    except Exception:
+        pass
+
+    # Build context
+    sections = []
+
+    project_meta = document.get("project", {})
+    sections.append(f"# {project_meta.get('name', project_root.name)}")
+    sections.append(f"{project_meta.get('description', '')}")
+    sections.append("")
+
+    # Features
+    features = document.get("features", [])
+    if features:
+        sections.append("## Features")
+        sections.append(_format_features(features))
+
+    # Folder tree
+    try:
+        tree = generate_compact_tree(project_root)
+        sections.append("## Codebase Structure")
+        sections.append(f"```\n{tree}\n```")
+        sections.append("")
+    except Exception:
+        pass
+
+    # Last session summary
+    sessions_dir = _sessions_dir(project_root)
+    last_summary = _latest_session_summary(sessions_dir)
+    if last_summary:
+        sections.append("## Last Session")
+        sections.append(last_summary)
+        sections.append("")
+
+    # Pending proposals
+    proposals = [p for p in document.get("proposals", []) if p.get("status") == "pending"]
+    if proposals:
+        sections.append(f"## Pending Proposals ({len(proposals)})")
+        for p in proposals[:3]:
+            ops = [op.get("op", "?") for op in p.get("diff", [])]
+            sections.append(f"- {p['proposal_id']}: {', '.join(ops)}")
+        sections.append("")
+
+    return "\n".join(sections)
+
+
+@mcp.tool()
+def project_init(
+    working_directory: str,
+    description: str = "",
+    force: bool = False,
+) -> str:
+    """Initialize project memory from codebase scan.
+
+    Scans the codebase with Tree-sitter, clusters files into features
+    using an LLM, and creates a .devproject file.
+
+    Run once per project, or with force=True to re-scan.
+
+    Args:
+        working_directory: Path to the project root.
+        description: Optional 1-2 sentence project description to guide feature clustering.
+        force: Overwrite existing .devproject if True.
+    """
+    from .project.devproject import DevProjectManager, discover_project_root
+
+    root = Path(working_directory).expanduser().resolve()
+    project_root = discover_project_root(root) or root
+
+    manager = DevProjectManager(project_root)
+    project_context = description.strip() or manager.suggest_init_project_context()
+
+    try:
+        document = manager.initialize_from_codebase(
+            force=force,
+            project_context=project_context,
+        )
+    except ValueError as e:
+        return f"Cannot initialize: {e}. Use force=True to overwrite."
+    except RuntimeError as e:
+        return f"Initialization failed: {e}"
+
+    features = document.get("features", [])
+    lines = [
+        f"Initialized .devproject at {manager.path}",
+        f"Project: {document['project'].get('name', project_root.name)}",
+        f"Features detected: {len(features)}",
+        "",
+    ]
+    for f in features[:15]:
+        files_count = len(f.get("files_touched", []))
+        lines.append(f"- {f.get('feature_id')}: {f.get('title')} ({files_count} files)")
+    if len(features) > 15:
+        lines.append(f"... and {len(features) - 15} more")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def search_history(
+    query: str,
+    working_directory: str,
+    top_k: int = 5,
+) -> str:
+    """Search past session history for decisions, code changes, and problems solved.
+
+    Uses hybrid retrieval (dense embeddings + BM25 + reciprocal rank fusion)
+    across all .devsession files in the project.
+
+    Args:
+        query: Natural language search query (e.g. "what did we decide about auth?").
+        working_directory: Path to the project.
+        top_k: Number of results to return (default 5).
+    """
+    from .retrieval.search import search
+
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    sessions_dir = _sessions_dir(project_root)
+    try:
+        results = search(
+            sessions_dir=sessions_dir,
+            query=query,
+            top_k=top_k,
+        )
+    except Exception as e:
+        return f"Search failed: {e}"
+
+    if not results:
+        return "No results found. The project may not have any session history yet."
+
+    return _format_search_results(results)
+
+
+@mcp.tool()
+def expand_search_result(
+    result_id: str,
+    working_directory: str,
+    context_window: int = 5,
+) -> str:
+    """Expand a search result to show full conversation context around it.
+
+    Use this after search_history to drill into a specific result
+    and see the surrounding messages.
+
+    Args:
+        result_id: The result_id from a search_history result.
+        working_directory: Path to the project.
+        context_window: Number of messages before/after to include (default 5).
+    """
+    from .retrieval.search import expand_result
+
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    sessions_dir = _sessions_dir(project_root)
+    result = expand_result(sessions_dir, result_id, context_window)
+
+    if result is None:
+        return f"Could not expand result: {result_id}. Index may need rebuilding."
+
+    lines = []
+    if result.get("summary"):
+        lines.append("**Summary context:**")
+        lines.append(json.dumps(result["summary"], indent=2, ensure_ascii=False))
+        lines.append("")
+
+    context_messages = result.get("context_messages", [])
+    if context_messages:
+        lines.append("**Conversation context:**")
+        for msg in context_messages:
+            role = msg.get("role", "?")
+            content = (msg.get("content") or "")[:500]
+            lines.append(f"[{role}]: {content}")
+        lines.append("")
+
+    return "\n".join(lines) if lines else "No context available."
+
+
+@mcp.tool()
+def save_session_notes(
+    working_directory: str,
+    overview: str = "",
+    decisions: list[str] | None = None,
+    problems_solved: list[str] | None = None,
+    open_issues: list[str] | None = None,
+    next_steps: list[str] | None = None,
+    files_changed: list[str] | None = None,
+) -> str:
+    """Save key outcomes from this session to project memory.
+
+    Call this before ending a session where significant work was done.
+    The notes are persisted as a .devsession file and a .devproject
+    update is proposed from the evidence.
+
+    Args:
+        working_directory: Path to the project.
+        overview: 1-2 sentence summary of what was accomplished.
+        decisions: List of key technical decisions made.
+        problems_solved: List of problems that were solved.
+        open_issues: List of issues that remain open.
+        next_steps: List of planned next actions.
+        files_changed: List of file paths that were modified.
+    """
+    from .session.devsession import DevSession
+    from .project.devproject import (
+        DevProjectManager,
+        default_devsession_path,
+        resolve_session_project_root,
+    )
+
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    # Build a minimal conversation from the structured notes
+    conversation = []
+    timestamp = datetime.now().isoformat()
+
+    if overview:
+        conversation.append({
+            "role": "system",
+            "content": f"Session overview: {overview}",
+            "timestamp": timestamp,
+        })
+
+    for decision in (decisions or []):
+        conversation.append({
+            "role": "assistant",
+            "content": f"Decision: {decision}",
+            "timestamp": timestamp,
+        })
+
+    for problem in (problems_solved or []):
+        conversation.append({
+            "role": "assistant",
+            "content": f"Problem solved: {problem}",
+            "timestamp": timestamp,
+        })
+
+    for issue in (open_issues or []):
+        conversation.append({
+            "role": "assistant",
+            "content": f"Open issue: {issue}",
+            "timestamp": timestamp,
+        })
+
+    for step in (next_steps or []):
+        conversation.append({
+            "role": "assistant",
+            "content": f"Next step: {step}",
+            "timestamp": timestamp,
+        })
+
+    for file_path in (files_changed or []):
+        conversation.append({
+            "role": "tool",
+            "content": f"Updated file: {file_path}",
+            "timestamp": timestamp,
+        })
+
+    if not conversation:
+        return "Nothing to save. Provide at least one of: overview, decisions, problems_solved, open_issues, next_steps, or files_changed."
+
+    # Create and save .devsession
+    session = DevSession()
+    session.conversation = conversation
+    session.metadata["project_root"] = str(project_root)
+    session.metadata["working_directory"] = str(project_root)
+    session.metadata["source"] = "mcp_agent_reported"
+
+    # Build a basic summary directly from the structured input
+    session.summary = {
+        "schema_version": "1.1",
+        "model": "agent_reported",
+        "created_at": timestamp,
+        "overview": overview or "Agent-reported session notes.",
+        "decisions": [
+            {"id": f"dec_{i:03d}", "decision": d, "reasoning": "", "impact": "medium",
+             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, d in enumerate(decisions or [])
+        ],
+        "code_changes": [
+            {"id": f"chg_{i:03d}", "files": [f], "description": f"Modified {f}", "type": "feature",
+             "lines_added": None, "lines_removed": None, "source_of_truth": "agent_reported",
+             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, f in enumerate(files_changed or [])
+        ],
+        "problems_solved": [
+            {"id": f"prb_{i:03d}", "problem": p, "solution": "",
+             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, p in enumerate(problems_solved or [])
+        ],
+        "open_issues": [
+            {"id": f"iss_{i:03d}", "issue": issue, "severity": "medium",
+             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, issue in enumerate(open_issues or [])
+        ],
+        "next_steps": [
+            {"id": f"nxt_{i:03d}", "action": step, "priority": i + 1,
+             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, step in enumerate(next_steps or [])
+        ],
+        "causal_edges": [],
+        "audit_trail": [],
+    }
+
+    sessions_dir = _sessions_dir(project_root)
+    output_path = default_devsession_path(project_root)
+    session.save(output_path, skip_validation=True)
+
+    # Propose .devproject update from session evidence
+    proposal_msg = ""
+    try:
+        manager = DevProjectManager(project_root)
+        _, proposal = manager.generate_proposal_for_session(session, output_path)
+        if proposal:
+            proposal_msg = f"\nProposed .devproject update: {proposal['proposal_id']}"
+        else:
+            proposal_msg = "\n.devproject already in sync."
+    except Exception:
+        proposal_msg = "\n.devproject proposal skipped."
+
+    item_counts = []
+    if decisions:
+        item_counts.append(f"{len(decisions)} decisions")
+    if problems_solved:
+        item_counts.append(f"{len(problems_solved)} problems")
+    if files_changed:
+        item_counts.append(f"{len(files_changed)} file changes")
+    if open_issues:
+        item_counts.append(f"{len(open_issues)} open issues")
+    if next_steps:
+        item_counts.append(f"{len(next_steps)} next steps")
+
+    return (
+        f"Session saved: {output_path.name}\n"
+        f"Contents: {', '.join(item_counts) if item_counts else 'overview only'}"
+        f"{proposal_msg}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,10 +1,9 @@
 """
-Preemptive Compaction for RecCli Phase 7
+Preemptive Compaction
 
-Auto-compact at 190K tokens (before Claude Code's 200K limit)
-Replaces live context with intelligent summary + recent + relevant spans.
-
-The breakthrough: Beat Claude Code to compaction, use OUR custom prompt.
+Auto-compact when approaching the host agent's context limit.
+Replaces live context with intelligent summary + recent + relevant spans,
+using a custom summarization prompt instead of the host's default compaction.
 """
 
 from typing import Dict, List, Optional, Tuple, Any

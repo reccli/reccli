@@ -17,5 +17,8 @@ sentence-transformers>=2.2.0
 tree-sitter
 tree-sitter-language-pack
 
+# MCP server
+mcp[cli]>=1.20.0
+
 # Development / validation
 pytest>=7.4.0
