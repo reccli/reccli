@@ -35,6 +35,14 @@ def main():
 
     if hook_name == "SessionStart":
         session_recorder.start_session(session_id, cwd)
+        # Auto-inject project context if in a project with .devproject
+        try:
+            from .context_injector import get_session_start_context
+            context = get_session_start_context(cwd)
+            if context:
+                print(context)
+        except Exception:
+            pass
 
     elif hook_name == "UserPromptSubmit":
         prompt = event.get("prompt", "")
@@ -56,6 +64,17 @@ def main():
                 event.get("tool_response"),
                 cwd,
             )
+
+    elif hook_name == "PostCompact":
+        # Re-inject .devproject context after Claude Code compacts its context window.
+        # Stdout from this hook gets added to Claude's context.
+        try:
+            from .context_injector import get_post_compact_context
+            context = get_post_compact_context(cwd)
+            if context:
+                print(context)
+        except Exception:
+            pass
 
     elif hook_name == "SessionEnd":
         session_recorder.end_session(session_id, cwd)

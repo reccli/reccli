@@ -747,8 +747,38 @@ class DevSession:
         session_str = json.dumps(self.conversation, sort_keys=True)
         session_hash = hashlib.blake2b(session_str.encode(), digest_size=16).hexdigest()
 
+        # Auto-create LLM client: try Anthropic first, fall back to OpenAI
+        model = None
+        if llm_client is None:
+            from ..runtime.config import Config
+            config = Config()
+
+            # Try Anthropic
+            try:
+                import anthropic
+                api_key = config.get_api_key("anthropic")
+                if api_key:
+                    llm_client = anthropic.Anthropic(api_key=api_key)
+                    model = "claude-sonnet-4-6"
+            except Exception:
+                pass
+
+            # Fall back to OpenAI
+            if llm_client is None:
+                try:
+                    from openai import OpenAI
+                    api_key = config.get_api_key("openai")
+                    if api_key:
+                        llm_client = OpenAI(api_key=api_key)
+                        model = "gpt-5.4"
+                except Exception:
+                    pass
+
         # Create summarizer
-        summarizer = SessionSummarizer(llm_client=llm_client)
+        kwargs = {"llm_client": llm_client}
+        if model:
+            kwargs["model"] = model
+        summarizer = SessionSummarizer(**kwargs)
 
         # Generate summary
         print(f"📝 Generating summary for {len(self.conversation)} messages...")
@@ -839,11 +869,103 @@ class DevSession:
             msg['embed_ts'] = embed_ts
             msg['text_hash'] = provider.compute_text_hash(msg['content'])
 
+        # Embed spans
+        span_count = self._embed_spans(provider, embed_ts, force)
+
+        # Embed summary items
+        summary_count = self._embed_summary_items(provider, embed_ts, force)
+
         requested_mode = storage_mode or self.embedding_storage.get("mode", "inline")
         if requested_mode == "external" and self.path is not None:
             self.externalize_message_embeddings()
 
-        print(f"✓ Generated {len(embeddings)} embeddings ({provider.dimensions}D)")
+        total = len(embeddings) + span_count + summary_count
+        print(f"✓ Generated {total} embeddings ({provider.dimensions}D): {len(embeddings)} messages, {span_count} spans, {summary_count} summary items")
+        return total
+
+    def _embed_spans(self, provider, embed_ts: str, force: bool) -> int:
+        """Embed semantic spans. Text = topic + kind + message range context."""
+        if not self.spans:
+            return 0
+
+        to_embed = []
+        for span in self.spans:
+            if not force and 'embedding' in span:
+                continue
+            topic = span.get("topic", "")
+            kind = span.get("kind", "")
+            if not topic:
+                continue
+            # Compose text: topic + kind + a slice of the conversation it covers
+            text = f"[{kind}] {topic}"
+            start = span.get("start_index", 0)
+            end = span.get("end_index", start + 1)
+            msgs = self.conversation[start:min(end, start + 5)]
+            for msg in msgs:
+                role = msg.get("role", "")
+                content = (msg.get("content") or "")[:150]
+                text += f"\n{role}: {content}"
+            to_embed.append((span, text))
+
+        if not to_embed:
+            return 0
+
+        texts = [t for _, t in to_embed]
+        try:
+            embeddings = provider.embed_batch(texts)
+        except Exception:
+            return 0
+
+        for (span, text), embedding in zip(to_embed, embeddings):
+            span['embedding'] = embedding
+            span['embed_model'] = provider.model_name
+            span['embed_provider'] = provider.provider_name
+            span['embed_dim'] = provider.dimensions
+            span['embed_ts'] = embed_ts
+            span['text_hash'] = provider.compute_text_hash(text)
+
+        return len(embeddings)
+
+    def _embed_summary_items(self, provider, embed_ts: str, force: bool) -> int:
+        """Embed summary items (decisions, code changes, problems, issues, next steps)."""
+        if not self.summary:
+            return 0
+
+        TEXT_COMPOSERS = {
+            "decisions": lambda item: f"Decision: {item.get('decision', '')}. Reasoning: {item.get('reasoning', '')}",
+            "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(item.get('files') or [])}",
+            "problems_solved": lambda item: f"Problem: {item.get('problem', '')}. Solution: {item.get('solution', '')}",
+            "open_issues": lambda item: f"Issue ({item.get('severity', 'medium')}): {item.get('issue', '')}",
+            "next_steps": lambda item: f"Next step (priority {item.get('priority', '?')}): {item.get('action', '')}",
+        }
+
+        to_embed = []
+        for category, composer in TEXT_COMPOSERS.items():
+            for item in self.summary.get(category, []):
+                if not force and 'embedding' in item:
+                    continue
+                text = composer(item)
+                if len(text.strip()) < 10:
+                    continue
+                to_embed.append((item, text))
+
+        if not to_embed:
+            return 0
+
+        texts = [t for _, t in to_embed]
+        try:
+            embeddings = provider.embed_batch(texts)
+        except Exception:
+            return 0
+
+        for (item, text), embedding in zip(to_embed, embeddings):
+            item['embedding'] = embedding
+            item['embed_model'] = provider.model_name
+            item['embed_provider'] = provider.provider_name
+            item['embed_dim'] = provider.dimensions
+            item['embed_ts'] = embed_ts
+            item['text_hash'] = provider.compute_text_hash(text)
+
         return len(embeddings)
 
     def externalize_message_embeddings(self, sidecar_path: Optional[Path] = None) -> Optional[Path]:

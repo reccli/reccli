@@ -306,6 +306,110 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
             index['unified_vectors'].append(vector_entry)
             message_count += 1
 
+        # Index spans as vectors
+        for spn_idx, span in enumerate(session.spans):
+            topic = span.get("topic", "")
+            if not topic:
+                continue
+            kind = span.get("kind", "")
+            spn_id = span.get("id", f"spn_{spn_idx:03d}")
+            t_first = span.get("t_first") or ""
+            t_last = span.get("t_last") or ""
+
+            span_entry = {
+                'id': f"{session_id}_{spn_id}",
+                'session': session_id,
+                'message_id': spn_id,
+                'message_index': span.get("start_index", 0),
+                'timestamp': t_first or (session.metadata.get('created_at', '') if session.metadata else ''),
+                'section': session.metadata.get('section', 'default') if session.metadata else 'default',
+                'episode_id': span.get("episode_id"),
+                't_start': t_first,
+                't_end': t_last,
+                't_day': t_first[:10] if len(t_first) >= 10 else '',
+                't_hour': t_first[:13] if len(t_first) >= 13 else '',
+                'role': 'span',
+                'kind': kind.split("_")[0] if kind else 'note',
+                'content_preview': f"[{kind}] {topic}",
+                'text_hash': span.get('text_hash', compute_text_hash(f"[{kind}] {topic}")),
+                'metadata': {
+                    'span_id': spn_id,
+                    'start_index': span.get("start_index"),
+                    'end_index': span.get("end_index"),
+                    'tokens': count_tokens(topic),
+                }
+            }
+            if 'embedding' in span:
+                span_entry['embedding'] = span['embedding']
+                span_entry['embed_model'] = span.get('embed_model', embed_model)
+                span_entry['embed_provider'] = span.get('embed_provider', embed_provider)
+                span_entry['embed_dim'] = span.get('embed_dim', embed_dim)
+                span_entry['embed_ts'] = span.get('embed_ts', '')
+            index['unified_vectors'].append(span_entry)
+            message_count += 1
+
+        # Index summary items as vectors
+        if session.summary:
+            TEXT_COMPOSERS = {
+                "decisions": lambda item: f"Decision: {item.get('decision', '')}. Reasoning: {item.get('reasoning', '')}",
+                "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(item.get('files') or [])}",
+                "problems_solved": lambda item: f"Problem: {item.get('problem', '')}. Solution: {item.get('solution', '')}",
+                "open_issues": lambda item: f"Issue ({item.get('severity', 'medium')}): {item.get('issue', '')}",
+                "next_steps": lambda item: f"Next step (priority {item.get('priority', '?')}): {item.get('action', '')}",
+            }
+            KIND_MAP = {
+                "decisions": "decision",
+                "code_changes": "code",
+                "problems_solved": "problem",
+                "open_issues": "issue",
+                "next_steps": "next_step",
+            }
+            for category, composer in TEXT_COMPOSERS.items():
+                for item in session.summary.get(category, []):
+                    item_id = item.get("id", "")
+                    if not item_id:
+                        continue
+                    text = composer(item)
+                    if len(text.strip()) < 10:
+                        continue
+                    mr = item.get("message_range", {})
+                    t_first = item.get("t_first") or ""
+                    t_last = item.get("t_last", "")
+
+                    summary_entry = {
+                        'id': f"{session_id}_{item_id}",
+                        'session': session_id,
+                        'message_id': item_id,
+                        'message_index': mr.get("start_index", 0),
+                        'timestamp': t_first or (session.metadata.get('created_at', '') if session.metadata else ''),
+                        'section': session.metadata.get('section', 'default') if session.metadata else 'default',
+                        'episode_id': None,
+                        't_start': t_first,
+                        't_end': t_last,
+                        't_day': t_first[:10] if len(t_first) >= 10 else '',
+                        't_hour': t_first[:13] if len(t_first) >= 13 else '',
+                        'role': 'summary',
+                        'kind': KIND_MAP.get(category, 'note'),
+                        'content_preview': text[:200],
+                        'text_hash': item.get('text_hash', compute_text_hash(text)),
+                        'metadata': {
+                            'summary_item_id': item_id,
+                            'summary_category': category,
+                            'referenced_messages': item.get('references', []),
+                            'span_ids': item.get('span_ids', []),
+                            'confidence': item.get('confidence', 'medium'),
+                            'tokens': count_tokens(text),
+                        }
+                    }
+                    if 'embedding' in item:
+                        summary_entry['embedding'] = item['embedding']
+                        summary_entry['embed_model'] = item.get('embed_model', embed_model)
+                        summary_entry['embed_provider'] = item.get('embed_provider', embed_provider)
+                        summary_entry['embed_dim'] = item.get('embed_dim', embed_dim)
+                        summary_entry['embed_ts'] = item.get('embed_ts', '')
+                    index['unified_vectors'].append(summary_entry)
+                    message_count += 1
+
         # Get session duration
         duration = 0
         if hasattr(session, 'get_duration'):
@@ -462,7 +566,7 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
     for msg_idx, msg in enumerate(session.conversation):
         if msg.get("deleted"):
             continue
-        if 'embedding' not in msg:
+        if not msg.get("content"):
             continue
 
         # Classify message type
@@ -477,8 +581,10 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
         t_day = timestamp[:10] if len(timestamp) >= 10 else ''
         t_hour = timestamp[:13] if len(timestamp) >= 13 else ''
 
-        # Add to unified index
-        index['unified_vectors'].append({
+        has_embedding = 'embedding' in msg
+
+        # Build vector entry (always indexed for BM25; embedding optional for dense search)
+        vector_entry = {
             'id': f"{session_id}_{get_message_id(msg, msg_idx)}",
             'session': session_id,
             'message_id': get_message_id(msg, msg_idx),
@@ -500,21 +606,110 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
             'content_preview': msg['content'][:200] if len(msg['content']) > 200 else msg['content'],
             'text_hash': msg.get('text_hash', compute_text_hash(msg['content'])),
 
-            # Embedding
-            'embedding': msg['embedding'],
-            'embed_model': msg.get('embed_model', embed_model),
-            'embed_provider': msg.get('embed_provider', embed_provider),
-            'embed_dim': msg.get('embed_dim', embed_dim),
-            'embed_ts': msg.get('embed_ts', ''),
-
             # Metadata
             'metadata': {
                 'summary_ref': find_summary_ref(msg, session.summary),
                 'tokens': count_tokens(msg['content'])
             }
-        })
+        }
+
+        # Embedding fields (only if present)
+        if has_embedding:
+            vector_entry['embedding'] = msg['embedding']
+            vector_entry['embed_model'] = msg.get('embed_model', embed_model)
+            vector_entry['embed_provider'] = msg.get('embed_provider', embed_provider)
+            vector_entry['embed_dim'] = msg.get('embed_dim', embed_dim)
+            vector_entry['embed_ts'] = msg.get('embed_ts', '')
+
+        index['unified_vectors'].append(vector_entry)
 
         message_count += 1
+
+    # Index spans
+    for spn_idx, span in enumerate(session.spans):
+        topic = span.get("topic", "")
+        if not topic:
+            continue
+        kind = span.get("kind", "")
+        spn_id = span.get("id", f"spn_{spn_idx:03d}")
+        t_first = span.get("t_first") or ""
+        span_entry = {
+            'id': f"{session_id}_{spn_id}",
+            'session': session_id,
+            'message_id': spn_id,
+            'message_index': span.get("start_index", 0),
+            'timestamp': t_first or (session.metadata.get('created_at', '') if session.metadata else ''),
+            'section': session.metadata.get('section', 'default') if session.metadata else 'default',
+            'episode_id': span.get("episode_id"),
+            't_start': t_first,
+            't_end': span.get("t_last", ""),
+            't_day': t_first[:10] if len(t_first) >= 10 else '',
+            't_hour': t_first[:13] if len(t_first) >= 13 else '',
+            'role': 'span',
+            'kind': kind.split("_")[0] if kind else 'note',
+            'content_preview': f"[{kind}] {topic}",
+            'text_hash': span.get('text_hash', compute_text_hash(f"[{kind}] {topic}")),
+            'metadata': {'span_id': spn_id, 'tokens': count_tokens(topic)}
+        }
+        if 'embedding' in span:
+            span_entry['embedding'] = span['embedding']
+            span_entry['embed_model'] = span.get('embed_model', embed_model)
+            span_entry['embed_provider'] = span.get('embed_provider', embed_provider)
+            span_entry['embed_dim'] = span.get('embed_dim', embed_dim)
+            span_entry['embed_ts'] = span.get('embed_ts', '')
+        index['unified_vectors'].append(span_entry)
+        message_count += 1
+
+    # Index summary items
+    if session.summary:
+        _TEXT_COMPOSERS = {
+            "decisions": lambda item: f"Decision: {item.get('decision', '')}. Reasoning: {item.get('reasoning', '')}",
+            "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(item.get('files') or [])}",
+            "problems_solved": lambda item: f"Problem: {item.get('problem', '')}. Solution: {item.get('solution', '')}",
+            "open_issues": lambda item: f"Issue ({item.get('severity', 'medium')}): {item.get('issue', '')}",
+            "next_steps": lambda item: f"Next step (priority {item.get('priority', '?')}): {item.get('action', '')}",
+        }
+        _KIND_MAP = {"decisions": "decision", "code_changes": "code", "problems_solved": "problem", "open_issues": "issue", "next_steps": "next_step"}
+        for category, composer in _TEXT_COMPOSERS.items():
+            for item in session.summary.get(category, []):
+                item_id = item.get("id", "")
+                if not item_id:
+                    continue
+                text = composer(item)
+                if len(text.strip()) < 10:
+                    continue
+                t_first = item.get("t_first", "")
+                summary_entry = {
+                    'id': f"{session_id}_{item_id}",
+                    'session': session_id,
+                    'message_id': item_id,
+                    'message_index': item.get("message_range", {}).get("start_index", 0),
+                    'timestamp': t_first or (session.metadata.get('created_at', '') if session.metadata else ''),
+                    'section': session.metadata.get('section', 'default') if session.metadata else 'default',
+                    'episode_id': None,
+                    't_start': t_first,
+                    't_end': item.get("t_last", ""),
+                    't_day': t_first[:10] if len(t_first) >= 10 else '',
+                    't_hour': t_first[:13] if len(t_first) >= 13 else '',
+                    'role': 'summary',
+                    'kind': _KIND_MAP.get(category, 'note'),
+                    'content_preview': text[:200],
+                    'text_hash': item.get('text_hash', compute_text_hash(text)),
+                    'metadata': {
+                        'summary_item_id': item_id,
+                        'summary_category': category,
+                        'confidence': item.get('confidence', 'medium'),
+                        'tokens': count_tokens(text),
+                    }
+                }
+                if 'embedding' in item:
+                    summary_entry['embedding'] = item['embedding']
+                    summary_entry['embed_model'] = item.get('embed_model', embed_model)
+                    summary_entry['embed_provider'] = item.get('embed_provider', embed_provider)
+                    summary_entry['embed_dim'] = item.get('embed_dim', embed_dim)
+                    summary_entry['embed_ts'] = item.get('embed_ts', '')
+                index['unified_vectors'].append(summary_entry)
+                message_count += 1
 
     # Get session duration
     duration = 0

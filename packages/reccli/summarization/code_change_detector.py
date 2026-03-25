@@ -256,7 +256,7 @@ class CodeChangeDetector:
             aug_change = change.copy()
 
             # Try to find matching ground truth
-            for file_path in change.get("files", []):
+            for file_path in (change.get("files") or []):
                 if file_path in ground_truth_analysis["files_changed"]:
                     # Found ground truth - augment with real data
                     info = ground_truth_analysis["files_changed"][file_path]

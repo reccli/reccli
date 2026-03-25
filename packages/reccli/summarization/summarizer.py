@@ -217,9 +217,9 @@ Rules:
     def __init__(
         self,
         llm_client = None,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = "claude-sonnet-4-6",
         use_two_stage: bool = False,
-        span_detection_model: str = "claude-3-5-haiku-20241022",
+        span_detection_model: str = "claude-haiku-4-5",
         auto_switch_two_stage: bool = False,
         reduction_threshold: float = 0.5  # If Stage-1 keeps >50% of tokens, use single-stage instead
     ):
@@ -264,7 +264,7 @@ Rules:
             content = msg.get("content", "")
 
             if include_indices:
-                lines.append(f"{msg_id} (index: {base_index + i + 1}, {role}): {content}")
+                lines.append(f"{msg_id} (0-based index: {base_index + i}, {role}): {content}")
             else:
                 lines.append(f"{msg_id} ({role}): {content}")
 
@@ -286,7 +286,6 @@ Rules:
             List of span dicts
         """
         if not self.llm_client:
-            # Fallback: Create dummy spans covering whole conversation
             return [{
                 "category": "general",
                 "start": "msg_001",
@@ -296,23 +295,59 @@ Rules:
                 "topic": "full session"
             }]
 
-        # Format conversation
         formatted = self.format_conversation_for_llm(conversation)
 
-        # Call cheap model for span detection
-        # (Implementation depends on LLM client - anthropic vs openai)
-        # For now, return placeholder
-        # TODO: Implement actual LLM call
+        # Resolve span detection model
+        span_model = self.span_detection_model
+        if hasattr(self.llm_client, "messages"):
+            anthropic_map = {
+                "claude-haiku": "claude-haiku-4-5-20251001",
+            }
+            span_model = anthropic_map.get(span_model, span_model)
+        elif hasattr(self.llm_client, "chat"):
+            openai_map = {
+                "gpt5-mini": "gpt-5-mini",
+            }
+            span_model = openai_map.get(span_model, span_model)
 
-        # Placeholder: return whole conversation as one span
-        return [{
-            "category": "general",
-            "start": "msg_001",
-            "end": f"msg_{len(conversation):03d}",
-            "start_index": 0,
-            "end_index": len(conversation),
-            "topic": "full session"
-        }]
+        try:
+            if hasattr(self.llm_client, "messages"):
+                response = self.llm_client.messages.create(
+                    model=span_model,
+                    max_tokens=max_tokens,
+                    temperature=0,
+                    system=self.SPAN_DETECTION_PROMPT,
+                    messages=[{"role": "user", "content": formatted}],
+                )
+                raw_text = response.content[0].text
+            elif hasattr(self.llm_client, "chat"):
+                response = self.llm_client.chat.completions.create(
+                    model=span_model,
+                    max_tokens=max_tokens,
+                    temperature=0,
+                    messages=[
+                        {"role": "system", "content": self.SPAN_DETECTION_PROMPT},
+                        {"role": "user", "content": formatted},
+                    ],
+                )
+                raw_text = response.choices[0].message.content
+            else:
+                raw_text = "[]"
+
+            spans = self._extract_json_payload(raw_text)
+            if isinstance(spans, list):
+                return spans
+            return spans.get("spans", [spans]) if isinstance(spans, dict) else []
+        except Exception as e:
+            print(f"⚠️  Span detection failed: {e}")
+            return [{
+                "category": "general",
+                "start": "msg_001",
+                "end": f"msg_{len(conversation):03d}",
+                "start_index": 0,
+                "end_index": len(conversation),
+                "topic": "full session"
+            }]
 
     def extract_span_messages(
         self,
@@ -575,7 +610,6 @@ Rules:
             Summary dict
         """
         if not self.llm_client:
-            # Fallback: Create minimal summary
             return {
                 "overview": "Session summarized without LLM",
                 "decisions": [],
@@ -585,19 +619,86 @@ Rules:
                 "next_steps": []
             }
 
-        # For each span category, extract relevant messages and summarize
-        # (Implementation depends on LLM client)
-        # TODO: Implement actual LLM call
+        formatted = self.format_conversation_for_llm(conversation)
+        span_context = "\n".join(
+            f"- [{s.get('category', 'general')}] messages {s.get('start', '?')}-{s.get('end', '?')}: {s.get('topic', '')}"
+            for s in spans
+        )
 
-        # Placeholder: return empty summary
-        return {
-            "overview": "Placeholder summary",
-            "decisions": [],
-            "code_changes": [],
-            "problems_solved": [],
-            "open_issues": [],
-            "next_steps": []
-        }
+        user_message = (
+            f"Here are the discussion spans detected:\n{span_context}\n\n"
+            f"Here is the full conversation:\n{formatted}"
+        )
+
+        model = self._resolve_model_name_for_client()
+
+        try:
+            if hasattr(self.llm_client, "messages"):
+                # Anthropic client
+                response = self.llm_client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=0,
+                    system=self.REASONED_SUMMARY_PROMPT,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                raw_text = response.content[0].text
+            elif hasattr(self.llm_client, "chat"):
+                # OpenAI client
+                response = self.llm_client.chat.completions.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=0,
+                    messages=[
+                        {"role": "system", "content": self.REASONED_SUMMARY_PROMPT},
+                        {"role": "user", "content": user_message},
+                    ],
+                )
+                raw_text = response.choices[0].message.content
+            else:
+                raw_text = "{}"
+
+            return self._extract_json_payload(raw_text)
+        except Exception as e:
+            print(f"⚠️  LLM summarization failed: {e}")
+            return {
+                "overview": f"Summarization failed: {e}",
+                "decisions": [],
+                "code_changes": [],
+                "problems_solved": [],
+                "open_issues": [],
+                "next_steps": []
+            }
+
+    def _normalize_range_indices(self, llm_summary: Dict[str, Any], conversation_len: int) -> None:
+        """Fix common LLM mistakes: end_index should be exclusive (0-based).
+
+        LLMs consistently return end_index as inclusive (the index OF the last message).
+        The spec requires exclusive (one past the last message), matching Python slice semantics.
+        """
+        categories = ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]
+        for cat in categories:
+            for item in llm_summary.get(cat, []):
+                mr = item.get("message_range")
+                if not mr or not isinstance(mr, dict):
+                    continue
+                start_idx = mr.get("start_index")
+                end_idx = mr.get("end_index")
+                end_msg = mr.get("end")
+                if isinstance(end_idx, int) and isinstance(start_idx, int):
+                    # If end_index == start_index for a single-message range, bump to exclusive
+                    # If end_index looks inclusive (matches msg number - 1), bump by 1
+                    if end_msg and isinstance(end_msg, str):
+                        try:
+                            msg_num = int(end_msg.split("_")[1])
+                            expected_exclusive = msg_num  # msg_004 → exclusive end_index=4
+                            if end_idx == expected_exclusive - 1:
+                                mr["end_index"] = expected_exclusive
+                        except (IndexError, ValueError):
+                            pass
+                    # Clamp to conversation length
+                    if mr["end_index"] > conversation_len:
+                        mr["end_index"] = conversation_len
 
     def _message_id_for_index(self, index: int) -> str:
         return f"msg_{index + 1:03d}"
@@ -789,6 +890,9 @@ Rules:
             }]
             llm_summary = self.stage2_generate_summary(working, spans)
 
+        # Normalize LLM output: end_index must be exclusive (LLMs often return inclusive)
+        self._normalize_range_indices(llm_summary, len(working))
+
         if llm_summary.get("code_changes"):
             llm_summary["code_changes"] = detector.augment_llm_code_changes(
                 llm_summary["code_changes"],
@@ -815,20 +919,19 @@ Rules:
     def _resolve_model_name_for_client(self) -> str:
         """Normalize shorthand model names to provider-specific runtime IDs."""
         anthropic_map = {
-            "claude": "claude-sonnet-4-5-20250929",
-            "claude-sonnet": "claude-sonnet-4-5-20250929",
-            "claude-haiku": "claude-haiku-4-5-20251001",
-            "claude-opus": "claude-opus-4-1-20250805",
+            "claude": "claude-sonnet-4-6",
+            "claude-sonnet": "claude-sonnet-4-6",
+            "claude-haiku": "claude-haiku-4-5",
+            "claude-opus": "claude-opus-4-6",
         }
         openai_map = {
-            "gpt5": "gpt-5",
-            "gpt5-chat": "gpt-5-chat-latest",
-            "gpt5-mini": "gpt-5-mini",
-            "gpt5-nano": "gpt-5-nano",
-            "gpt5-codex": "gpt-5-codex",
-            "gpt4": "gpt-4-turbo",
+            "gpt-5.4": "gpt-5.4",
+            "gpt-5.4-mini": "gpt-5.4-mini",
+            "gpt-5.4-nano": "gpt-5.4-nano",
+            "gpt5": "gpt-5.4",
+            "gpt5-mini": "gpt-5.4-mini",
+            "gpt5-nano": "gpt-5.4-nano",
             "gpt4o": "gpt-4o",
-            "gpt4-turbo": "gpt-4-turbo",
         }
         if hasattr(self.llm_client, "messages"):
             return anthropic_map.get(self.model, self.model)

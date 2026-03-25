@@ -54,7 +54,17 @@ class Config:
         self.save()
 
     def get_api_key(self, provider: str) -> Optional[str]:
-        """Get API key for provider"""
+        """Get API key for provider. Checks environment variables first, then config file."""
+        import os
+        env_map = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+        }
+        env_var = env_map.get(provider)
+        if env_var:
+            env_val = os.environ.get(env_var)
+            if env_val:
+                return env_val
         return self.data['api_keys'].get(provider)
 
     def set_default_model(self, model: str):

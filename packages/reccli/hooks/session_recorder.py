@@ -11,6 +11,8 @@ WAL format (one JSON object per line):
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -265,4 +267,34 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     live_snapshot = _devsession_dir(project_root) / f".live_{session_id}.devsession"
     live_snapshot.unlink(missing_ok=True)
 
+    # Spawn background summarization (LLM call — too slow for hook timeout)
+    if len(conversation) >= 4:  # Skip trivial sessions
+        _spawn_background_summarize(output_path)
+
     return output_path
+
+
+def _spawn_background_summarize(session_path: Path) -> None:
+    """Spawn a detached process to summarize + embed + index a finalized session."""
+    script = (
+        "import sys, json\n"
+        "from pathlib import Path\n"
+        "path = Path(sys.argv[1])\n"
+        "from reccli.session.devsession import DevSession\n"
+        "s = DevSession.load(path)\n"
+        "if not s.summary and s.conversation:\n"
+        "    s.generate_summary()\n"
+        "    s.generate_embeddings()\n"
+        "    s.save(path)\n"
+        "    from reccli.retrieval.vector_index import update_index_with_new_session\n"
+        "    update_index_with_new_session(path.parent, path, verbose=False)\n"
+    )
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(session_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # Fully detached from parent
+        )
+    except Exception:
+        pass  # Best-effort — search still works via BM25 without summary

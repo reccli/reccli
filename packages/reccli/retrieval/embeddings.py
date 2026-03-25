@@ -140,16 +140,16 @@ class LocalEmbeddings(EmbeddingProvider):
     """
     Local sentence-transformers embeddings (optional)
 
-    Models:
-    - all-MiniLM-L6-v2: 384-dim, fast, lightweight
-    - all-mpnet-base-v2: 768-dim, better quality
-    - bge-small-en-v1.5: 384-dim, good quality
+    Models (recommended order):
+    - nomic-ai/nomic-embed-text-v1.5: 768-dim, strong quality, Matryoshka support
+    - BAAI/bge-base-en-v1.5: 768-dim, strong quality
+    - BAAI/bge-small-en-v1.5: 384-dim, good quality, fast
 
-    Pros: Free, offline, fast inference
-    Cons: Lower quality than OpenAI, requires ~500MB download
+    Pros: Free, offline, no API keys needed
+    Cons: First load downloads model (~500MB), slower than API on large batches
     """
 
-    def __init__(self, model: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(self, model: str = "nomic-ai/nomic-embed-text-v1.5"):
         """
         Initialize local embeddings
 
@@ -164,7 +164,7 @@ class LocalEmbeddings(EmbeddingProvider):
             )
 
         print(f"Loading local embedding model: {model}...")
-        self.model = SentenceTransformer(model)
+        self.model = SentenceTransformer(model, trust_remote_code=True)
         self._model_name = model
         self._dimensions = self.model.get_sentence_embedding_dimension()
         print(f"✓ Model loaded ({self._dimensions} dimensions)")
@@ -236,7 +236,7 @@ def get_embedding_provider(config: Optional[Dict] = None) -> EmbeddingProvider:
         # Use local embeddings
         provider = get_embedding_provider({
             'provider': 'local',
-            'model': 'sentence-transformers/all-MiniLM-L6-v2'
+            'model': 'nomic-ai/nomic-embed-text-v1.5'
         })
     """
     if config is None:
@@ -261,7 +261,7 @@ def get_embedding_provider(config: Optional[Dict] = None) -> EmbeddingProvider:
         # No API key — fall back to local
         try:
             return LocalEmbeddings(
-                model=config.get('model', 'sentence-transformers/all-MiniLM-L6-v2')
+                model=config.get('model', 'nomic-ai/nomic-embed-text-v1.5')
             )
         except RuntimeError:
             raise RuntimeError(
@@ -270,7 +270,7 @@ def get_embedding_provider(config: Optional[Dict] = None) -> EmbeddingProvider:
             )
     elif provider == 'local':
         return LocalEmbeddings(
-            model=config.get('model', 'sentence-transformers/all-MiniLM-L6-v2')
+            model=config.get('model', 'nomic-ai/nomic-embed-text-v1.5')
         )
     else:
         raise ValueError(f"Unknown embedding provider: {provider}")

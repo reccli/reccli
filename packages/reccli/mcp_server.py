@@ -258,10 +258,12 @@ def project_init(
 ) -> str:
     """Initialize project memory from codebase scan.
 
-    Scans the codebase with Tree-sitter, clusters files into features
-    using an LLM, and creates a .devproject file.
+    Scans the codebase with Tree-sitter, clusters files into features,
+    and creates a .devproject file.
 
-    Run once per project, or with force=True to re-scan.
+    If an Anthropic API key is available, clustering runs automatically via LLM.
+    If not, returns the scan results and clustering prompt for you (Claude) to
+    process in-conversation. Call project_apply_clustering with your JSON result.
 
     Args:
         working_directory: Path to the project root.
@@ -276,6 +278,7 @@ def project_init(
     manager = DevProjectManager(project_root)
     project_context = description.strip() or manager.suggest_init_project_context()
 
+    # Try the LLM path first
     try:
         document = manager.initialize_from_codebase(
             force=force,
@@ -283,13 +286,118 @@ def project_init(
         )
     except ValueError as e:
         return f"Cannot initialize: {e}. Use force=True to overwrite."
-    except RuntimeError as e:
-        return f"Initialization failed: {e}"
+    except RuntimeError as llm_error:
+        # LLM not available — fall back to scan + prompt for Claude
+        return _project_scan_for_claude(manager, project_context, force, str(llm_error))
+
+    return _format_init_result(manager, document)
+
+
+@mcp.tool()
+def project_apply_clustering(
+    working_directory: str,
+    clustering_json: str,
+    force: bool = False,
+) -> str:
+    """Apply feature clustering results from your in-conversation analysis.
+
+    Call this after project_init returns a scan+prompt (when no LLM API key
+    is configured). Pass your clustering JSON as the clustering_json argument.
+
+    Args:
+        working_directory: Path to the project root.
+        clustering_json: JSON string with your clustering result (project, features, hub_files, etc.).
+        force: Overwrite existing .devproject if True.
+    """
+    from .project.devproject import DevProjectManager, discover_project_root
+
+    root = Path(working_directory).expanduser().resolve()
+    project_root = discover_project_root(root) or root
+
+    manager = DevProjectManager(project_root)
+
+    if manager.path.exists() and not force:
+        return f"Cannot apply: .devproject already exists. Use force=True to overwrite."
+
+    try:
+        clustering = json.loads(clustering_json)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+
+    # Build the document using the non-LLM path for structure, then overlay clustering
+    inventory = manager._build_codebase_inventory()
+    normalized = manager._normalize_llm_cluster_output(clustering, inventory)
+    normalized["features"] = manager._refine_features_with_artifact_candidates(
+        normalized.get("features", []),
+        inventory,
+    )
+
+    from .project.devproject import create_devproject
+    document = create_devproject(project_root)
+    document["project"] = manager._scan_project_metadata(document["project"])
+    document["project"]["source"] = "auto"
+    if clustering.get("project", {}).get("description"):
+        document["project"]["description"] = clustering["project"]["description"]
+    if clustering.get("project", {}).get("name"):
+        document["project"]["name"] = clustering["project"]["name"]
+    document["features"] = normalized["features"]
+    document["hub_files"] = normalized.get("hub_files", [])
+    document["shared_infrastructure"] = normalized.get("shared_infrastructure", [])
+    document["unassigned"] = normalized.get("unassigned", [])
+
+    manager._link_documents_to_document(document, inventory, use_embeddings=False)
+    manager.save(document)
+
+    return _format_init_result(manager, document)
+
+
+def _project_scan_for_claude(manager, project_context, force, error_msg) -> str:
+    """Run the scan, return prompt + inventory for Claude to cluster."""
+    inventory = manager._build_codebase_inventory()
+    truncated = manager._truncate_inventory_for_llm(inventory)
+    readme_content = manager._read_readme_for_clustering()
+
+    llm_input = json.dumps({
+        "readme_content": readme_content or "",
+        "project_context": project_context or "",
+        "inventory": truncated,
+    }, indent=2, ensure_ascii=False)
+
+    # Truncate if huge
+    if len(llm_input) > 80000:
+        llm_input = json.dumps({
+            "readme_content": readme_content or "",
+            "project_context": project_context or "",
+            "inventory": manager._truncate_inventory_for_llm(inventory, aggressive=True),
+        }, ensure_ascii=False)
+
+    return (
+        f"No LLM API available ({error_msg}). Codebase scanned successfully.\n\n"
+        f"Please cluster these files into features and call `project_apply_clustering` "
+        f"with your JSON result.\n\n"
+        f"## Clustering Instructions\n\n"
+        f"Identify canonical project features. A feature is a stable, durable work area.\n"
+        f"Optimize for: stable feature identities, file ownership boundaries, "
+        f"session-to-feature matching by file overlap.\n\n"
+        f"Return JSON with: project (name, description), features (title, description, "
+        f"files, suggested_file_boundaries), hub_files, shared_infrastructure, unassigned.\n\n"
+        f"## Scanned Inventory\n\n```json\n{llm_input}\n```"
+    )
+
+
+def _format_init_result(manager, document) -> str:
+    # Register project in global registry for SessionStart discovery
+    try:
+        from .hooks.context_injector import register_project
+        name = document.get("project", {}).get("name", manager.project_root.name)
+        register_project(manager.project_root, name)
+    except Exception:
+        pass
 
     features = document.get("features", [])
     lines = [
         f"Initialized .devproject at {manager.path}",
-        f"Project: {document['project'].get('name', project_root.name)}",
+        f"Project: {document['project'].get('name', manager.project_root.name)}",
         f"Features detected: {len(features)}",
         "",
     ]
@@ -298,7 +406,6 @@ def project_init(
         lines.append(f"- {f.get('feature_id')}: {f.get('title')} ({files_count} files)")
     if len(features) > 15:
         lines.append(f"... and {len(features) - 15} more")
-
     return "\n".join(lines)
 
 
