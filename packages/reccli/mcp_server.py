@@ -27,6 +27,15 @@ def _resolve_root(working_directory: str) -> Optional[Path]:
     return discover_project_root(Path(working_directory).expanduser().resolve())
 
 
+def _get_embedding_provider():
+    """Get an embedding provider with the API key from RecCli config."""
+    from .runtime.config import Config
+    from .retrieval.embeddings import get_embedding_provider
+    config = Config()
+    api_key = config.get_api_key("openai")
+    return get_embedding_provider({"provider": "openai", "api_key": api_key})
+
+
 def _sessions_dir(project_root: Path) -> Path:
     d = project_root / "devsession"
     d.mkdir(parents=True, exist_ok=True)
@@ -58,10 +67,10 @@ def _format_search_results(results: list) -> str:
         return "No results found."
     lines = []
     for i, r in enumerate(results, 1):
-        content = (r.get("content") or "")[:200]
+        content = (r.get("content_preview") or r.get("content") or "")[:200]
         score = r.get("final_score") or r.get("rrf_score") or r.get("cosine_score", 0)
-        result_id = r.get("result_id", "")
-        session = r.get("session_id", "")
+        result_id = r.get("result_id") or r.get("id", "")
+        session = r.get("session") or r.get("session_id", "")
         badges = r.get("badges", [])
         badge_str = f" [{', '.join(badges)}]" if badges else ""
         lines.append(f"{i}. [{session}] (score: {score:.3f}){badge_str}")
@@ -70,6 +79,49 @@ def _format_search_results(results: list) -> str:
             lines.append(f"   result_id: {result_id}")
         lines.append("")
     return "\n".join(lines)
+
+
+def _ensure_index(sessions_dir: Path) -> None:
+    """Auto-build or incrementally update the unified vector index.
+
+    Called before search so the MCP never returns 'index not found'.
+    Skips sessions that are already indexed.
+    """
+    from .retrieval.vector_index import build_unified_index, update_index_with_new_session
+
+    index_path = sessions_dir / "index.json"
+    session_files = sorted(
+        list(sessions_dir.glob("*.devsession")) + list(sessions_dir.glob(".live_*.devsession"))
+    )
+
+    if not session_files:
+        return  # nothing to index
+
+    if not index_path.exists():
+        # Full build from scratch
+        try:
+            build_unified_index(sessions_dir, verbose=False)
+        except Exception:
+            pass
+        return
+
+    # Incremental: check for un-indexed sessions
+    try:
+        with open(index_path, "r") as f:
+            index = json.load(f)
+        indexed_sessions = {
+            entry["session_id"]
+            for entry in index.get("session_manifest", [])
+        }
+        for sf in session_files:
+            session_id = sf.stem
+            if session_id not in indexed_sessions:
+                try:
+                    update_index_with_new_session(sessions_dir, sf, verbose=False)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def _latest_session_summary(sessions_dir: Path) -> Optional[str]:
@@ -273,11 +325,24 @@ def search_history(
         return "No project root found."
 
     sessions_dir = _sessions_dir(project_root)
+
+    # Flush any active hook WALs so current-session messages are searchable
     try:
+        from .hooks.session_recorder import flush_active_wals
+        flush_active_wals(project_root)
+    except Exception:
+        pass
+
+    # Auto-build or update index if missing or stale
+    _ensure_index(sessions_dir)
+
+    try:
+        provider = _get_embedding_provider()
         results = search(
             sessions_dir=sessions_dir,
             query=query,
             top_k=top_k,
+            provider=provider,
         )
     except Exception as e:
         return f"Search failed: {e}"
@@ -470,6 +535,13 @@ def save_session_notes(
     sessions_dir = _sessions_dir(project_root)
     output_path = default_devsession_path(project_root)
     session.save(output_path, skip_validation=True)
+
+    # Update vector index with the new session
+    try:
+        from .retrieval.vector_index import update_index_with_new_session
+        update_index_with_new_session(sessions_dir, output_path, verbose=False)
+    except Exception:
+        pass  # index update is best-effort; search will auto-build later
 
     # Propose .devproject update from session evidence
     proposal_msg = ""

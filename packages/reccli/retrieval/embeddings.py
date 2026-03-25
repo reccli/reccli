@@ -245,10 +245,29 @@ def get_embedding_provider(config: Optional[Dict] = None) -> EmbeddingProvider:
     provider = config.get('provider', 'openai')
 
     if provider == 'openai':
-        return OpenAIEmbeddings(
-            api_key=config.get('api_key'),
-            model=config.get('model', 'text-embedding-3-small')
-        )
+        # Fall back to local embeddings if no API key available
+        api_key = config.get('api_key')
+        if not api_key:
+            try:
+                from ..runtime.config import Config
+                api_key = Config().get_api_key('openai')
+            except Exception:
+                pass
+        if api_key:
+            return OpenAIEmbeddings(
+                api_key=api_key,
+                model=config.get('model', 'text-embedding-3-small')
+            )
+        # No API key — fall back to local
+        try:
+            return LocalEmbeddings(
+                model=config.get('model', 'sentence-transformers/all-MiniLM-L6-v2')
+            )
+        except RuntimeError:
+            raise RuntimeError(
+                "No embedding provider available. Either set an OpenAI API key "
+                "or install sentence-transformers: pip install sentence-transformers"
+            )
     elif provider == 'local':
         return LocalEmbeddings(
             model=config.get('model', 'sentence-transformers/all-MiniLM-L6-v2')

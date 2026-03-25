@@ -238,7 +238,7 @@ def default_devsession_path(
     timestamp: Optional[datetime] = None,
 ) -> Path:
     dt = timestamp or datetime.now()
-    filename = f"{dt.strftime('%Y%m%d%H%M%S')}.devsession"
+    filename = f"{dt.strftime('%m%d%Y_%H%M')}.devsession"
     return default_devsession_dir(start) / filename
 
 

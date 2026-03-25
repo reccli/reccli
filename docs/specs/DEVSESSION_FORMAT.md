@@ -44,19 +44,20 @@ Chosen for:
 
 ## File Structure
 
-`.devsession` files are JSON documents with two required memory layers plus explicit linking structures:
+`.devsession` files are JSON documents with required memory layers, a terminal recording layer, and explicit linking structures:
 
 ```json
 {
   "format": "devsession",
   "version": "1.1.0",
   "metadata": { },
-  "summary": { },           // Compacted working memory
-  "conversation": [ ],      // Full chronological source of truth
-  "spans": [ ],             // Semantic spans over the full conversation
-  "vector_index": { },      // Vector search index
-  "summary_sync": { },      // Rolling compaction frontier
-  "embedding_storage": { }, // Inline vs external embedding storage
+  "terminal_recording": { },  // PTY-based terminal capture (source for conversation parsing)
+  "summary": { },             // Compacted working memory
+  "conversation": [ ],        // Full chronological source of truth
+  "spans": [ ],               // Semantic spans over the full conversation
+  "vector_index": { },        // Vector search index
+  "summary_sync": { },        // Rolling compaction frontier
+  "embedding_storage": { },   // Inline vs external embedding storage
   "artifacts": { }
 }
 ```
@@ -166,8 +167,9 @@ adding higher-level semantic stability above it.
 | `format` | string | Yes | Must be `"devsession"` |
 | `version` | string | Yes | Semantic version (e.g., `"1.1.0"`) |
 | `metadata` | object | Yes | Session metadata |
-| `summary` | object | No | AI-generated compacted session memory |
+| `terminal_recording` | object | Yes | PTY-based terminal capture with events array |
 | `conversation` | array | Yes | Full message history in chronological order |
+| `summary` | object | No | AI-generated compacted session memory |
 | `spans` | array | No | Semantic spans over the conversation |
 | `vector_index` | object | No | Vector search index metadata |
 | `summary_sync` | object | No | Rolling compaction frontier metadata |
@@ -225,9 +227,49 @@ If a product wants cross-session project context, it should store that in an opt
 
 The session file remains focused on:
 
-- the full conversation,
+- the terminal recording as the raw capture source,
+- the full conversation parsed from that recording,
 - the compacted session summary,
 - and the linking structures required to move between them safely.
+
+### Terminal Recording Object
+
+The terminal recording is the raw PTY capture layer. It is the source from which conversation messages are parsed and is required for every `.devsession` file. Without it, the session cannot be replayed, re-parsed, or used to update the `.devproject` feature map.
+
+```json
+{
+  "terminal_recording": {
+    "version": 2,
+    "width": 80,
+    "height": 24,
+    "shell": "/bin/zsh",
+    "events": [
+      [0.0, "o", "$ "],
+      [0.5, "i", "git status\r"],
+      [0.8, "o", "On branch main\r\n"],
+      [1.2, "r", "120x40"]
+    ]
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `version` | number | Yes | Recording format version (currently `2`) |
+| `width` | number | Yes | Initial terminal width in columns |
+| `height` | number | Yes | Initial terminal height in rows |
+| `shell` | string | No | Shell used for the recording |
+| `events` | array | Yes | Chronological event tuples |
+
+Each event is a 3-element array: `[timestamp, type, data]`
+
+| Element | Type | Description |
+|---------|------|-------------|
+| `timestamp` | number | Seconds since recording started |
+| `type` | enum | `"o"` (output), `"i"` (input), `"r"` (resize) |
+| `data` | string | Terminal text or resize dimensions |
+
+The events array is append-only during recording. Events may be empty for sessions created via `save_session_notes` where no PTY capture occurred, but the `terminal_recording` object and its `events` array must still be present.
 
 ### Summary Object
 

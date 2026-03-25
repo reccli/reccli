@@ -90,7 +90,7 @@ class DevSessionRegressionTests(unittest.TestCase):
             self.assertIsNotNone(session.path)
             self.assertEqual(session.path.parent, (project_root / "devsession").resolve())
             self.assertEqual(session.path.suffix, ".devsession")
-            self.assertRegex(session.path.name, r"^\d{14}\.devsession$")
+            self.assertRegex(session.path.name, r"^\d{8}_\d{4}\.devsession$")
 
     def test_loaded_session_can_save_without_explicit_path(self):
         with tempfile.TemporaryDirectory() as td:

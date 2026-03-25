@@ -491,7 +491,10 @@ def apply_boosts(result: Dict, index: Dict, query: str, current_section: str = '
     cosine_score = result.get('cosine_score', 0.0)
     bm25_score = result.get('bm25_score', 0.0)
 
-    if cosine_score < 0.25 and bm25_score < 5.0:
+    has_dense = cosine_score > 0.0
+    if has_dense and cosine_score < 0.25 and bm25_score < 5.0:
+        return 0.0
+    if not has_dense and bm25_score < 0.5:
         return 0.0
 
     # Temporal boost: exp(-Δt/τ)
@@ -618,6 +621,12 @@ def filter_deleted_results(sessions_dir: Path, results: List[Dict]) -> List[Dict
                 message = msg
                 break
 
+        # Fall back to index-based lookup for messages without ID fields (e.g. from save_session_notes)
+        if message is None:
+            msg_idx = result.get("message_index")
+            if msg_idx is not None and 0 <= msg_idx < len(session.conversation):
+                message = session.conversation[msg_idx]
+
         if message is None or message.get("deleted"):
             continue
         result = {**result}
@@ -654,30 +663,38 @@ def search(
     Returns:
         List of search results with badges
     """
-    # Load index
+    # Load index, auto-building if missing
     index_path = sessions_dir / 'index.json'
     if not index_path.exists():
-        print("⚠️  Index not found. Run 'reccli index build' first.")
-        return []
+        # Attempt auto-build before giving up
+        session_files = list(sessions_dir.glob("*.devsession")) if sessions_dir.exists() else []
+        if session_files:
+            try:
+                from .vector_index import build_unified_index
+                build_unified_index(sessions_dir, verbose=False)
+            except Exception:
+                pass
+        if not index_path.exists():
+            return []
 
     with open(index_path, 'r') as f:
         index = json.load(f)
 
-    # Get embedding provider
-    if provider is None:
-        from .embeddings import get_embedding_provider
-        provider = get_embedding_provider()
+    # Dense search (requires embeddings — gracefully degrade to BM25-only if unavailable)
+    dense_results = []
+    try:
+        if provider is None:
+            from .embeddings import get_embedding_provider
+            provider = get_embedding_provider()
+        query_embedding = provider.embed(query)
+        dense_results = dense_search(index, query_embedding, k=200)
+    except Exception:
+        pass  # Fall back to BM25-only
 
-    # Embed query
-    query_embedding = provider.embed(query)
-
-    # 1. Dense ANN search (cosine similarity)
-    dense_results = dense_search(index, query_embedding, k=200)
-
-    # 2. BM25 sparse search
+    # BM25 sparse search (always available — no API needed)
     bm25_results = bm25_search(index, query, k=200)
 
-    # 3. Reciprocal Rank Fusion
+    # Reciprocal Rank Fusion (works with dense-only, BM25-only, or both)
     rrf_results = reciprocal_rank_fusion(dense_results, bm25_results, k0=60)
 
     # 4. Apply temporal filters

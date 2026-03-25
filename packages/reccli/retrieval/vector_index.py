@@ -193,9 +193,9 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         }
     }
 
-    # Get all session files, sorted chronologically
+    # Get all session files (including live snapshots), sorted chronologically
     session_files = sorted(
-        sessions_dir.glob('*.devsession'),
+        list(sessions_dir.glob('*.devsession')) + list(sessions_dir.glob('.live_*.devsession')),
         key=lambda f: f.name
     )
 
@@ -247,7 +247,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         for msg_idx, msg in enumerate(session.conversation):
             if msg.get("deleted"):
                 continue
-            if 'embedding' not in msg:
+            if not msg.get("content"):
                 continue
 
             # Classify message type
@@ -263,8 +263,10 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
             t_day = timestamp[:10] if len(timestamp) >= 10 else ''
             t_hour = timestamp[:13] if len(timestamp) >= 13 else ''
 
-            # Add to unified index
-            index['unified_vectors'].append({
+            has_embedding = 'embedding' in msg
+
+            # Build vector entry (always indexed for BM25; embedding optional for dense search)
+            vector_entry = {
                 'id': f"{session_id}_{get_message_id(msg, msg_idx)}",
                 'session': session_id,
                 'message_id': get_message_id(msg, msg_idx),
@@ -286,20 +288,22 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
                 'content_preview': msg['content'][:200] if len(msg['content']) > 200 else msg['content'],
                 'text_hash': msg.get('text_hash', compute_text_hash(msg['content'])),
 
-                # Embedding
-                'embedding': msg['embedding'],
-                'embed_model': msg.get('embed_model', embed_model),
-                'embed_provider': msg.get('embed_provider', embed_provider),
-                'embed_dim': msg.get('embed_dim', embed_dim),
-                'embed_ts': msg.get('embed_ts', ''),
-
                 # Metadata
                 'metadata': {
                     'summary_ref': find_summary_ref(msg, session.summary),
                     'tokens': count_tokens(msg['content'])
                 }
-            })
+            }
 
+            # Embedding fields (only if present)
+            if has_embedding:
+                vector_entry['embedding'] = msg['embedding']
+                vector_entry['embed_model'] = msg.get('embed_model', embed_model)
+                vector_entry['embed_provider'] = msg.get('embed_provider', embed_provider)
+                vector_entry['embed_dim'] = msg.get('embed_dim', embed_dim)
+                vector_entry['embed_ts'] = msg.get('embed_ts', '')
+
+            index['unified_vectors'].append(vector_entry)
             message_count += 1
 
         # Get session duration

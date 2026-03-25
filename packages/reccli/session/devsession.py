@@ -15,7 +15,7 @@ from ..project.devproject import default_devsession_path
 class DevSession:
     """Manages .devsession file format"""
 
-    FORMAT_VERSION = "1.1"
+    FORMAT_VERSION = "1.1.0"
 
     def __init__(self, session_id: Optional[str] = None):
         """
@@ -81,6 +81,9 @@ class DevSession:
             "external_message_count": 0,
             "loaded": True,
         }
+
+        # Artifacts (optional files/resources referenced in the session)
+        self.artifacts = {}
 
         # Checksums for event integrity
         self.checksums = {}
@@ -190,28 +193,31 @@ class DevSession:
         self.refresh_summary_sync()
         self.checksums = self._calculate_checksums()
 
-        return {
+        result = {
+            # Spec-required root fields
             "format": "devsession",
             "version": self.FORMAT_VERSION,
-            "session_id": self.session_id,
-            "created": self.created,
-            "updated": now,
             "metadata": self.metadata,
-
-            "terminal_recording": self.terminal_recording,
             "conversation": self.conversation,
+
+            # Spec-optional layers
             "summary": self.summary,
             "spans": self.spans,
             "vector_index": self.vector_index,
             "summary_sync": self.summary_sync,
             "embedding_storage": self.embedding_storage,
+            "artifacts": self.artifacts,
+
+            # Implementation extensions (not yet in spec)
+            "terminal_recording": self.terminal_recording,
             "token_counts": self.token_counts,
             "checksums": self.checksums,
             "compaction_history": self.compaction_history,
             "checkpoints": self.checkpoints,
             "episodes": self.episodes,
-            "current_episode_id": self.current_episode_id
+            "current_episode_id": self.current_episode_id,
         }
+        return result
 
     def save(self, path: Optional[Path] = None, skip_validation: bool = False) -> None:
         """
@@ -297,7 +303,7 @@ class DevSession:
     @classmethod
     def _validate_schema(cls, data: Dict[str, Any]) -> None:
         """
-        Validate .devsession file schema
+        Validate .devsession file schema per DEVSESSION_FORMAT.md spec v1.1.0.
 
         Args:
             data: Parsed JSON data
@@ -305,65 +311,57 @@ class DevSession:
         Raises:
             ValueError: If schema validation fails
         """
-        # Required top-level fields
-        required_fields = ["format", "version", "terminal_recording"]
-        for field in required_fields:
+        # Required root fields
+        for field in ["format", "version", "terminal_recording"]:
             if field not in data:
                 raise ValueError(f"Missing required field: {field}")
 
-        # Validate format
         if data["format"] != "devsession":
             raise ValueError(f"Invalid format: {data['format']} (expected 'devsession')")
 
-        # Validate version format (e.g., "1.0")
         version = data["version"]
         if not isinstance(version, str):
             raise ValueError(f"Invalid version type: {type(version)} (expected string)")
 
-        # Validate terminal_recording structure
-        terminal = data["terminal_recording"]
-        if not isinstance(terminal, dict):
-            raise ValueError(f"terminal_recording must be object, got {type(terminal)}")
+        # Validate metadata (spec-required, but lenient for backwards compat)
+        if "metadata" in data and data["metadata"] is not None:
+            if not isinstance(data["metadata"], dict):
+                raise ValueError(f"metadata must be object, got {type(data['metadata'])}")
 
-        if "events" not in terminal:
-            raise ValueError("terminal_recording missing 'events' field")
-
-        events = terminal["events"]
-        if not isinstance(events, list):
-            raise ValueError(f"terminal_recording.events must be array, got {type(events)}")
-
-        # Validate event structure (sample first few events)
-        for i, event in enumerate(events[:10]):  # Check first 10 events
-            if not isinstance(event, list):
-                raise ValueError(f"Event {i} must be array, got {type(event)}")
-            if len(event) != 3:
-                raise ValueError(f"Event {i} must have 3 elements, got {len(event)}")
-
-            timestamp, event_type, data = event
-
-            if not isinstance(timestamp, (int, float)):
-                raise ValueError(f"Event {i} timestamp must be number, got {type(timestamp)}")
-
-            if event_type not in ["o", "i", "r"]:
-                raise ValueError(f"Event {i} type must be 'o', 'i', or 'r', got '{event_type}'")
-
-            if not isinstance(data, str):
-                raise ValueError(f"Event {i} data must be string, got {type(data)}")
-
-        # Validate conversation (if present)
+        # Validate conversation (spec-required array)
         if "conversation" in data and data["conversation"]:
             conversation = data["conversation"]
             if not isinstance(conversation, list):
                 raise ValueError(f"conversation must be array, got {type(conversation)}")
-
-            # Check first message structure
+            # Check first message structure: spec requires role + content
             if conversation and isinstance(conversation[0], dict):
                 msg = conversation[0]
                 if "role" not in msg or "content" not in msg:
                     raise ValueError("Conversation messages must have 'role' and 'content'")
 
-        if "metadata" in data and data["metadata"] is not None and not isinstance(data["metadata"], dict):
-            raise ValueError(f"metadata must be object, got {type(data['metadata'])}")
+        # Validate terminal_recording structure (required)
+        terminal = data["terminal_recording"]
+        if not isinstance(terminal, dict):
+            raise ValueError(f"terminal_recording must be object, got {type(terminal)}")
+        if "events" not in terminal:
+            raise ValueError("terminal_recording missing 'events' field")
+        events = terminal["events"]
+        if not isinstance(events, list):
+            raise ValueError(f"terminal_recording.events must be array, got {type(events)}")
+        for i, event in enumerate(events[:10]):
+            if not isinstance(event, list):
+                raise ValueError(f"Event {i} must be array, got {type(event)}")
+            if len(event) != 3:
+                raise ValueError(f"Event {i} must have 3 elements, got {len(event)}")
+            timestamp, event_type, evt_data = event
+            if not isinstance(timestamp, (int, float)):
+                raise ValueError(f"Event {i} timestamp must be number, got {type(timestamp)}")
+            if event_type not in ["o", "i", "r"]:
+                raise ValueError(f"Event {i} type must be 'o', 'i', or 'r', got '{event_type}'")
+            if not isinstance(evt_data, str):
+                raise ValueError(f"Event {i} data must be string, got {type(evt_data)}")
+
+        # Validate other optional structures
         if "spans" in data and data["spans"] is not None and not isinstance(data["spans"], list):
             raise ValueError(f"spans must be array, got {type(data['spans'])}")
         if "summary_sync" in data and data["summary_sync"] is not None and not isinstance(data["summary_sync"], dict):
@@ -398,18 +396,26 @@ class DevSession:
         # Validate schema
         cls._validate_schema(data)
 
-        # Create instance
-        session = cls(session_id=data.get("session_id"))
-        session.created = data.get("created", session.created)
-        session.updated = data.get("updated", session.updated)
-        session.metadata = data.get("metadata", session.metadata)
-        session.terminal_recording = data.get("terminal_recording", session.terminal_recording)
+        # Create instance — read identity from metadata first, root-level as fallback
+        # for backwards compatibility with pre-1.1.0 files
+        metadata = data.get("metadata") or {}
+        session_id = metadata.get("session_id") or data.get("session_id")
+        session = cls(session_id=session_id)
+        session.created = metadata.get("created_at") or data.get("created", session.created)
+        session.updated = metadata.get("updated_at") or data.get("updated", session.updated)
+        session.metadata = metadata
+
+        # Spec layers
         session.conversation = data.get("conversation", [])
         session.summary = data.get("summary")
         session.spans = data.get("spans", [])
         session.vector_index = data.get("vector_index")
         session.summary_sync = data.get("summary_sync", session.summary_sync)
         session.embedding_storage = data.get("embedding_storage", session.embedding_storage)
+        session.artifacts = data.get("artifacts", {})
+
+        # Implementation extensions
+        session.terminal_recording = data.get("terminal_recording", session.terminal_recording)
         session.token_counts = data.get("token_counts", session.token_counts)
         session.checksums = data.get("checksums", {})
         session.compaction_history = data.get("compaction_history", [])
