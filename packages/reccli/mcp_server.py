@@ -188,6 +188,13 @@ def load_project_context(working_directory: str) -> str:
             "Run `project_init` first to initialize project memory."
         )
 
+    # Mark this project as active so hooks record to it even from ~/
+    try:
+        from .hooks.session_recorder import set_active_project
+        set_active_project("mcp_active", project_root)
+    except Exception:
+        pass
+
     manager = DevProjectManager(project_root)
 
     # Load or create .devproject

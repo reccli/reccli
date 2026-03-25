@@ -30,9 +30,52 @@ def _wal_path(project_root: Path, session_id: str) -> Path:
     return _devsession_dir(project_root) / f".hooks_wal_{session_id}.jsonl"
 
 
-def _find_project_root(cwd: str) -> Optional[Path]:
+ACTIVE_PROJECT_DIR = Path.home() / ".reccli" / "active_sessions"
+
+
+def set_active_project(session_id: str, project_root: Path) -> None:
+    """Mark a project as active for this Claude Code session.
+
+    Called by load_project_context so hooks know which project to record to
+    even when cwd is not inside the project.
+    """
+    ACTIVE_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    breadcrumb = ACTIVE_PROJECT_DIR / f"{session_id}.json"
+    with open(breadcrumb, "w") as f:
+        json.dump({"project_root": str(project_root.resolve())}, f)
+
+
+def _find_project_root(cwd: str, session_id: str = "") -> Optional[Path]:
+    """Find project root from cwd, or from the active session breadcrumb."""
     resolved = Path(cwd).resolve()
-    return discover_project_root(resolved)
+    root = discover_project_root(resolved)
+    if root:
+        return root
+
+    # Check if a project was loaded via MCP for this session
+    if session_id:
+        breadcrumb = ACTIVE_PROJECT_DIR / f"{session_id}.json"
+        if breadcrumb.exists():
+            try:
+                data = json.loads(breadcrumb.read_text())
+                p = Path(data["project_root"])
+                if p.exists():
+                    return p
+            except Exception:
+                pass
+
+    # Check any active session breadcrumb (fallback for hooks without session_id)
+    if ACTIVE_PROJECT_DIR.exists():
+        for bc in sorted(ACTIVE_PROJECT_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+            try:
+                data = json.loads(bc.read_text())
+                p = Path(data["project_root"])
+                if p.exists():
+                    return p
+            except Exception:
+                continue
+
+    return None
 
 
 def _append_to_wal(wal_file: Path, record: Dict[str, Any]) -> None:
@@ -45,7 +88,7 @@ def _append_to_wal(wal_file: Path, record: Dict[str, Any]) -> None:
 
 def start_session(session_id: str, cwd: str) -> None:
     """Create a new WAL file for this Claude Code session."""
-    project_root = _find_project_root(cwd)
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return
 
@@ -66,7 +109,7 @@ def start_session(session_id: str, cwd: str) -> None:
 
 def record_user_prompt(session_id: str, prompt: str, cwd: str) -> None:
     """Append a user prompt to the active session WAL."""
-    project_root = _find_project_root(cwd)
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return
 
@@ -85,7 +128,7 @@ def record_user_prompt(session_id: str, prompt: str, cwd: str) -> None:
 
 def record_assistant_response(session_id: str, message: str, cwd: str) -> None:
     """Append an assistant response to the active session WAL."""
-    project_root = _find_project_root(cwd)
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return
 
@@ -109,7 +152,7 @@ def record_tool_use(
     cwd: str,
 ) -> None:
     """Append a tool use event to the active session WAL."""
-    project_root = _find_project_root(cwd)
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return
 
@@ -204,7 +247,7 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     Must complete within ~1.5s (SessionEnd hook timeout).
     Summarization and indexing are deferred to next search or explicit command.
     """
-    project_root = _find_project_root(cwd)
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return None
 
