@@ -379,19 +379,41 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
             msg["tool_name"] = rec["tool_name"]
         conversation.append(msg)
 
-    # Build .devsession
+    # Check if save_session_notes already created a .devsession with a summary.
+    # If so, merge the full WAL conversation into it instead of creating a new file.
     from ..session.devsession import DevSession
 
-    session = DevSession(session_id=session_id)
-    session.metadata["working_directory"] = header.get("working_directory", cwd)
-    session.metadata["project_root"] = str(project_root)
-    session.metadata["source"] = "claude_code_hooks"
-    session.metadata["claude_session_id"] = session_id
-    session.conversation = conversation
+    sessions_dir = _devsession_dir(project_root)
+    existing_session = None
+    existing_path = None
+    for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            candidate = DevSession.load(sf)
+            if candidate.summary and candidate.summary.get("overview", "").strip():
+                # Found a recent file with a real summary — merge into it
+                existing_session = candidate
+                existing_path = sf
+                break
+        except Exception:
+            continue
 
-    # Save (fast — no validation needed for hooks-recorded sessions)
-    output_path = default_devsession_path(project_root)
-    session.save(output_path, skip_validation=True)
+    if existing_session and len(conversation) > len(existing_session.conversation):
+        # Merge: keep the summary/spans, replace conversation with the full WAL
+        existing_session.conversation = conversation
+        existing_session.metadata["source"] = "claude_code_hooks"
+        existing_session.metadata["claude_session_id"] = session_id
+        existing_session.save(existing_path, skip_validation=True)
+        output_path = existing_path
+    else:
+        # No existing summary — create new file
+        session = DevSession(session_id=session_id)
+        session.metadata["working_directory"] = header.get("working_directory", cwd)
+        session.metadata["project_root"] = str(project_root)
+        session.metadata["source"] = "claude_code_hooks"
+        session.metadata["claude_session_id"] = session_id
+        session.conversation = conversation
+        output_path = default_devsession_path(project_root)
+        session.save(output_path, skip_validation=True)
 
     # Clean up WAL and live snapshot
     wal.unlink(missing_ok=True)
