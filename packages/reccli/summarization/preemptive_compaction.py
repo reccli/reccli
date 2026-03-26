@@ -37,12 +37,12 @@ class PreemptiveCompactor:
     4. Continue chat seamlessly
     """
 
-    WARN_THRESHOLD = 180_000
-    COMPACT_THRESHOLD = 190_000
-    TARGET_POST_COMPACTION = 28_000  # ~25-30K target
-    DELTA_COMPACT_THRESHOLD = 12_000
-    MIN_PENDING_MESSAGES = 12
-    OPEN_TAIL_MESSAGES = 20
+    WARN_THRESHOLD = 400_000
+    COMPACT_THRESHOLD = 500_000
+    TARGET_POST_COMPACTION = 50_000  # ~50K target — room for devproject + summary + recent + search
+    DELTA_COMPACT_THRESHOLD = 30_000
+    MIN_PENDING_MESSAGES = 20
+    OPEN_TAIL_MESSAGES = 40
 
     def __init__(
         self,

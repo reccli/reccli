@@ -2420,7 +2420,7 @@ class CompactionRegressionTests(unittest.TestCase):
             session = DevSession("compaction_boundary_test")
             session.conversation = [
                 {"role": "user", "content": f"msg {i}", "_message_id": f"msg_{i + 1:03d}"}
-                for i in range(30)
+                for i in range(100)
             ]
             session.spans = [
                 {
@@ -2437,11 +2437,13 @@ class CompactionRegressionTests(unittest.TestCase):
             compactor = PreemptiveCompactor(session, Path(td), llm_client=None)
             boundary = compactor._determine_compaction_boundary(session.get_summary_frontier_index())
 
-            self.assertEqual(boundary, 30)
+            # With frontier at 10 (closed span), pending=90 > OPEN_TAIL=40, so boundary = 100-40 = 60
+            self.assertEqual(boundary, 60)
 
             session.spans = []
             boundary = compactor._determine_compaction_boundary(0)
-            self.assertEqual(boundary, 10)
+            # No spans, frontier=0, pending=100 > OPEN_TAIL=40, boundary = 100-40 = 60
+            self.assertEqual(boundary, 60)
 
 
 class PackagingRegressionTests(unittest.TestCase):
