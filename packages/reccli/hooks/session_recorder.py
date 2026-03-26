@@ -422,34 +422,43 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     reminder_flag = wal.with_suffix(_REMINDER_SENT_SUFFIX)
     reminder_flag.unlink(missing_ok=True)
 
-    # Spawn background summarization (LLM call — too slow for hook timeout)
-    if len(conversation) >= 4:  # Skip trivial sessions
-        _spawn_background_summarize(output_path)
+    # Spawn background: summarize (if no summary yet) + embed + index
+    if len(conversation) >= 4:
+        _spawn_background_finalize(output_path)
 
     return output_path
 
 
-def _spawn_background_summarize(session_path: Path) -> None:
-    """Spawn a detached process to summarize + embed + index a finalized session."""
+def _spawn_background_finalize(session_path: Path) -> None:
+    """Spawn a detached process to summarize (if needed) + embed all layers + index."""
     script = (
-        "import sys, json\n"
+        "import sys\n"
         "from pathlib import Path\n"
         "path = Path(sys.argv[1])\n"
         "from reccli.session.devsession import DevSession\n"
         "s = DevSession.load(path)\n"
-        "if not s.summary and s.conversation:\n"
+        "if not s.conversation:\n"
+        "    sys.exit(0)\n"
+        "changed = False\n"
+        "# Summarize only if no summary exists\n"
+        "if not s.summary or s.summary.get('overview','') in ('','Session summarized without LLM','Placeholder summary'):\n"
         "    s.generate_summary()\n"
-        "    s.generate_embeddings()\n"
+        "    changed = True\n"
+        "# Always embed — catches new messages from WAL merge\n"
+        "count = s.generate_embeddings(force=False)\n"
+        "if count > 0:\n"
+        "    changed = True\n"
+        "if changed:\n"
         "    s.save(path)\n"
-        "    from reccli.retrieval.vector_index import update_index_with_new_session\n"
-        "    update_index_with_new_session(path.parent, path, verbose=False)\n"
+        "    from reccli.retrieval.vector_index import build_unified_index\n"
+        "    build_unified_index(path.parent, verbose=False)\n"
     )
     try:
         subprocess.Popen(
             [sys.executable, "-c", script, str(session_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,  # Fully detached from parent
+            start_new_session=True,
         )
     except Exception:
-        pass  # Best-effort — search still works via BM25 without summary
+        pass
