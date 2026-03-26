@@ -2,8 +2,8 @@
   "format": "devproject",
   "version": "2.1.0",
   "project_root": "/Users/will/coding-projects/RecCli",
-  "updated_at": "2026-03-21T19:41:11Z",
-  "last_updated_session": "codebase_sync",
+  "updated_at": "2026-03-24T04:31:50Z",
+  "last_updated_session": "session_20260323_213150",
   "project": {
     "name": "RecCli",
     "description": "RecCli is a temporal memory engine for coding agents. It implements a tri-layer memory system: full conversation history as the source of truth, compacted session summaries for active working memory, and an optional project outline for cross-session context, with temporal links enabling recovery of exact prior reasoning.",
@@ -19,10 +19,10 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/devsession.py",
-        "packages/reccli-core/reccli/parser.py",
-        "packages/reccli-core/reccli/recorder.py",
-        "packages/reccli-core/reccli/wal_recorder.py"
+        "packages/reccli/recording/parser.py",
+        "packages/reccli/recording/recorder.py",
+        "packages/reccli/recording/wal_recorder.py",
+        "packages/reccli/session/devsession.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/devsession.py",
@@ -69,13 +69,12 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/code_change_detector.py",
-        "packages/reccli-core/reccli/compaction_log.py",
-        "packages/reccli-core/reccli/compactor.py",
-        "packages/reccli-core/reccli/redaction.py",
-        "packages/reccli-core/reccli/reindexing.py",
-        "packages/reccli-core/reccli/summarizer.py",
-        "packages/reccli-core/reccli/timestamp_validation.py"
+        "packages/reccli/recording/compactor.py",
+        "packages/reccli/session/reindexing.py",
+        "packages/reccli/summarization/code_change_detector.py",
+        "packages/reccli/summarization/compaction_log.py",
+        "packages/reccli/summarization/redaction.py",
+        "packages/reccli/summarization/summarizer.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/code_change_detector.py",
@@ -166,9 +165,8 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/embeddings.py",
-        "packages/reccli-core/reccli/search.py",
-        "packages/reccli-core/reccli/vector_index.py"
+        "packages/reccli/retrieval/search.py",
+        "packages/reccli/retrieval/vector_index.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/embeddings.py",
@@ -324,9 +322,9 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/memory_middleware.py",
-        "packages/reccli-core/reccli/retrieval.py",
-        "packages/reccli-core/reccli/streaming_retrieval.py"
+        "packages/reccli/retrieval/memory_middleware.py",
+        "packages/reccli/retrieval/retrieval.py",
+        "packages/reccli/retrieval/streaming_retrieval.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/memory_middleware.py",
@@ -421,11 +419,9 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/checkpoints.py",
-        "packages/reccli-core/reccli/episodes.py",
-        "packages/reccli-core/reccli/post_answer_reasoning.py",
-        "packages/reccli-core/reccli/preemptive_compaction.py",
-        "packages/reccli-core/reccli/wpc.py"
+        "packages/reccli/runtime/wpc.py",
+        "packages/reccli/session/checkpoints.py",
+        "packages/reccli/summarization/preemptive_compaction.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/checkpoints.py",
@@ -504,7 +500,7 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/llm.py"
+        "packages/reccli/runtime/llm.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/llm.py"
@@ -569,7 +565,7 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/devproject.py"
+        "packages/reccli/project/devproject.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/devproject.py"
@@ -653,9 +649,8 @@
         "apps/web/pages/api/create-checkout.ts",
         "apps/web/pages/api/validate-license.ts",
         "apps/web/pages/api/webhook.ts",
-        "packages/reccli-core/backend/server.py",
-        "packages/reccli-core/reccli/summary_schema.py",
-        "packages/reccli-core/reccli/summary_verification.py"
+        "packages/reccli/summarization/summary_schema.py",
+        "packages/reccli/summarization/summary_verification.py"
       ],
       "file_boundaries": [
         "apps/web/**",
@@ -705,16 +700,15 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/reccli/chat_ui.py",
-        "packages/reccli-core/ui/src/bridge/python.mock.ts",
-        "packages/reccli-core/ui/src/bridge/python.ts",
-        "packages/reccli-core/ui/src/components/Chat.tsx",
-        "packages/reccli-core/ui/src/components/Input.tsx",
-        "packages/reccli-core/ui/src/components/InputV2.tsx",
-        "packages/reccli-core/ui/src/components/InputV3.tsx",
-        "packages/reccli-core/ui/src/components/MessageList.tsx",
-        "packages/reccli-core/ui/src/components/Status.tsx",
-        "packages/reccli-core/ui/src/index.tsx"
+        "packages/reccli/runtime/chat_ui.py",
+        "packages/reccli/ui/src/bridge/python.mock.ts",
+        "packages/reccli/ui/src/bridge/python.ts",
+        "packages/reccli/ui/src/components/Chat.tsx",
+        "packages/reccli/ui/src/components/Input.tsx",
+        "packages/reccli/ui/src/components/InputV2.tsx",
+        "packages/reccli/ui/src/components/InputV3.tsx",
+        "packages/reccli/ui/src/components/MessageList.tsx",
+        "packages/reccli/ui/src/components/Status.tsx"
       ],
       "file_boundaries": [
         "packages/reccli-core/reccli/**",
@@ -864,13 +858,13 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli-core/tests/benchmark_vector_search.py",
-        "packages/reccli-core/tests/manual_provider_delta_harness.py",
-        "packages/reccli-core/tests/test_core_regressions.py",
-        "packages/reccli-core/tests/test_summarization.py",
-        "packages/reccli-core/tests/test_temporal_and_breakeven.py",
-        "packages/reccli-core/tests/test_token_counting.py",
-        "packages/reccli-core/tests/test_two_level_retrieval.py"
+        "packages/reccli/tests/benchmark_vector_search.py",
+        "packages/reccli/tests/manual_provider_delta_harness.py",
+        "packages/reccli/tests/test_core_regressions.py",
+        "packages/reccli/tests/test_summarization.py",
+        "packages/reccli/tests/test_temporal_and_breakeven.py",
+        "packages/reccli/tests/test_token_counting.py",
+        "packages/reccli/tests/test_two_level_retrieval.py"
       ],
       "file_boundaries": [
         "packages/reccli-core/tests/**"
@@ -1019,6 +1013,317 @@
               ]
             }
           ]
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260324030308",
+      "status": "pending",
+      "created_at": "2026-03-24T03:03:08Z",
+      "source_session_id": "session_20260323_200308",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_project_outline_layer",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_200308"
+            ],
+            "last_updated_session": "session_20260323_200308",
+            "updated_at": "2026-03-24T03:03:08Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_packages_reccli_mcp_server_py",
+            "feature_version": 1,
+            "title": "Modified packages/reccli/mcp_server.py",
+            "description": "Modified packages/reccli/mcp_server.py",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "file_boundaries": [
+              "packages/reccli/**"
+            ],
+            "session_ids": [
+              "session_20260323_200308"
+            ],
+            "last_updated_session": "session_20260323_200308",
+            "updated_at": "2026-03-24T03:03:08Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-03-24T03:03:08Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_vector_indexing_hybrid_search",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_200308"
+            ],
+            "last_updated_session": "session_20260323_200308",
+            "updated_at": "2026-03-24T03:03:08Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_testing_benchmarks",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_200308"
+            ],
+            "last_updated_session": "session_20260323_200308",
+            "updated_at": "2026-03-24T03:03:08Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260323_200308",
+            "path": "devsession/20260323200308.devsession",
+            "started_at": "2026-03-23T20:03:08.647041",
+            "ended_at": "2026-03-23T20:03:08.648406",
+            "feature_ids": [
+              "feat_packages_reccli_mcp_server_py",
+              "feat_project_outline_layer",
+              "feat_testing_benchmarks",
+              "feat_vector_indexing_hybrid_search"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260324030330",
+      "status": "pending",
+      "created_at": "2026-03-24T03:03:30Z",
+      "source_session_id": "session_20260323_200330",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_second_test_verifying_new_mmddyyyy_hhmm",
+            "feature_version": 1,
+            "title": "Second test: verifying new mmddyyyy_hhmm filename format after",
+            "description": "Second test: verifying new mmddyyyy_hhmm filename format after pycache clear.",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260323_200330"
+            ],
+            "last_updated_session": "session_20260323_200330",
+            "updated_at": "2026-03-24T03:03:30Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-03-24T03:03:30Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260323_200330",
+            "path": "devsession/20260323200330.devsession",
+            "started_at": "2026-03-23T20:03:30.542446",
+            "ended_at": "2026-03-23T20:03:30.542789",
+            "feature_ids": [
+              "feat_second_test_verifying_new_mmddyyyy_hhmm"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260324031725",
+      "status": "pending",
+      "created_at": "2026-03-24T03:17:25Z",
+      "source_session_id": "session_20260323_201725",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_test_session_verifying_new_mmddyyyy_hhm",
+            "feature_version": 1,
+            "title": "Test session: verifying new mmddyyyy_hhmm filename format after",
+            "description": "Test session: verifying new mmddyyyy_hhmm filename format after MCP restart.",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260323_201725"
+            ],
+            "last_updated_session": "session_20260323_201725",
+            "updated_at": "2026-03-24T03:17:25Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-03-24T03:17:25Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260323_201725",
+            "path": "devsession/03232026_2017.devsession",
+            "started_at": "2026-03-23T20:17:25.732637",
+            "ended_at": "2026-03-23T20:17:25.732896",
+            "feature_ids": [
+              "feat_test_session_verifying_new_mmddyyyy_hhm"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260324032830",
+      "status": "pending",
+      "created_at": "2026-03-24T03:28:30Z",
+      "source_session_id": "session_20260323_202830",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_project_outline_layer",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_202830"
+            ],
+            "last_updated_session": "session_20260323_202830",
+            "updated_at": "2026-03-24T03:28:30Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_packages_reccli_mcp_server_py",
+            "feature_version": 1,
+            "title": "Modified packages/reccli/mcp_server.py",
+            "description": "Modified packages/reccli/mcp_server.py",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "file_boundaries": [
+              "packages/reccli/**"
+            ],
+            "session_ids": [
+              "session_20260323_202830"
+            ],
+            "last_updated_session": "session_20260323_202830",
+            "updated_at": "2026-03-24T03:28:30Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-03-24T03:28:30Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_vector_indexing_hybrid_search",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_202830"
+            ],
+            "last_updated_session": "session_20260323_202830",
+            "updated_at": "2026-03-24T03:28:30Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_testing_benchmarks",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_202830"
+            ],
+            "last_updated_session": "session_20260323_202830",
+            "updated_at": "2026-03-24T03:28:30Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260323_202830",
+            "path": "devsession/03232026_2028.devsession",
+            "started_at": "2026-03-23T20:28:30.313247",
+            "ended_at": "2026-03-23T20:28:30.313636",
+            "feature_ids": [
+              "feat_packages_reccli_mcp_server_py",
+              "feat_project_outline_layer",
+              "feat_testing_benchmarks",
+              "feat_vector_indexing_hybrid_search"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260324043150",
+      "status": "pending",
+      "created_at": "2026-03-24T04:31:50Z",
+      "source_session_id": "session_20260323_213150",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_session_recording_storage",
+          "changes": {
+            "session_ids_add": [
+              "session_20260323_213150"
+            ],
+            "last_updated_session": "session_20260323_213150",
+            "updated_at": "2026-03-24T04:31:50Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devsession_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVSESSION_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260323_213150"
+            ],
+            "last_updated_session": "session_20260323_213150",
+            "updated_at": "2026-03-24T04:31:50Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-03-24T04:31:50Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260323_213150",
+            "path": "devsession/03232026_2131.devsession",
+            "started_at": "2026-03-23T21:31:50.969878",
+            "ended_at": "2026-03-23T21:31:50.970266",
+            "feature_ids": [
+              "feat_docs_specs_devsession_format_md",
+              "feat_session_recording_storage"
+            ]
+          }
         }
       ]
     }
