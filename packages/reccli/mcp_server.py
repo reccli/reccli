@@ -598,14 +598,52 @@ def save_session_notes(
     if not conversation:
         return "Nothing to save. Provide at least one of: overview, decisions, problems_solved, open_issues, next_steps, or files_changed."
 
+    # Try to get the real conversation from the active WAL
+    real_conversation = None
+    try:
+        from .hooks.session_recorder import _find_project_root, _devsession_dir
+        sessions_dir = _devsession_dir(project_root)
+        for wal in sorted(sessions_dir.glob(".hooks_wal_*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+            lines = wal.read_text(encoding="utf-8").strip().split("\n")
+            if len(lines) < 2:
+                continue
+            records = []
+            for line in lines[1:]:
+                if line.strip():
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            if records:
+                real_conversation = []
+                for rec in records:
+                    msg = {
+                        "role": rec.get("role", "system"),
+                        "content": rec.get("content", ""),
+                        "timestamp": rec.get("timestamp", ""),
+                    }
+                    if rec.get("tool_name"):
+                        msg["tool_name"] = rec["tool_name"]
+                    real_conversation.append(msg)
+                break  # Use the most recent WAL
+    except Exception:
+        pass
+
     # Create and save .devsession
     session = DevSession()
-    session.conversation = conversation
+    # Use real conversation from WAL if available, otherwise synthetic
+    session.conversation = real_conversation or conversation
     session.metadata["project_root"] = str(project_root)
     session.metadata["working_directory"] = str(project_root)
-    session.metadata["source"] = "mcp_agent_reported"
+    session.metadata["source"] = "mcp_hooks" if real_conversation else "mcp_agent_reported"
 
-    # Build a basic summary directly from the structured input
+    # Build summary from structured input, with ranges spanning the real conversation
+    conv_len = len(session.conversation)
+    end_msg = f"msg_{conv_len:03d}"
+
+    def _make_range():
+        return {"start": "msg_001", "end": end_msg, "start_index": 0, "end_index": conv_len}
+
     session.summary = {
         "schema_version": "1.1",
         "model": "agent_reported",
@@ -613,32 +651,32 @@ def save_session_notes(
         "overview": overview or "Agent-reported session notes.",
         "decisions": [
             {"id": f"dec_{i:03d}", "decision": d, "reasoning": "", "impact": "medium",
-             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "span_ids": [], "references": [], "message_range": _make_range(),
              "confidence": "medium", "pinned": False, "locked": False}
             for i, d in enumerate(decisions or [])
         ],
         "code_changes": [
             {"id": f"chg_{i:03d}", "files": [f], "description": f"Modified {f}", "type": "feature",
              "lines_added": None, "lines_removed": None, "source_of_truth": "agent_reported",
-             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "span_ids": [], "references": [], "message_range": _make_range(),
              "confidence": "medium", "pinned": False, "locked": False}
             for i, f in enumerate(files_changed or [])
         ],
         "problems_solved": [
             {"id": f"prb_{i:03d}", "problem": p, "solution": "",
-             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "span_ids": [], "references": [], "message_range": _make_range(),
              "confidence": "medium", "pinned": False, "locked": False}
             for i, p in enumerate(problems_solved or [])
         ],
         "open_issues": [
             {"id": f"iss_{i:03d}", "issue": issue, "severity": "medium",
-             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "span_ids": [], "references": [], "message_range": _make_range(),
              "confidence": "medium", "pinned": False, "locked": False}
             for i, issue in enumerate(open_issues or [])
         ],
         "next_steps": [
             {"id": f"nxt_{i:03d}", "action": step, "priority": i + 1,
-             "span_ids": [], "references": [], "message_range": {"start": "msg_001", "end": f"msg_{len(conversation):03d}", "start_index": 0, "end_index": len(conversation)},
+             "span_ids": [], "references": [], "message_range": _make_range(),
              "confidence": "medium", "pinned": False, "locked": False}
             for i, step in enumerate(next_steps or [])
         ],
@@ -646,11 +684,43 @@ def save_session_notes(
         "audit_trail": [],
     }
 
+    # Generate spans linking summary items to conversation
+    try:
+        from .summarization.summary_schema import ensure_summary_span_links
+        session.spans = ensure_summary_span_links(session.summary, session.spans)
+    except Exception:
+        pass
+
     sessions_dir = _sessions_dir(project_root)
     output_path = default_devsession_path(project_root)
     session.save(output_path, skip_validation=True)
 
-    # Update vector index with the new session
+    # Background: generate embeddings (messages + spans + summary items)
+    try:
+        from .hooks.session_recorder import _spawn_background_summarize
+        # Don't re-summarize (we already have the summary), just embed + index
+        import subprocess, sys
+        script = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "path = Path(sys.argv[1])\n"
+            "from reccli.session.devsession import DevSession\n"
+            "s = DevSession.load(path)\n"
+            "s.generate_embeddings()\n"
+            "s.save(path)\n"
+            "from reccli.retrieval.vector_index import update_index_with_new_session\n"
+            "update_index_with_new_session(path.parent, path, verbose=False)\n"
+        )
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(output_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
+
+    # Also update index immediately for BM25 (embeddings come later from background)
     try:
         from .retrieval.vector_index import update_index_with_new_session
         update_index_with_new_session(sessions_dir, output_path, verbose=False)
