@@ -137,7 +137,8 @@ def get_session_start_context(cwd: str) -> Optional[str]:
         f"You have RecCli project memory available with {len(registered)} registered projects:\n"
         + "\n".join(project_lines) + "\n\n"
         "Ask the user which project they'd like to work on today. "
-        "Once they choose, call the load_project_context MCP tool with the project path. "
+        "IMPORTANT: When they choose a project, you MUST immediately call the reccli load_project_context MCP tool "
+        "with the project path to activate session recording and load the feature map. Do not skip this step. "
         "If they want to work on a new project, use project_init to scan and initialize it."
     )
 
