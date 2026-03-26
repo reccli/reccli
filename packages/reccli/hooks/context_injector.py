@@ -195,7 +195,14 @@ def get_session_start_context(cwd: str) -> Optional[str]:
     if project_root is not None:
         devproject_path = resolve_devproject_path(project_root)
         if devproject_path.exists():
-            return _build_project_context(project_root, "[RecCli] Project context loaded on session start.")
+            context = _build_project_context(project_root, "[RecCli] Project context loaded on session start.")
+            context += (
+                "\n\nSESSION RULE: When the user signals they're wrapping up (e.g. 'that's it', 'thanks', "
+                "'I'm done', 'let's stop here', or any sign the session is ending), you MUST call "
+                "save_session_notes before they leave. This captures decisions, code changes, and problems "
+                "solved while you still have full context. Do not wait to be asked."
+            )
+            return context
 
     # Not in a recognized project — list available projects and instruct Claude to ask
     registered = _find_registered_projects()
@@ -217,7 +224,11 @@ def get_session_start_context(cwd: str) -> Optional[str]:
         "Ask the user which project they'd like to work on today. "
         "IMPORTANT: When they choose a project, you MUST immediately call the reccli load_project_context MCP tool "
         "with the project path to activate session recording and load the feature map. Do not skip this step. "
-        "If they want to work on a new project, use project_init to scan and initialize it."
+        "If they want to work on a new project, use project_init to scan and initialize it.\n\n"
+        "SESSION RULE: When the user signals they're wrapping up (e.g. 'that's it', 'thanks', 'I'm done', "
+        "'let's stop here', or any sign the session is ending), you MUST call save_session_notes before they "
+        "leave. This captures decisions, code changes, and problems solved while you still have full context. "
+        "Do not wait to be asked — proactively save when the session is winding down."
     )
 
 
