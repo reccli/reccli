@@ -66,8 +66,13 @@ def main():
             )
 
     elif hook_name == "PostCompact":
-        # Re-inject .devproject context after Claude Code compacts its context window.
-        # Stdout from this hook gets added to Claude's context.
+        # 1. Flush WAL to .devsession and trigger background summarization
+        try:
+            session_recorder.compact_session(session_id, cwd)
+        except Exception:
+            pass
+
+        # 2. Re-inject .devproject context (stdout → Claude's context)
         try:
             from .context_injector import get_post_compact_context
             context = get_post_compact_context(cwd)

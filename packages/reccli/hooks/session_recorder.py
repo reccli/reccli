@@ -241,6 +241,44 @@ def flush_active_wals(project_root: Path) -> list:
     return flushed
 
 
+def compact_session(session_id: str, cwd: str) -> Optional[Path]:
+    """Flush WAL to .devsession at compaction time. WAL keeps recording.
+
+    Unlike end_session, this:
+    - Saves a .devsession from the current WAL contents
+    - Spawns background summarization
+    - Does NOT delete the WAL (session continues)
+    """
+    project_root = _find_project_root(cwd, session_id)
+    if project_root is None:
+        return None
+
+    # Flush WAL to live snapshot first
+    flushed = flush_active_wals(project_root)
+    if not flushed:
+        return None
+
+    # Convert live snapshot to a real .devsession
+    sessions_dir = _devsession_dir(project_root)
+    for snapshot in flushed:
+        from ..session.devsession import DevSession
+        try:
+            session = DevSession.load(snapshot)
+        except Exception:
+            continue
+
+        output_path = default_devsession_path(project_root)
+        session.save(output_path, skip_validation=True)
+
+        # Background summarize the compacted session
+        if len(session.conversation) >= 4:
+            _spawn_background_summarize(output_path)
+
+        return output_path
+
+    return None
+
+
 def end_session(session_id: str, cwd: str) -> Optional[Path]:
     """Finalize the WAL into a .devsession file.
 
