@@ -86,6 +86,56 @@ def _append_to_wal(wal_file: Path, record: Dict[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
+# Approximate tokens per byte in conversational text (conservative estimate)
+_BYTES_PER_TOKEN = 4
+_PRECOMPACT_TOKEN_THRESHOLD = 400_000
+_PRECOMPACT_BYTE_THRESHOLD = _PRECOMPACT_TOKEN_THRESHOLD * _BYTES_PER_TOKEN  # ~1.6MB WAL
+_REMINDER_SENT_SUFFIX = ".precompact_reminded"
+
+
+def check_precompaction_threshold(session_id: str, cwd: str) -> Optional[str]:
+    """Check if the WAL is approaching the compaction threshold.
+
+    Returns a reminder string to inject into Claude's context if the session
+    is large enough to warrant a pre-compaction save. Only fires once per session.
+    """
+    project_root = _find_project_root(cwd, session_id)
+    if project_root is None:
+        return None
+
+    wal = _wal_path(project_root, session_id)
+    if not wal.exists():
+        return None
+
+    # Don't remind twice
+    reminder_flag = wal.with_suffix(_REMINDER_SENT_SUFFIX)
+    if reminder_flag.exists():
+        return None
+
+    try:
+        wal_size = wal.stat().st_size
+    except Exception:
+        return None
+
+    if wal_size < _PRECOMPACT_BYTE_THRESHOLD:
+        return None
+
+    # Mark as reminded
+    try:
+        reminder_flag.touch()
+    except Exception:
+        pass
+
+    approx_tokens = wal_size // _BYTES_PER_TOKEN
+    return (
+        f"[RecCli] This session has ~{approx_tokens:,} tokens recorded. "
+        "Context compaction may happen soon. To preserve your work with full context, "
+        "please call save_session_notes now to capture decisions, code changes, and "
+        "problems solved this session. This also updates the .devproject feature map. "
+        "After saving, you can continue working normally."
+    )
+
+
 def start_session(session_id: str, cwd: str) -> None:
     """Create a new WAL file for this Claude Code session."""
     project_root = _find_project_root(cwd, session_id)
@@ -347,6 +397,8 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     wal.unlink(missing_ok=True)
     live_snapshot = _devsession_dir(project_root) / f".live_{session_id}.devsession"
     live_snapshot.unlink(missing_ok=True)
+    reminder_flag = wal.with_suffix(_REMINDER_SENT_SUFFIX)
+    reminder_flag.unlink(missing_ok=True)
 
     # Spawn background summarization (LLM call — too slow for hook timeout)
     if len(conversation) >= 4:  # Skip trivial sessions

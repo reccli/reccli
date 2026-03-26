@@ -105,6 +105,84 @@ def _find_registered_projects() -> List[Path]:
     return sorted(projects)
 
 
+def validate_and_note_staleness(cwd: str) -> Optional[str]:
+    """Run fast file path validation on .devproject post-compaction.
+
+    Fixes moved files, flags missing files, and detects new files
+    not yet assigned to any feature. Returns a note for Claude if
+    the .devproject needs attention.
+    """
+    project_root = discover_project_root(Path(cwd).resolve())
+    if project_root is None:
+        return None
+
+    devproject_path = resolve_devproject_path(project_root)
+    if not devproject_path.exists():
+        return None
+
+    manager = DevProjectManager(project_root)
+
+    # Fast validation — filesystem only, no LLM
+    try:
+        result = manager.validate_and_fix_file_paths()
+    except Exception:
+        result = {}
+
+    fixed = result.get("fixed", [])
+    missing = result.get("missing", [])
+
+    # Check for new files not assigned to any feature
+    document = manager.load_or_create()
+    all_feature_files = set()
+    for f in document.get("features", []):
+        all_feature_files.update(f.get("files_touched", []))
+    for f in document.get("shared_infrastructure", []):
+        if isinstance(f, str):
+            all_feature_files.add(f)
+    for f in document.get("hub_files", []):
+        if isinstance(f, str):
+            all_feature_files.add(f)
+
+    IGNORED = {".git", "node_modules", "venv", ".venv", "__pycache__", ".next",
+               "dist", "build", ".claude", "devsession", ".DS_Store"}
+    CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java",
+                 ".rb", ".swift", ".kt", ".c", ".cpp", ".h", ".cs"}
+
+    new_files = []
+    for path in project_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix not in CODE_EXTS:
+            continue
+        if any(part in IGNORED for part in path.relative_to(project_root).parts):
+            continue
+        rel = path.relative_to(project_root).as_posix()
+        if rel not in all_feature_files:
+            new_files.append(rel)
+
+    if not fixed and not missing and not new_files:
+        return None
+
+    notes = ["## .devproject Staleness Check"]
+    if fixed:
+        notes.append(f"Auto-fixed {len(fixed)} moved file(s):")
+        for f in fixed[:5]:
+            notes.append(f"  - {f.get('old_path')} → {f.get('new_path')}")
+    if missing:
+        notes.append(f"{len(missing)} file(s) no longer exist:")
+        for m in missing[:5]:
+            notes.append(f"  - {m.get('path')} (was in {m.get('feature', '?')})")
+    if new_files:
+        notes.append(f"{len(new_files)} new code file(s) not in any feature:")
+        for nf in new_files[:10]:
+            notes.append(f"  - {nf}")
+        if len(new_files) > 10:
+            notes.append(f"  ... and {len(new_files) - 10} more")
+        notes.append("Consider running project_init with force=True to re-scan, or manually assign these files.")
+
+    return "\n".join(notes)
+
+
 def get_session_start_context(cwd: str) -> Optional[str]:
     """Build context to inject at Claude Code session start.
 

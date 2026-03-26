@@ -49,6 +49,14 @@ def main():
         if prompt:
             session_recorder.record_user_prompt(session_id, prompt, cwd)
 
+        # Check if approaching compaction threshold — inject pre-compaction reminder
+        try:
+            reminder = session_recorder.check_precompaction_threshold(session_id, cwd)
+            if reminder:
+                print(reminder)
+        except Exception:
+            pass
+
     elif hook_name == "Stop":
         message = event.get("last_assistant_message", "")
         if message and not event.get("stop_hook_active"):
@@ -72,11 +80,21 @@ def main():
         except Exception:
             pass
 
-        # 2. Re-inject .devproject context (stdout → Claude's context)
+        # 2. Validate .devproject file paths and detect new files (fast, no LLM)
+        stale_note = ""
+        try:
+            from .context_injector import validate_and_note_staleness
+            stale_note = validate_and_note_staleness(cwd) or ""
+        except Exception:
+            pass
+
+        # 3. Re-inject .devproject context + staleness notes (stdout → Claude's context)
         try:
             from .context_injector import get_post_compact_context
             context = get_post_compact_context(cwd)
             if context:
+                if stale_note:
+                    context += "\n" + stale_note
                 print(context)
         except Exception:
             pass
