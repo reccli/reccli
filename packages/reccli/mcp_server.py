@@ -237,13 +237,33 @@ def load_project_context(working_directory: str) -> str:
     except Exception:
         pass
 
-    # Last session summary
+    # Last session summary — check if it needs retroactive summarization
     sessions_dir = _sessions_dir(project_root)
     last_summary = _latest_session_summary(sessions_dir)
     if last_summary:
         sections.append("## Last Session")
         sections.append(last_summary)
         sections.append("")
+
+    # Detect unsummarized previous session
+    try:
+        from .session.devsession import DevSession
+        for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
+            s = DevSession.load(sf)
+            overview = (s.summary or {}).get("overview", "")
+            is_stub = not overview or overview in ("Session summarized without LLM", "Placeholder summary")
+            if is_stub and len(s.conversation) >= 4:
+                sections.append("## ACTION REQUIRED: Previous Session Unsummarized")
+                sections.append(
+                    f"The previous session ({sf.name}, {len(s.conversation)} messages) has no structured summary. "
+                    "Please read the session conversation using expand_search_result or by reading the file directly, "
+                    "analyze the key decisions, code changes, and problems solved, then call "
+                    "summarize_previous_session with your analysis. This links the summary to the full conversation."
+                )
+                sections.append("")
+            break  # Only check the most recent
+    except Exception:
+        pass
 
     # Pending proposals
     proposals = [p for p in document.get("proposals", []) if p.get("status") == "pending"]
@@ -755,6 +775,151 @@ def save_session_notes(
         f"Session saved: {output_path.name}\n"
         f"Contents: {', '.join(item_counts) if item_counts else 'overview only'}"
         f"{proposal_msg}"
+    )
+
+
+@mcp.tool()
+def summarize_previous_session(
+    working_directory: str,
+    overview: str = "",
+    decisions: list[str] | None = None,
+    problems_solved: list[str] | None = None,
+    open_issues: list[str] | None = None,
+    next_steps: list[str] | None = None,
+    files_changed: list[str] | None = None,
+) -> str:
+    """Update the most recent unsummarized session with a structured summary.
+
+    Call this when load_project_context indicates the previous session needs
+    summarization. You should read the previous session's conversation first,
+    analyze it, then call this with your structured analysis.
+
+    Args:
+        working_directory: Path to the project.
+        overview: 1-2 sentence summary of the previous session.
+        decisions: Key technical decisions from the previous session.
+        problems_solved: Problems that were solved.
+        open_issues: Issues that remained open.
+        next_steps: Planned next actions.
+        files_changed: Files that were modified.
+    """
+    from .session.devsession import DevSession
+    from .summarization.summary_schema import ensure_summary_span_links
+
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    sessions_dir = _sessions_dir(project_root)
+
+    # Find the most recent .devsession with a stub summary
+    target = None
+    target_path = None
+    for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            s = DevSession.load(sf)
+            summary_overview = (s.summary or {}).get("overview", "")
+            is_stub = not summary_overview or summary_overview in (
+                "Session summarized without LLM", "Placeholder summary"
+            )
+            if is_stub and len(s.conversation) >= 2:
+                target = s
+                target_path = sf
+                break
+        except Exception:
+            continue
+
+    if target is None:
+        return "No unsummarized session found."
+
+    timestamp = datetime.now().isoformat()
+    conv_len = len(target.conversation)
+    end_msg = f"msg_{conv_len:03d}"
+
+    def _make_range():
+        return {"start": "msg_001", "end": end_msg, "start_index": 0, "end_index": conv_len}
+
+    target.summary = {
+        "schema_version": "1.1",
+        "model": "claude_in_conversation",
+        "created_at": timestamp,
+        "overview": overview or "Session summarized retroactively.",
+        "decisions": [
+            {"id": f"dec_{i:03d}", "decision": d, "reasoning": "", "impact": "medium",
+             "span_ids": [], "references": [], "message_range": _make_range(),
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, d in enumerate(decisions or [])
+        ],
+        "code_changes": [
+            {"id": f"chg_{i:03d}", "files": [f], "description": f"Modified {f}", "type": "feature",
+             "lines_added": None, "lines_removed": None, "source_of_truth": "agent_reported",
+             "span_ids": [], "references": [], "message_range": _make_range(),
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, f in enumerate(files_changed or [])
+        ],
+        "problems_solved": [
+            {"id": f"prb_{i:03d}", "problem": p, "solution": "",
+             "span_ids": [], "references": [], "message_range": _make_range(),
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, p in enumerate(problems_solved or [])
+        ],
+        "open_issues": [
+            {"id": f"iss_{i:03d}", "issue": issue, "severity": "medium",
+             "span_ids": [], "references": [], "message_range": _make_range(),
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, issue in enumerate(open_issues or [])
+        ],
+        "next_steps": [
+            {"id": f"nxt_{i:03d}", "action": step, "priority": i + 1,
+             "span_ids": [], "references": [], "message_range": _make_range(),
+             "confidence": "medium", "pinned": False, "locked": False}
+            for i, step in enumerate(next_steps or [])
+        ],
+        "causal_edges": [],
+        "audit_trail": [],
+    }
+
+    try:
+        target.spans = ensure_summary_span_links(target.summary, target.spans)
+    except Exception:
+        pass
+
+    target.save(target_path, skip_validation=True)
+
+    # Background embed the new summary items + spans
+    try:
+        import subprocess, sys
+        script = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "path = Path(sys.argv[1])\n"
+            "from reccli.session.devsession import DevSession\n"
+            "s = DevSession.load(path)\n"
+            "s.generate_embeddings(force=False)\n"
+            "s.save(path)\n"
+            "from reccli.retrieval.vector_index import build_unified_index\n"
+            "build_unified_index(path.parent, verbose=False)\n"
+        )
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(target_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
+
+    item_counts = []
+    if decisions: item_counts.append(f"{len(decisions)} decisions")
+    if problems_solved: item_counts.append(f"{len(problems_solved)} problems")
+    if files_changed: item_counts.append(f"{len(files_changed)} file changes")
+    if open_issues: item_counts.append(f"{len(open_issues)} open issues")
+    if next_steps: item_counts.append(f"{len(next_steps)} next steps")
+
+    return (
+        f"Updated {target_path.name} with retroactive summary.\n"
+        f"Session had {conv_len} messages.\n"
+        f"Summary: {', '.join(item_counts) if item_counts else 'overview only'}"
     )
 
 
