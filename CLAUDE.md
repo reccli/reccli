@@ -14,7 +14,10 @@ packages/reccli/
   retrieval/      search.py, retrieval.py, streaming_retrieval.py,
                   embeddings.py, vector_index.py, memory_middleware.py
   project/        devproject.py
+  hooks/          handle_event.py (hook dispatcher), session_recorder.py (WAL recorder),
+                  context_injector.py (SessionStart/PostCompact context injection)
   runtime/        cli.py, llm.py, config.py, tokens.py, chat_ui.py, wpc.py
+  mcp_server.py   MCP server (FastMCP) — tools for Claude Code integration
   tests/          test_*.py (58 tests), fixtures/, benchmarks
   backend/        server.py (JSON-RPC bridge for TypeScript UI)
   ui/             TypeScript + Ink terminal UI (src/components/, src/bridge/)
@@ -36,7 +39,59 @@ PYTHONPATH=packages python3 -m unittest discover -s packages/reccli/tests -p 'te
 PYTHONPATH=packages python3 -m reccli.runtime.cli --help
 PYTHONPATH=packages python3 -m reccli.runtime.cli project init
 PYTHONPATH=packages python3 -m reccli.runtime.cli project show
+
+# MCP server (for Claude Code integration)
+claude mcp add --scope project reccli -- env PYTHONPATH=/path/to/reccli/packages python3 -m reccli.mcp_server
 ```
+
+## MCP server
+
+The MCP server (`mcp_server.py`) exposes these tools to Claude Code:
+
+| Tool | Purpose |
+|------|---------|
+| `load_project_context` | Load .devproject feature map + file tree + last session summary |
+| `project_init` | Scan codebase with Tree-sitter, cluster into features, create .devproject |
+| `project_apply_clustering` | Apply Claude's in-conversation clustering (no-API-key fallback) |
+| `search_history` | Hybrid search (dense + BM25) across all .devsession files |
+| `expand_search_result` | Expand a search result to show full conversation context |
+| `save_session_notes` | Save structured session summary — merges WAL conversation + summary |
+| `summarize_previous_session` | Retroactively summarize an unsummarized previous session |
+
+## Hooks (Claude Code integration)
+
+Hooks in `~/.claude/settings.json` fire automatically on Claude Code events:
+
+| Hook | What it does |
+|------|-------------|
+| `SessionStart` | Creates WAL, injects registered project list into context |
+| `UserPromptSubmit` | Appends user prompt to WAL, checks pre-compaction threshold (~400K tokens) |
+| `Stop` | Appends assistant response to WAL |
+| `PostToolUse` | Appends tool call + result to WAL |
+| `PostCompact` | Flushes WAL to .devsession, validates .devproject, re-injects project context |
+| `SessionEnd` | Finalizes WAL → .devsession, merges with existing summary, spawns background embed+summarize |
+
+### Session lifecycle (MCP path)
+
+1. **SessionStart** → project list injected, WAL created
+2. **User selects project** → Claude calls `load_project_context` → breadcrumb written for hooks
+3. **Every message** → appended to WAL via hooks
+4. **~400K tokens** → pre-compaction reminder injected via `UserPromptSubmit`
+5. **User wraps up** → Claude proactively calls `save_session_notes` (SESSION RULE in start prompt)
+6. **`/exit`** → WAL merged into .devsession, background: summarize + embed + index
+
+### Embedding providers
+
+Cascading fallback: OpenAI text-embedding-3-small (1536D) → local nomic-embed-text-v1.5 (768D) → BM25 only.
+Embeddings stored in sidecar `.npy` files (binary, memory-mapped) not inline JSON.
+
+### API key resolution
+
+Environment variables first (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), then `~/reccli/config.json`.
+
+### Project registry
+
+`~/.reccli/projects.json` tracks projects initialized with `project_init`. Used by SessionStart hook to list available projects.
 
 ## Architecture: tri-layer memory
 
