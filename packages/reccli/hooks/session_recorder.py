@@ -445,7 +445,7 @@ def _spawn_background_finalize(session_path: Path) -> None:
         "    s.generate_summary()\n"
         "    changed = True\n"
         "# Always embed — catches new messages from WAL merge\n"
-        "count = s.generate_embeddings(force=False)\n"
+        "count = s.generate_embeddings(force=False, storage_mode='external')\n"
         "if count > 0:\n"
         "    changed = True\n"
         "if changed:\n"
