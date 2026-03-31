@@ -197,10 +197,13 @@ def get_session_start_context(cwd: str) -> Optional[str]:
         if devproject_path.exists():
             context = _build_project_context(project_root, "[RecCli] Project context loaded on session start.")
             context += (
-                "\n\nSESSION RULE: When the user signals they're wrapping up (e.g. 'that's it', 'thanks', "
-                "'I'm done', 'let's stop here', or any sign the session is ending), you MUST call "
-                "save_session_notes before they leave. This captures decisions, code changes, and problems "
-                "solved while you still have full context. Do not wait to be asked."
+                "\n\nSESSION RULES:\n"
+                "1. SAVE ON EXIT: When the user signals they're wrapping up ('that's it', 'thanks', 'I'm done', "
+                "'let's stop here'), you MUST call save_session_notes before they leave. Do not wait to be asked.\n"
+                "2. CONTEXT SWITCHING: If the user starts discussing a different project, "
+                "ask them: 'It sounds like you want to switch to [project]. Want me to save notes for the current "
+                "session and load that project?' If they confirm, call save_session_notes for the current project, "
+                "then call load_project_context for the new project."
             )
             return context
 
@@ -225,10 +228,14 @@ def get_session_start_context(cwd: str) -> Optional[str]:
         "IMPORTANT: When they choose a project, you MUST immediately call the reccli load_project_context MCP tool "
         "with the project path to activate session recording and load the feature map. Do not skip this step. "
         "If they want to work on a new project, use project_init to scan and initialize it.\n\n"
-        "SESSION RULE: When the user signals they're wrapping up (e.g. 'that's it', 'thanks', 'I'm done', "
-        "'let's stop here', or any sign the session is ending), you MUST call save_session_notes before they "
-        "leave. This captures decisions, code changes, and problems solved while you still have full context. "
-        "Do not wait to be asked — proactively save when the session is winding down."
+        "SESSION RULES:\n"
+        "1. SAVE ON EXIT: When the user signals they're wrapping up ('that's it', 'thanks', 'I'm done', "
+        "'let's stop here'), you MUST call save_session_notes before they leave. Do not wait to be asked.\n"
+        "2. CONTEXT SWITCHING: If the user starts discussing a different project than the one currently loaded, "
+        "ask them: 'It sounds like you want to switch to [project]. Want me to save notes for the current "
+        "session and load that project?' If they confirm, call save_session_notes for the current project, "
+        "then call load_project_context for the new project. This keeps .devsession files written to the "
+        "correct project."
     )
 
 

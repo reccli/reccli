@@ -73,6 +73,19 @@ def main():
                 cwd,
             )
 
+        # When load_project_context is called, set per-session breadcrumb
+        if tool_name == "mcp__reccli__load_project_context":
+            try:
+                tool_input = event.get("tool_input") or {}
+                wd = tool_input.get("working_directory", "")
+                if wd:
+                    from ..project.devproject import discover_project_root
+                    root = discover_project_root(Path(wd).resolve())
+                    if root:
+                        session_recorder.set_active_project(session_id, root)
+            except Exception:
+                pass
+
     elif hook_name == "PostCompact":
         # 1. Flush WAL to .devsession and trigger background summarization
         try:

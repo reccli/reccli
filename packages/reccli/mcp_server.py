@@ -188,12 +188,8 @@ def load_project_context(working_directory: str) -> str:
             "Run `project_init` first to initialize project memory."
         )
 
-    # Mark this project as active so hooks record to it even from ~/
-    try:
-        from .hooks.session_recorder import set_active_project
-        set_active_project("mcp_active", project_root)
-    except Exception:
-        pass
+    # Note: per-session breadcrumb is set by the PostToolUse hook
+    # when it detects this tool was called (uses the real session_id)
 
     manager = DevProjectManager(project_root)
 

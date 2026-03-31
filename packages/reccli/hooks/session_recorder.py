@@ -64,17 +64,6 @@ def _find_project_root(cwd: str, session_id: str = "") -> Optional[Path]:
             except Exception:
                 pass
 
-    # Check any active session breadcrumb (fallback for hooks without session_id)
-    if ACTIVE_PROJECT_DIR.exists():
-        for bc in sorted(ACTIVE_PROJECT_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
-            try:
-                data = json.loads(bc.read_text())
-                p = Path(data["project_root"])
-                if p.exists():
-                    return p
-            except Exception:
-                continue
-
     return None
 
 
