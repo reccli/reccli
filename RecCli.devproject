@@ -1,109 +1,67 @@
 {
   "format": "devproject",
   "version": "2.1.0",
-  "project_root": "/Users/will/coding-projects/RecCli",
-  "updated_at": "2026-03-24T04:31:50Z",
-  "last_updated_session": "session_20260323_213150",
+  "project_root": "/Users/will/coding-projects/reccli",
+  "updated_at": "2026-03-27T04:27:42Z",
+  "last_updated_session": null,
   "project": {
-    "name": "RecCli",
-    "description": "RecCli is a temporal memory engine for coding agents. It implements a tri-layer memory system: full conversation history as the source of truth, compacted session summaries for active working memory, and an optional project outline for cross-session context, with temporal links enabling recovery of exact prior reasoning.",
+    "name": "reccli",
+    "description": "reccli is a temporal memory engine for AI coding agents implementing a tri-layer memory system: .devproject (project feature map), .devsession summary (compacted working memory), and .devsession full conversation (source of truth). It runs as an MCP server and Claude Code hook integration, enabling agents to accumulate structured memory across sessions through hybrid search, LLM summarization, and temporal-semantic linking between memory layers.",
     "status": "active",
     "source": "auto"
   },
   "features": [
     {
-      "feature_id": "feat_session_recording_storage",
+      "feature_id": "feat_devsession_file_format_session_management",
       "feature_version": 1,
-      "title": "Session Recording & Storage",
-      "description": "Pure Python PTY terminal recording that captures terminal I/O and writes `.devsession` files with conversation parsing, checksum verification, and write-ahead log safety.",
+      "title": ".devsession File Format & Session Management",
+      "description": "Core .devsession file format manager, conversation message tagging, ID-stable reindexing after compaction, and session checkpoint tracking. This is the source-of-truth layer of the tri-layer memory system.",
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli/recording/parser.py",
-        "packages/reccli/recording/recorder.py",
-        "packages/reccli/recording/wal_recorder.py",
-        "packages/reccli/session/devsession.py"
+        "packages/reccli/session/__init__.py",
+        "packages/reccli/session/checkpoints.py",
+        "packages/reccli/session/reindexing.py"
       ],
       "file_boundaries": [
-        "packages/reccli-core/reccli/devsession.py",
-        "packages/reccli-core/reccli/parser.py",
-        "packages/reccli-core/reccli/recorder.py",
-        "packages/reccli-core/reccli/wal_recorder.py"
+        "packages/reccli/session/**"
       ],
       "docs": [
         {
-          "path": "docs/specs/SESSION_STORAGE.md",
-          "title": "Session Storage Strategy",
+          "path": "docs/architecture/ARCHITECTURE.md",
+          "title": "RecCli + .devsession Architecture",
           "relevance": "primary",
-          "score": 4.7695,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_semantic_matches_feature",
-            "typed_doc_feature_owner"
-          ]
-        },
-        {
-          "path": "instructions/PRD-MVP.md",
-          "title": "**RecCli MVP / PRD (Product Requirements Document)**",
-          "relevance": "primary",
-          "score": 8.7768,
+          "score": 16.8356,
           "signals": [
             "bm25"
           ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
-        "signals": []
-      }
-    },
-    {
-      "feature_id": "feat_session_summarization_compaction",
-      "feature_version": 1,
-      "title": "Session Summarization & Compaction",
-      "description": "Two-stage AI-powered summarization that detects conversation spans, generates reasoned summaries with temporal references, and compacts sessions while preserving verifiable message_range links to the original conversation.",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/recording/compactor.py",
-        "packages/reccli/session/reindexing.py",
-        "packages/reccli/summarization/code_change_detector.py",
-        "packages/reccli/summarization/compaction_log.py",
-        "packages/reccli/summarization/redaction.py",
-        "packages/reccli/summarization/summarizer.py"
-      ],
-      "file_boundaries": [
-        "packages/reccli-core/reccli/code_change_detector.py",
-        "packages/reccli-core/reccli/compaction_log.py",
-        "packages/reccli-core/reccli/compactor.py",
-        "packages/reccli-core/reccli/redaction.py",
-        "packages/reccli-core/reccli/reindexing.py",
-        "packages/reccli-core/reccli/summarizer.py",
-        "packages/reccli-core/reccli/summary_*.py",
-        "packages/reccli-core/reccli/timestamp_validation.py"
-      ],
-      "docs": [
+        },
         {
           "path": "docs/archive/ideation/RecCli_intelligent_context_management_overview.md",
           "title": "### RecCli intelligent context management overview",
           "relevance": "primary",
-          "score": 13.4235,
+          "score": 13.0897,
           "signals": [
             "bm25"
+          ]
+        },
+        {
+          "path": "docs/archive/implementation/indexing/VECTOR_OPTIMIZATION_STATUS.md",
+          "title": "Vector Search Optimization - Status Report",
+          "relevance": "primary",
+          "score": 3.8,
+          "signals": [
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
           ]
         },
         {
           "path": "docs/archive/implementation/retrieval/SUMMARIZER_LINKING_INDEX_SAFEGUARDS.md",
           "title": "GPT-5 Safeguards Implementation Status",
           "relevance": "primary",
-          "score": 3.44,
+          "score": 10.3913,
           "signals": [
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
+            "bm25"
           ]
         },
         {
@@ -117,23 +75,14 @@
           ]
         },
         {
-          "path": "docs/implementation/prompts/AI_PROMPTS.md",
-          "title": "AI System Prompts for RecCli",
+          "path": "docs/specs/DEVSESSION_FORMAT.md",
+          "title": ".devsession File Format Specification",
           "relevance": "primary",
-          "score": 1.6,
-          "signals": [
-            "doc_references_feature_files"
-          ]
-        },
-        {
-          "path": "docs/progress/session-notes/SESSION_2025_11_07_SUMMARY.md",
-          "title": "Development Session Summary - November 7, 2025",
-          "relevance": "primary",
-          "score": 4.78,
+          "score": 4.4956,
           "signals": [
             "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
+            "doc_semantic_matches_feature",
+            "typed_doc_feature_owner"
           ]
         },
         {
@@ -150,313 +99,40 @@
       ],
       "session_ids": [],
       "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
+      "updated_at": "2026-03-27T04:27:39Z",
       "staleness": {
         "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
+        "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
     },
     {
-      "feature_id": "feat_vector_indexing_hybrid_search",
+      "feature_id": "feat_llm_summarization_session_compaction",
       "feature_version": 1,
-      "title": "Vector Indexing & Hybrid Search",
-      "description": "Unified cross-session vector index with dense embeddings, BM25 sparse search, reciprocal rank fusion, temporal filtering, and numpy-optimized cosine similarity for fast semantic retrieval.",
+      "title": "LLM Summarization & Session Compaction",
+      "description": "Two-stage AI-powered session summarization (span detection + reasoned summary), summary schema definitions, reference verification to prevent hallucinations, redaction of secrets before summarization, code change detection, compaction log safety net, and preemptive compaction that auto-triggers near context limits.",
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli/retrieval/search.py",
-        "packages/reccli/retrieval/vector_index.py"
+        "packages/reccli/summarization/__init__.py",
+        "packages/reccli/summarization/code_change_detector.py",
+        "packages/reccli/summarization/compaction_log.py",
+        "packages/reccli/summarization/preemptive_compaction.py",
+        "packages/reccli/summarization/redaction.py",
+        "packages/reccli/summarization/summarizer.py",
+        "packages/reccli/summarization/summary_verification.py"
       ],
       "file_boundaries": [
-        "packages/reccli-core/reccli/embeddings.py",
-        "packages/reccli-core/reccli/search.py",
-        "packages/reccli-core/reccli/vector_index.py"
+        "packages/reccli/summarization/**"
       ],
       "docs": [
-        {
-          "path": "archive/v2-devsession-recorder/v2-devsession-recorder/requirements.txt",
-          "title": "RecCli v2.0 - Dependencies",
-          "relevance": "primary",
-          "score": 13.5689,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/README.md",
-          "title": "RecCli Docs",
-          "relevance": "reference",
-          "score": 3.0591,
-          "signals": [
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/implementation/indexing/VECTOR_OPTIMIZATION_STATUS.md",
-          "title": "Vector Search Optimization - Status Report",
-          "relevance": "primary",
-          "score": 5.4,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_ANALYSIS.md",
-          "title": "Vector Search Performance Analysis",
-          "relevance": "primary",
-          "score": 5.4,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_BOTTLENECK_ANALYSIS.md",
-          "title": "Vector Search Bottleneck Analysis",
-          "relevance": "primary",
-          "score": 5.4,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_COMPLETION.md",
-          "title": "Vector Search Optimization - Status Update",
-          "relevance": "primary",
-          "score": 6.6,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_FINAL.md",
-          "title": "Vector Search Optimization - COMPLETE ✅",
-          "relevance": "primary",
-          "score": 1.7,
-          "signals": [
-            "doc_references_feature_files"
-          ]
-        },
-        {
-          "path": "docs/archive/progress/phases/PHASE_5_IMPLEMENTATION.md",
-          "title": "Phase 5: Vector Embeddings & Search - Implementation",
-          "relevance": "primary",
-          "score": 6.8333,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/implementation/indexing/README.md",
-          "title": "Indexing Implementation",
-          "relevance": "primary",
-          "score": 1.7,
-          "signals": [
-            "doc_references_feature_files"
-          ]
-        },
-        {
-          "path": "docs/implementation/retrieval/README.md",
-          "title": "Retrieval Implementation",
-          "relevance": "primary",
-          "score": 1.6,
-          "signals": [
-            "doc_references_feature_files"
-          ]
-        },
-        {
-          "path": "docs/implementation/retrieval/STREAMING_HYBRID_RETRIEVAL.md",
-          "title": "Streaming Hybrid Retrieval",
-          "relevance": "primary",
-          "score": 5.34,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/specs/DEVSESSION_FORMAT.md",
-          "title": ".devsession File Format Specification",
-          "relevance": "primary",
-          "score": 11.6621,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/specs/UNIFIED_VECTOR_INDEX.md",
-          "title": "Unified Vector Index for Cross-Session Context",
-          "relevance": "primary",
-          "score": 7.0267,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature",
-            "typed_doc_feature_owner"
-          ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
-        "signals": []
-      }
-    },
-    {
-      "feature_id": "feat_memory_middleware_context_loading",
-      "feature_version": 1,
-      "title": "Memory Middleware & Context Loading",
-      "description": "Intelligent context loading that hydrates LLM prompts from `.devsession` memory using summary layer, recent messages, vector-retrieved history, and streaming progressive enhancement (instant → fast → smart).",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/retrieval/memory_middleware.py",
-        "packages/reccli/retrieval/retrieval.py",
-        "packages/reccli/retrieval/streaming_retrieval.py"
-      ],
-      "file_boundaries": [
-        "packages/reccli-core/reccli/memory_middleware.py",
-        "packages/reccli-core/reccli/retrieval.py",
-        "packages/reccli-core/reccli/streaming_retrieval.py"
-      ],
-      "docs": [
-        {
-          "path": "docs/architecture/ARCHITECTURE.md",
-          "title": "RecCli + .devsession Architecture",
-          "relevance": "primary",
-          "score": 14.1793,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/architecture/CONTEXT_LOADING.md",
-          "title": "Context Loading Strategy for .devsession",
-          "relevance": "primary",
-          "score": 6.2,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature",
-            "typed_doc_feature_owner"
-          ]
-        },
-        {
-          "path": "docs/archive/progress/phases/PHASE_6_IMPLEMENTATION.md",
-          "title": "Phase 6: Memory Middleware - Implementation",
-          "relevance": "primary",
-          "score": 6.5,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/implementation/prompts/AI_PROMPTS.md",
-          "title": "AI System Prompts for RecCli",
-          "relevance": "primary",
-          "score": 1.6,
-          "signals": [
-            "doc_references_feature_files"
-          ]
-        },
-        {
-          "path": "docs/implementation/retrieval/README.md",
-          "title": "Retrieval Implementation",
-          "relevance": "primary",
-          "score": 1.8,
-          "signals": [
-            "doc_references_feature_files"
-          ]
-        },
-        {
-          "path": "docs/product/PROJECT_INITIALIZATION.md",
-          "title": "Project Initialization & Context Loading",
-          "relevance": "primary",
-          "score": 4.5045,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "email_templates.md",
-          "title": "reccli Email Templates",
-          "relevance": "primary",
-          "score": 6.4366,
-          "signals": [
-            "bm25"
-          ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
-        "signals": []
-      }
-    },
-    {
-      "feature_id": "feat_preemptive_compaction_session_management",
-      "feature_version": 1,
-      "title": "Preemptive Compaction & Session Management",
-      "description": "Automatic compaction at 190K tokens using custom summarization, checkpoints for milestone tracking, episodes for conversation phase detection, and work package continuity for predictive pre-fetching.",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/runtime/wpc.py",
-        "packages/reccli/session/checkpoints.py",
-        "packages/reccli/summarization/preemptive_compaction.py"
-      ],
-      "file_boundaries": [
-        "packages/reccli-core/reccli/checkpoints.py",
-        "packages/reccli-core/reccli/episodes.py",
-        "packages/reccli-core/reccli/post_answer_reasoning.py",
-        "packages/reccli-core/reccli/preemptive_compaction.py",
-        "packages/reccli-core/reccli/wpc.py"
-      ],
-      "docs": [
-        {
-          "path": "docs/archive/decisions/DESIGN_DECISIONS.md",
-          "title": "RecCli v2 Design Decisions",
-          "relevance": "primary",
-          "score": 13.782,
-          "signals": [
-            "bm25"
-          ]
-        },
         {
           "path": "docs/archive/progress/phases/PHASE_7_IMPLEMENTATION.md",
           "title": "Phase 7: Preemptive Compaction - Implementation",
           "relevance": "primary",
-          "score": 6.5,
+          "score": 5.95,
           "signals": [
             "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/progress/phases/PHASE_7_POST_AUDIT_FIXES.md",
-          "title": "Phase 7: Post-Audit Fixes",
-          "relevance": "primary",
-          "score": 4.1,
-          "signals": [
             "doc_name_matches_feature_alias",
             "doc_semantic_matches_feature"
           ]
@@ -465,7 +141,7 @@
           "path": "docs/archive/progress/phases/PHASE_7_WALKTHROUGH.md",
           "title": "Phase 7: Preemptive Compaction - Walkthrough",
           "relevance": "primary",
-          "score": 6.5,
+          "score": 5.95,
           "signals": [
             "doc_title_matches_feature_terms",
             "doc_name_matches_feature_alias",
@@ -473,156 +149,10 @@
           ]
         },
         {
-          "path": "docs/progress/README.md",
-          "title": "RecCli Progress Docs",
-          "relevance": "reference",
-          "score": 3.0591,
-          "signals": [
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
-        "signals": []
-      }
-    },
-    {
-      "feature_id": "feat_llm_chat_interface",
-      "feature_version": 1,
-      "title": "LLM Chat Interface",
-      "description": "Native LLM CLI interface supporting Claude and GPT with streaming responses, automatic `.devsession` recording, retrieval tool integration, and one-shot query mode.",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/runtime/llm.py"
-      ],
-      "file_boundaries": [
-        "packages/reccli-core/reccli/llm.py"
-      ],
-      "docs": [
-        {
-          "path": "docs/archive/decisions/PHASE_7_AUDIT.md",
-          "title": "Phase 7 Implementation Audit",
+          "path": "docs/progress/session-notes/SESSION_2025_11_07_SUMMARY.md",
+          "title": "Development Session Summary - November 7, 2025",
           "relevance": "primary",
-          "score": 12.1039,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/archive/progress/DONE.md",
-          "title": "✅ NATIVE LLM CLI - COMPLETE",
-          "relevance": "primary",
-          "score": 6.03,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/progress/phases/PHASE_8_IMPLEMENTATION.md",
-          "title": "Phase 8: LLM Retrieval Integration - Implementation",
-          "relevance": "primary",
-          "score": 4.92,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/product/RECCLI_ONE_PAGER.md",
-          "title": "RecCli One-Pager",
-          "relevance": "primary",
-          "score": 3.7391,
-          "signals": [
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
-        "signals": []
-      }
-    },
-    {
-      "feature_id": "feat_project_outline_layer",
-      "feature_version": 1,
-      "title": "Project Outline Layer",
-      "description": "Optional `.devproject` file manager for cross-session project context, feature tracking, update history, and incremental updates driven by session deltas.",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/project/devproject.py"
-      ],
-      "file_boundaries": [
-        "packages/reccli-core/reccli/devproject.py"
-      ],
-      "docs": [
-        {
-          "path": "README.md",
-          "title": "RecCli",
-          "relevance": "primary",
-          "score": 22.2012,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/archive/product/MVP.md",
-          "title": "RecCli MVP & Roadmap",
-          "relevance": "primary",
-          "score": 13.6372,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/product/PROJECT_ONBOARDING.md",
-          "title": "Project Onboarding & Scoping",
-          "relevance": "primary",
-          "score": 13.2444,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/restructuring-plan.md",
-          "title": "RecCli Documentation Restructuring Plan",
-          "relevance": "primary",
-          "score": 8.9624,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "docs/specs/DEVPROJECT_FORMAT.md",
-          "title": "`.devproject` File",
-          "relevance": "primary",
-          "score": 4.4,
-          "signals": [
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature",
-            "typed_doc_feature_owner"
-          ]
-        },
-        {
-          "path": "docs/specs/README.md",
-          "title": "RecCli Specs",
-          "relevance": "primary",
-          "score": 6.5343,
+          "score": 18.5307,
           "signals": [
             "bm25"
           ]
@@ -630,16 +160,16 @@
       ],
       "session_ids": [],
       "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
+      "updated_at": "2026-03-27T04:27:39Z",
       "staleness": {
         "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
+        "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
     },
     {
       "feature_id": "feat_api_routes",
-      "feature_version": 2,
+      "feature_version": 1,
       "title": "API Routes",
       "description": "Code contributing to api routes.",
       "status": "in-progress",
@@ -649,14 +179,24 @@
         "apps/web/pages/api/create-checkout.ts",
         "apps/web/pages/api/validate-license.ts",
         "apps/web/pages/api/webhook.ts",
-        "packages/reccli/summarization/summary_schema.py",
-        "packages/reccli/summarization/summary_verification.py"
+        "packages/reccli/backend/server.py",
+        "packages/reccli/retrieval/embeddings.py",
+        "packages/reccli/retrieval/memory_middleware.py",
+        "packages/reccli/retrieval/retrieval.py",
+        "packages/reccli/retrieval/streaming_retrieval.py",
+        "packages/reccli/retrieval/vector_index.py"
       ],
       "file_boundaries": [
         "apps/web/**",
         "apps/web/pages/api/**",
-        "packages/reccli-core/backend/**",
-        "packages/reccli-core/reccli/**",
+        "packages/reccli/**",
+        "packages/reccli/backend/**",
+        "packages/reccli/hooks/**",
+        "packages/reccli/recording/**",
+        "packages/reccli/retrieval/**",
+        "packages/reccli/runtime/**",
+        "packages/reccli/session/**",
+        "packages/reccli/summarization/**",
         "src/export/**",
         "src/ui/**"
       ],
@@ -672,10 +212,20 @@
           ]
         },
         {
+          "path": "docs/archive/progress/phases/PHASE_6_IMPLEMENTATION.md",
+          "title": "Phase 6: Memory Middleware - Implementation",
+          "relevance": "primary",
+          "score": 3.3,
+          "signals": [
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
           "path": "docs/reference/API_KEY_SECURITY.md",
           "title": "API Key Security",
           "relevance": "primary",
-          "score": 4.8162,
+          "score": 5.1667,
           "signals": [
             "doc_title_matches_feature_terms",
             "doc_name_matches_feature_alias",
@@ -685,62 +235,114 @@
       ],
       "session_ids": [],
       "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:50Z",
+      "updated_at": "2026-03-27T04:27:39Z",
       "staleness": {
         "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
+        "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
     },
     {
-      "feature_id": "feat_typescript_terminal_ui",
+      "feature_id": "feat_hybrid_search_retrieval_engine",
       "feature_version": 1,
-      "title": "TypeScript Terminal UI",
-      "description": "TypeScript + Ink terminal UI with smart input handling, message streaming, paste detection, and JSON-RPC bridge to the Python backend for interactive chat.",
+      "title": "Hybrid Search & Retrieval Engine",
+      "description": "Unified vector index across all .devsession files, dense (ANN cosine) + BM25 sparse + RRF hybrid search, embedding providers (OpenAI / local sentence-transformers), streaming progressive retrieval, memory middleware for intelligent prompt hydration, and two-level context retrieval backed by the summary layer.",
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli/runtime/chat_ui.py",
-        "packages/reccli/ui/src/bridge/python.mock.ts",
-        "packages/reccli/ui/src/bridge/python.ts",
-        "packages/reccli/ui/src/components/Chat.tsx",
-        "packages/reccli/ui/src/components/Input.tsx",
-        "packages/reccli/ui/src/components/InputV2.tsx",
-        "packages/reccli/ui/src/components/InputV3.tsx",
-        "packages/reccli/ui/src/components/MessageList.tsx",
-        "packages/reccli/ui/src/components/Status.tsx"
+        "packages/reccli/retrieval/__init__.py"
       ],
       "file_boundaries": [
-        "packages/reccli-core/reccli/**",
-        "packages/reccli-core/ui/src/**",
-        "packages/reccli-core/ui/src/bridge/**",
-        "packages/reccli-core/ui/src/components/**"
+        "packages/reccli/retrieval/**"
       ],
       "docs": [
         {
-          "path": "docs/architecture/RECCLI_CLI_UI.md",
-          "title": "RecCli Terminal UI Architecture",
+          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_ANALYSIS.md",
+          "title": "Vector Search Performance Analysis",
           "relevance": "primary",
-          "score": 2.7,
+          "score": 18.3479,
           "signals": [
-            "doc_references_feature_files",
-            "doc_text_matches_feature"
+            "bm25"
           ]
         },
         {
-          "path": "docs/reference/NATIVE_LLM_GUIDE.md",
-          "title": "RecCli Native LLM Guide",
+          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_BOTTLENECK_ANALYSIS.md",
+          "title": "Vector Search Bottleneck Analysis",
           "relevance": "primary",
-          "score": 1.6,
+          "score": 9.3365,
           "signals": [
-            "doc_references_feature_files"
+            "bm25"
           ]
         },
         {
-          "path": "docs/reference/RECCLI_SUBSYSTEM_SPLIT.md",
-          "title": "RecCli Subsystem Split",
+          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_COMPLETION.md",
+          "title": "Vector Search Optimization - Status Update",
           "relevance": "primary",
-          "score": 13.5766,
+          "score": 10.8296,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/archive/implementation/indexing/VECTOR_SEARCH_FINAL.md",
+          "title": "Vector Search Optimization - COMPLETE ✅",
+          "relevance": "primary",
+          "score": 11.4857,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/archive/progress/phases/PHASE_5_IMPLEMENTATION.md",
+          "title": "Phase 5: Vector Embeddings & Search - Implementation",
+          "relevance": "primary",
+          "score": 31.9054,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/archive/progress/phases/PHASE_8_USAGE.md",
+          "title": "Phase 8: Retrieval Usage",
+          "relevance": "primary",
+          "score": 16.7904,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/implementation/indexing/README.md",
+          "title": "Indexing Implementation",
+          "relevance": "primary",
+          "score": 19.4738,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/implementation/retrieval/README.md",
+          "title": "Retrieval Implementation",
+          "relevance": "primary",
+          "score": 3.95,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/implementation/retrieval/STREAMING_HYBRID_RETRIEVAL.md",
+          "title": "Streaming Hybrid Retrieval",
+          "relevance": "primary",
+          "score": 18.9476,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/specs/UNIFIED_VECTOR_INDEX.md",
+          "title": "Unified Vector Index for Cross-Session Context",
+          "relevance": "primary",
+          "score": 18.513,
           "signals": [
             "bm25"
           ]
@@ -748,18 +350,425 @@
       ],
       "session_ids": [],
       "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
+      "updated_at": "2026-03-27T04:27:39Z",
       "staleness": {
         "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
+        "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
     },
     {
-      "feature_id": "feat_legacy_web_app_prototype",
+      "feature_id": "feat_terminal_recording_wal_safety",
       "feature_version": 1,
-      "title": "Legacy Web App Prototype",
-      "description": "Early Next.js landing page prototype with Stripe integration and API routes for checkout and license validation. Not part of the current CLI-focused product.",
+      "title": "Terminal Recording & WAL Safety",
+      "description": "PTY-based terminal session recording, write-ahead log (WAL) crash-safe recording, conversation parsing from raw terminal events, and session data compaction to reduce .devsession file size.",
+      "status": "in-progress",
+      "source": "auto",
+      "files_touched": [
+        "packages/reccli/recording/__init__.py",
+        "packages/reccli/recording/compactor.py",
+        "packages/reccli/recording/parser.py",
+        "packages/reccli/recording/recorder.py",
+        "packages/reccli/recording/wal_recorder.py"
+      ],
+      "file_boundaries": [
+        "packages/reccli/recording/**"
+      ],
+      "docs": [],
+      "session_ids": [],
+      "last_updated_session": null,
+      "updated_at": "2026-03-27T04:27:39Z",
+      "staleness": {
+        "status": "current",
+        "checked_at": "2026-03-27T04:27:42Z",
+        "signals": []
+      }
+    },
+    {
+      "feature_id": "feat_devproject_manager_codebase_initialization",
+      "feature_version": 1,
+      "title": ".devproject Manager & Codebase Initialization",
+      "description": "The .devproject file format manager: reads, writes, and validates the project feature map; Tree-sitter + LLM codebase scanning to generate initial feature clustering; compact folder tree generation; and path utilities for locating .devproject and .devsession directories.",
+      "status": "in-progress",
+      "source": "auto",
+      "files_touched": [
+        "packages/reccli/project/__init__.py"
+      ],
+      "file_boundaries": [
+        "packages/reccli/project/**"
+      ],
+      "docs": [
+        {
+          "path": "docs/product/PROJECT_INITIALIZATION.md",
+          "title": "Project Initialization & Context Loading",
+          "relevance": "primary",
+          "score": 10.8039,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/product/PROJECT_ONBOARDING.md",
+          "title": "Project Onboarding & Scoping",
+          "relevance": "primary",
+          "score": 14.9825,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/specs/DEVPROJECT_FORMAT.md",
+          "title": "`.devproject` File",
+          "relevance": "primary",
+          "score": 5.4367,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_semantic_matches_feature",
+            "typed_doc_feature_owner"
+          ]
+        },
+        {
+          "path": "docs/specs/SESSION_STORAGE.md",
+          "title": "Session Storage Strategy",
+          "relevance": "primary",
+          "score": 8.7772,
+          "signals": [
+            "bm25"
+          ]
+        }
+      ],
+      "session_ids": [],
+      "last_updated_session": null,
+      "updated_at": "2026-03-27T04:27:39Z",
+      "staleness": {
+        "status": "current",
+        "checked_at": "2026-03-27T04:27:42Z",
+        "signals": []
+      }
+    },
+    {
+      "feature_id": "feat_claude_code_hooks_context_injection",
+      "feature_version": 1,
+      "title": "Claude Code Hooks & Context Injection",
+      "description": "Claude Code hook event dispatcher that records session messages via WAL from hook events (PrePrompt, PostAssistant, Stop), plus context injection at SessionStart and PostCompact hook points to automatically load .devproject context.",
+      "status": "in-progress",
+      "source": "auto",
+      "files_touched": [
+        "packages/reccli/hooks/__init__.py",
+        "packages/reccli/hooks/context_injector.py",
+        "packages/reccli/hooks/handle_event.py",
+        "packages/reccli/hooks/session_recorder.py"
+      ],
+      "file_boundaries": [
+        "packages/reccli/hooks/**"
+      ],
+      "docs": [
+        {
+          "path": "CLAUDE.md",
+          "title": "RecCli",
+          "relevance": "primary",
+          "score": 16.3284,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/architecture/CONTEXT_LOADING.md",
+          "title": "Context Loading Strategy for .devsession",
+          "relevance": "primary",
+          "score": 5.3533,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature",
+            "typed_doc_feature_owner"
+          ]
+        },
+        {
+          "path": "docs/archive/progress/phases/PHASE_7_POST_AUDIT_FIXES.md",
+          "title": "Phase 7: Post-Audit Fixes",
+          "relevance": "primary",
+          "score": 3.8,
+          "signals": [
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        }
+      ],
+      "session_ids": [],
+      "last_updated_session": null,
+      "updated_at": "2026-03-27T04:27:39Z",
+      "staleness": {
+        "status": "current",
+        "checked_at": "2026-03-27T04:27:42Z",
+        "signals": []
+      }
+    },
+    {
+      "feature_id": "feat_standalone_cli_llm_chat_interface",
+      "feature_version": 1,
+      "title": "Standalone CLI & LLM Chat Interface",
+      "description": "Command-line interface for direct session management (record, list, show, export, search, project commands), native LLM chat/ask with .devsession recording, token counting, work-package continuity pre-fetching, and the TypeScript UI launcher.",
+      "status": "in-progress",
+      "source": "auto",
+      "files_touched": [
+        "packages/reccli/runtime/__init__.py",
+        "packages/reccli/runtime/chat_ui.py",
+        "packages/reccli/runtime/llm.py",
+        "packages/reccli/runtime/tokens.py",
+        "packages/reccli/runtime/wpc.py"
+      ],
+      "file_boundaries": [
+        "packages/reccli/runtime/**"
+      ],
+      "docs": [
+        {
+          "path": "archive/v2-devsession-recorder/v2-devsession-recorder/requirements.txt",
+          "title": "RecCli v2.0 - Dependencies",
+          "relevance": "primary",
+          "score": 5.27,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/README.md",
+          "title": "RecCli Docs",
+          "relevance": "primary",
+          "score": 4.3324,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/archive/decisions/DESIGN_DECISIONS.md",
+          "title": "RecCli v2 Design Decisions",
+          "relevance": "primary",
+          "score": 5.75,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature",
+            "typed_doc_feature_owner"
+          ]
+        },
+        {
+          "path": "docs/archive/decisions/PHASE_7_AUDIT.md",
+          "title": "Phase 7 Implementation Audit",
+          "relevance": "primary",
+          "score": 9.7676,
+          "signals": [
+            "bm25"
+          ]
+        },
+        {
+          "path": "docs/archive/product/MVP.md",
+          "title": "RecCli MVP & Roadmap",
+          "relevance": "primary",
+          "score": 5.15,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/archive/progress/DONE.md",
+          "title": "✅ NATIVE LLM CLI - COMPLETE",
+          "relevance": "primary",
+          "score": 6.1833,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/archive/progress/phases/PHASE_8_IMPLEMENTATION.md",
+          "title": "Phase 8: LLM Retrieval Integration - Implementation",
+          "relevance": "primary",
+          "score": 4.9333,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/implementation/prompts/AI_PROMPTS.md",
+          "title": "AI System Prompts for RecCli",
+          "relevance": "primary",
+          "score": 5.15,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/product/RECCLI_ONE_PAGER.md",
+          "title": "RecCli One-Pager",
+          "relevance": "primary",
+          "score": 5.75,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/progress/README.md",
+          "title": "RecCli Progress Docs",
+          "relevance": "primary",
+          "score": 4.1017,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/reference/NATIVE_LLM_GUIDE.md",
+          "title": "RecCli Native LLM Guide",
+          "relevance": "primary",
+          "score": 6.5833,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/reference/RECCLI_SUBSYSTEM_SPLIT.md",
+          "title": "RecCli Subsystem Split",
+          "relevance": "primary",
+          "score": 5.15,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/restructuring-plan.md",
+          "title": "RecCli Documentation Restructuring Plan",
+          "relevance": "primary",
+          "score": 3.8,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "docs/specs/README.md",
+          "title": "RecCli Specs",
+          "relevance": "primary",
+          "score": 4.6574,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature",
+            "typed_doc_feature_owner"
+          ]
+        },
+        {
+          "path": "instructions/PRD-MVP.md",
+          "title": "**RecCli MVP / PRD (Product Requirements Document)**",
+          "relevance": "primary",
+          "score": 5.15,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "instructions/TECH_STACK.md",
+          "title": "RecCli Tech Stack Documentation",
+          "relevance": "primary",
+          "score": 5.15,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        },
+        {
+          "path": "requirements.txt",
+          "title": "RecCli Python dependencies",
+          "relevance": "primary",
+          "score": 5.125,
+          "signals": [
+            "doc_title_matches_feature_terms",
+            "doc_name_matches_feature_alias",
+            "doc_semantic_matches_feature"
+          ]
+        }
+      ],
+      "session_ids": [],
+      "last_updated_session": null,
+      "updated_at": "2026-03-27T04:27:39Z",
+      "staleness": {
+        "status": "current",
+        "checked_at": "2026-03-27T04:27:42Z",
+        "signals": []
+      }
+    },
+    {
+      "feature_id": "feat_typescript_terminal_chat_ui",
+      "feature_version": 1,
+      "title": "TypeScript Terminal Chat UI",
+      "description": "Ink-based TypeScript terminal chat UI with smart input handling (paste detection, multi-line), message rendering, status bar, and JSON-RPC bridge to the Python backend server.",
+      "status": "in-progress",
+      "source": "auto",
+      "files_touched": [
+        "packages/reccli/backend/__init__.py",
+        "packages/reccli/ui/src/bridge/python.mock.ts",
+        "packages/reccli/ui/src/bridge/python.ts",
+        "packages/reccli/ui/src/components/Chat.tsx",
+        "packages/reccli/ui/src/components/Input.tsx",
+        "packages/reccli/ui/src/components/InputV2.tsx",
+        "packages/reccli/ui/src/components/InputV3.tsx",
+        "packages/reccli/ui/src/components/MessageList.tsx",
+        "packages/reccli/ui/src/components/Status.tsx",
+        "packages/reccli/ui/src/index.tsx"
+      ],
+      "file_boundaries": [
+        "packages/reccli/backend/**",
+        "packages/reccli/ui/src/**",
+        "packages/reccli/ui/src/bridge/**",
+        "packages/reccli/ui/src/components/**"
+      ],
+      "docs": [
+        {
+          "path": "docs/architecture/RECCLI_CLI_UI.md",
+          "title": "RecCli Terminal UI Architecture",
+          "relevance": "primary",
+          "score": 19.8443,
+          "signals": [
+            "bm25"
+          ]
+        }
+      ],
+      "session_ids": [],
+      "last_updated_session": null,
+      "updated_at": "2026-03-27T04:27:39Z",
+      "staleness": {
+        "status": "current",
+        "checked_at": "2026-03-27T04:27:42Z",
+        "signals": []
+      }
+    },
+    {
+      "feature_id": "feat_web_storefront_licensing",
+      "feature_version": 1,
+      "title": "Web Storefront & Licensing",
+      "description": "Next.js landing page and Stripe-integrated API routes for checkout, webhook handling, and license validation for the reccli commercial web presence.",
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
@@ -788,16 +797,7 @@
           "path": "docs/document-index.md",
           "title": "RecCli Document Inventory",
           "relevance": "primary",
-          "score": 14.9195,
-          "signals": [
-            "bm25"
-          ]
-        },
-        {
-          "path": "instructions/TECH_STACK.md",
-          "title": "RecCli Tech Stack Documentation",
-          "relevance": "primary",
-          "score": 14.3965,
+          "score": 9.9196,
           "signals": [
             "bm25"
           ]
@@ -805,18 +805,59 @@
       ],
       "session_ids": [],
       "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
+      "updated_at": "2026-03-27T04:27:39Z",
       "staleness": {
         "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
+        "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
     },
     {
-      "feature_id": "feat_export_legacy_ui_utilities",
+      "feature_id": "feat_testing",
       "feature_version": 1,
-      "title": "Export & Legacy UI Utilities",
-      "description": "Session export helpers for multiple formats (txt, md, asciicast) and legacy tkinter dialog components from an earlier recorder UI iteration.",
+      "title": "Testing",
+      "description": "Code contributing to testing.",
+      "status": "in-progress",
+      "source": "auto",
+      "files_touched": [
+        "packages/reccli/tests/__init__.py",
+        "packages/reccli/tests/benchmark_vector_search.py",
+        "packages/reccli/tests/manual_provider_delta_harness.py",
+        "packages/reccli/tests/test_core_regressions.py",
+        "packages/reccli/tests/test_summarization.py",
+        "packages/reccli/tests/test_temporal_and_breakeven.py",
+        "packages/reccli/tests/test_token_counting.py",
+        "packages/reccli/tests/test_two_level_retrieval.py"
+      ],
+      "file_boundaries": [
+        "packages/reccli/tests/**"
+      ],
+      "docs": [
+        {
+          "path": "docs/archive/progress/phases/PHASE_7_TESTING.md",
+          "title": "Phase 7: Testing Guide",
+          "relevance": "primary",
+          "score": 1.5,
+          "signals": [
+            "doc_name_matches_feature",
+            "doc_text_matches_feature"
+          ]
+        }
+      ],
+      "session_ids": [],
+      "last_updated_session": null,
+      "updated_at": "2026-03-27T04:27:39Z",
+      "staleness": {
+        "status": "current",
+        "checked_at": "2026-03-27T04:27:42Z",
+        "signals": []
+      }
+    },
+    {
+      "feature_id": "feat_legacy_export_recording_ui",
+      "feature_version": 1,
+      "title": "Legacy Export & Recording UI",
+      "description": "Pre-hooks session export utilities (SessionExporter for multiple format output from .devsession files) and legacy Tkinter dialog components (ExportDialog, SettingsDialog) from the original PTY recorder GUI path.",
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
@@ -834,72 +875,43 @@
           "path": "docs/reference/SETTINGS_AND_AUTH.md",
           "title": "Settings and Authentication",
           "relevance": "reference",
-          "score": 2.4895,
+          "score": 2.625,
           "signals": [
             "doc_name_matches_feature_alias",
             "doc_semantic_matches_feature"
           ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
-        "signals": []
-      }
-    },
-    {
-      "feature_id": "feat_testing_benchmarks",
-      "feature_version": 1,
-      "title": "Testing & Benchmarks",
-      "description": "Test suites for core regressions, summarization, retrieval, token counting, and vector search performance benchmarks.",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/tests/benchmark_vector_search.py",
-        "packages/reccli/tests/manual_provider_delta_harness.py",
-        "packages/reccli/tests/test_core_regressions.py",
-        "packages/reccli/tests/test_summarization.py",
-        "packages/reccli/tests/test_temporal_and_breakeven.py",
-        "packages/reccli/tests/test_token_counting.py",
-        "packages/reccli/tests/test_two_level_retrieval.py"
-      ],
-      "file_boundaries": [
-        "packages/reccli-core/tests/**"
-      ],
-      "docs": [
+        },
         {
-          "path": "docs/archive/progress/phases/PHASE_7_TESTING.md",
-          "title": "Phase 7: Testing Guide",
+          "path": "email_templates.md",
+          "title": "reccli Email Templates",
           "relevance": "primary",
-          "score": 5.4,
+          "score": 6.7498,
           "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
+            "bm25"
           ]
         }
       ],
       "session_ids": [],
       "last_updated_session": null,
-      "updated_at": "2026-03-21T19:40:49Z",
+      "updated_at": "2026-03-27T04:27:39Z",
       "staleness": {
         "status": "current",
-        "checked_at": "2026-03-21T19:41:11Z",
+        "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
     }
   ],
   "hub_files": [
-    "packages/reccli-core/reccli/cli.py",
-    "packages/reccli-core/reccli/config.py"
+    "packages/reccli/mcp_server.py",
+    "packages/reccli/project/devproject.py",
+    "packages/reccli/retrieval/search.py",
+    "packages/reccli/runtime/cli.py",
+    "packages/reccli/session/devsession.py"
   ],
   "shared_infrastructure": [
-    "packages/reccli-core/backend/__init__.py",
-    "packages/reccli-core/reccli/__init__.py",
-    "packages/reccli-core/reccli/tokens.py"
+    "packages/reccli/__init__.py",
+    "packages/reccli/runtime/config.py",
+    "packages/reccli/summarization/summary_schema.py"
   ],
   "unassigned": [],
   "project_docs": [
@@ -911,6 +923,15 @@
         "project_scope_doc",
         "project_scope_doc_name",
         "project_scope_doc_phrase"
+      ]
+    },
+    {
+      "path": "README.md",
+      "title": "reccli",
+      "scope": "project",
+      "signals": [
+        "project_scope_doc",
+        "project_scope_doc_name"
       ]
     },
     {
@@ -932,24 +953,8 @@
       ]
     },
     {
-      "path": "docs/archive/progress/phases/PHASE_8_USAGE.md",
-      "title": "Phase 8: Retrieval Usage",
-      "scope": "project",
-      "signals": [
-        "unresolved_doc"
-      ]
-    },
-    {
       "path": "examples/test_paste.txt",
       "title": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliq",
-      "scope": "project",
-      "signals": [
-        "unresolved_doc"
-      ]
-    },
-    {
-      "path": "requirements.txt",
-      "title": "RecCli Python dependencies",
       "scope": "project",
       "signals": [
         "unresolved_doc"
@@ -957,484 +962,6 @@
     }
   ],
   "session_index": [],
-  "proposals": [
-    {
-      "proposal_id": "projupd_20260321194111",
-      "status": "pending",
-      "created_at": "2026-03-21T19:41:11Z",
-      "source_session_id": "codebase_sync",
-      "diff": [
-        {
-          "op": "update_feature",
-          "feature_id": "feat_project_outline_layer",
-          "changes": {
-            "docs_add": [
-              {
-                "path": "docs/README.md",
-                "title": "RecCli Docs",
-                "relevance": "primary",
-                "score": 13.2698,
-                "signals": [
-                  "bm25"
-                ]
-              }
-            ],
-            "updated_at": "2026-03-21T19:41:11Z"
-          }
-        },
-        {
-          "op": "update_feature",
-          "feature_id": "feat_api_routes",
-          "changes": {
-            "docs_add": [
-              {
-                "path": "docs/restructuring-plan.md",
-                "title": "RecCli Documentation Restructuring Plan",
-                "relevance": "reference",
-                "score": 3.0591,
-                "signals": [
-                  "doc_name_matches_feature_alias",
-                  "doc_semantic_matches_feature"
-                ]
-              }
-            ],
-            "updated_at": "2026-03-21T19:41:11Z"
-          }
-        },
-        {
-          "op": "update_project_docs",
-          "docs_add": [
-            {
-              "path": "docs/progress/README.md",
-              "title": "RecCli Progress Docs",
-              "scope": "project",
-              "signals": [
-                "unresolved_doc"
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "proposal_id": "projupd_20260324030308",
-      "status": "pending",
-      "created_at": "2026-03-24T03:03:08Z",
-      "source_session_id": "session_20260323_200308",
-      "diff": [
-        {
-          "op": "update_feature",
-          "feature_id": "feat_project_outline_layer",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_200308"
-            ],
-            "last_updated_session": "session_20260323_200308",
-            "updated_at": "2026-03-24T03:03:08Z"
-          }
-        },
-        {
-          "op": "add_feature",
-          "feature": {
-            "feature_id": "feat_packages_reccli_mcp_server_py",
-            "feature_version": 1,
-            "title": "Modified packages/reccli/mcp_server.py",
-            "description": "Modified packages/reccli/mcp_server.py",
-            "status": "in-progress",
-            "source": "auto",
-            "files_touched": [
-              "packages/reccli/mcp_server.py"
-            ],
-            "file_boundaries": [
-              "packages/reccli/**"
-            ],
-            "session_ids": [
-              "session_20260323_200308"
-            ],
-            "last_updated_session": "session_20260323_200308",
-            "updated_at": "2026-03-24T03:03:08Z",
-            "staleness": {
-              "status": "unknown",
-              "checked_at": "2026-03-24T03:03:08Z",
-              "signals": []
-            }
-          }
-        },
-        {
-          "op": "update_feature",
-          "feature_id": "feat_vector_indexing_hybrid_search",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_200308"
-            ],
-            "last_updated_session": "session_20260323_200308",
-            "updated_at": "2026-03-24T03:03:08Z"
-          }
-        },
-        {
-          "op": "update_feature",
-          "feature_id": "feat_testing_benchmarks",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_200308"
-            ],
-            "last_updated_session": "session_20260323_200308",
-            "updated_at": "2026-03-24T03:03:08Z"
-          }
-        },
-        {
-          "op": "link_session",
-          "session": {
-            "session_id": "session_20260323_200308",
-            "path": "devsession/20260323200308.devsession",
-            "started_at": "2026-03-23T20:03:08.647041",
-            "ended_at": "2026-03-23T20:03:08.648406",
-            "feature_ids": [
-              "feat_packages_reccli_mcp_server_py",
-              "feat_project_outline_layer",
-              "feat_testing_benchmarks",
-              "feat_vector_indexing_hybrid_search"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "proposal_id": "projupd_20260324030330",
-      "status": "pending",
-      "created_at": "2026-03-24T03:03:30Z",
-      "source_session_id": "session_20260323_200330",
-      "diff": [
-        {
-          "op": "add_feature",
-          "feature": {
-            "feature_id": "feat_second_test_verifying_new_mmddyyyy_hhmm",
-            "feature_version": 1,
-            "title": "Second test: verifying new mmddyyyy_hhmm filename format after",
-            "description": "Second test: verifying new mmddyyyy_hhmm filename format after pycache clear.",
-            "status": "in-progress",
-            "source": "auto",
-            "files_touched": [],
-            "file_boundaries": [],
-            "session_ids": [
-              "session_20260323_200330"
-            ],
-            "last_updated_session": "session_20260323_200330",
-            "updated_at": "2026-03-24T03:03:30Z",
-            "staleness": {
-              "status": "unknown",
-              "checked_at": "2026-03-24T03:03:30Z",
-              "signals": []
-            }
-          }
-        },
-        {
-          "op": "link_session",
-          "session": {
-            "session_id": "session_20260323_200330",
-            "path": "devsession/20260323200330.devsession",
-            "started_at": "2026-03-23T20:03:30.542446",
-            "ended_at": "2026-03-23T20:03:30.542789",
-            "feature_ids": [
-              "feat_second_test_verifying_new_mmddyyyy_hhmm"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "proposal_id": "projupd_20260324031725",
-      "status": "pending",
-      "created_at": "2026-03-24T03:17:25Z",
-      "source_session_id": "session_20260323_201725",
-      "diff": [
-        {
-          "op": "add_feature",
-          "feature": {
-            "feature_id": "feat_test_session_verifying_new_mmddyyyy_hhm",
-            "feature_version": 1,
-            "title": "Test session: verifying new mmddyyyy_hhmm filename format after",
-            "description": "Test session: verifying new mmddyyyy_hhmm filename format after MCP restart.",
-            "status": "in-progress",
-            "source": "auto",
-            "files_touched": [],
-            "file_boundaries": [],
-            "session_ids": [
-              "session_20260323_201725"
-            ],
-            "last_updated_session": "session_20260323_201725",
-            "updated_at": "2026-03-24T03:17:25Z",
-            "staleness": {
-              "status": "unknown",
-              "checked_at": "2026-03-24T03:17:25Z",
-              "signals": []
-            }
-          }
-        },
-        {
-          "op": "link_session",
-          "session": {
-            "session_id": "session_20260323_201725",
-            "path": "devsession/03232026_2017.devsession",
-            "started_at": "2026-03-23T20:17:25.732637",
-            "ended_at": "2026-03-23T20:17:25.732896",
-            "feature_ids": [
-              "feat_test_session_verifying_new_mmddyyyy_hhm"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "proposal_id": "projupd_20260324032830",
-      "status": "pending",
-      "created_at": "2026-03-24T03:28:30Z",
-      "source_session_id": "session_20260323_202830",
-      "diff": [
-        {
-          "op": "update_feature",
-          "feature_id": "feat_project_outline_layer",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_202830"
-            ],
-            "last_updated_session": "session_20260323_202830",
-            "updated_at": "2026-03-24T03:28:30Z"
-          }
-        },
-        {
-          "op": "add_feature",
-          "feature": {
-            "feature_id": "feat_packages_reccli_mcp_server_py",
-            "feature_version": 1,
-            "title": "Modified packages/reccli/mcp_server.py",
-            "description": "Modified packages/reccli/mcp_server.py",
-            "status": "in-progress",
-            "source": "auto",
-            "files_touched": [
-              "packages/reccli/mcp_server.py"
-            ],
-            "file_boundaries": [
-              "packages/reccli/**"
-            ],
-            "session_ids": [
-              "session_20260323_202830"
-            ],
-            "last_updated_session": "session_20260323_202830",
-            "updated_at": "2026-03-24T03:28:30Z",
-            "staleness": {
-              "status": "unknown",
-              "checked_at": "2026-03-24T03:28:30Z",
-              "signals": []
-            }
-          }
-        },
-        {
-          "op": "update_feature",
-          "feature_id": "feat_vector_indexing_hybrid_search",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_202830"
-            ],
-            "last_updated_session": "session_20260323_202830",
-            "updated_at": "2026-03-24T03:28:30Z"
-          }
-        },
-        {
-          "op": "update_feature",
-          "feature_id": "feat_testing_benchmarks",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_202830"
-            ],
-            "last_updated_session": "session_20260323_202830",
-            "updated_at": "2026-03-24T03:28:30Z"
-          }
-        },
-        {
-          "op": "link_session",
-          "session": {
-            "session_id": "session_20260323_202830",
-            "path": "devsession/03232026_2028.devsession",
-            "started_at": "2026-03-23T20:28:30.313247",
-            "ended_at": "2026-03-23T20:28:30.313636",
-            "feature_ids": [
-              "feat_packages_reccli_mcp_server_py",
-              "feat_project_outline_layer",
-              "feat_testing_benchmarks",
-              "feat_vector_indexing_hybrid_search"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "proposal_id": "projupd_20260324043150",
-      "status": "pending",
-      "created_at": "2026-03-24T04:31:50Z",
-      "source_session_id": "session_20260323_213150",
-      "diff": [
-        {
-          "op": "update_feature",
-          "feature_id": "feat_session_recording_storage",
-          "changes": {
-            "session_ids_add": [
-              "session_20260323_213150"
-            ],
-            "last_updated_session": "session_20260323_213150",
-            "updated_at": "2026-03-24T04:31:50Z"
-          }
-        },
-        {
-          "op": "add_feature",
-          "feature": {
-            "feature_id": "feat_docs_specs_devsession_format_md",
-            "feature_version": 1,
-            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
-            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
-            "status": "in-progress",
-            "source": "auto",
-            "files_touched": [
-              "docs/specs/DEVSESSION_FORMAT.md"
-            ],
-            "file_boundaries": [
-              "docs/specs/**"
-            ],
-            "session_ids": [
-              "session_20260323_213150"
-            ],
-            "last_updated_session": "session_20260323_213150",
-            "updated_at": "2026-03-24T04:31:50Z",
-            "staleness": {
-              "status": "unknown",
-              "checked_at": "2026-03-24T04:31:50Z",
-              "signals": []
-            }
-          }
-        },
-        {
-          "op": "link_session",
-          "session": {
-            "session_id": "session_20260323_213150",
-            "path": "devsession/03232026_2131.devsession",
-            "started_at": "2026-03-23T21:31:50.969878",
-            "ended_at": "2026-03-23T21:31:50.970266",
-            "feature_ids": [
-              "feat_docs_specs_devsession_format_md",
-              "feat_session_recording_storage"
-            ]
-          }
-        }
-      ]
-    }
-  ],
-  "update_history": [
-    {
-      "proposal_id": "projupd_20260321194050",
-      "status": "accepted",
-      "created_at": "2026-03-21T19:40:50Z",
-      "source_session_id": "codebase_sync",
-      "diff": [
-        {
-          "op": "update_feature",
-          "feature_id": "feat_api_routes",
-          "changes": {
-            "files_touched_add": [
-              "packages/reccli-core/reccli/summary_schema.py",
-              "packages/reccli-core/reccli/summary_verification.py"
-            ],
-            "updated_at": "2026-03-21T19:40:50Z"
-          }
-        }
-      ],
-      "warnings": [
-        {
-          "kind": "boundary_overlaps",
-          "count": 45,
-          "details": [
-            {
-              "path": "apps/web/api_routes_reference.js",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/next-env.d.ts",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/next.config.js",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/pages/_app.js",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/pages/api/create-checkout.ts",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/pages/api/validate-license.ts",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/pages/api/webhook.ts",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/pages/index.tsx",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/postcss.config.js",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            },
-            {
-              "path": "apps/web/tailwind.config.js",
-              "kind": "file_boundaries",
-              "feature_ids": [
-                "feat_api_routes",
-                "feat_legacy_web_app_prototype"
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ]
+  "proposals": [],
+  "update_history": []
 }

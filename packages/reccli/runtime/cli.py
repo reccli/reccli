@@ -1264,6 +1264,137 @@ def cmd_episode_new(args):
         return 1
 
 
+def cmd_setup(args):
+    """Configure Claude Code integration: MCP server + hooks for automatic recording."""
+    import subprocess
+    import shutil
+
+    reccli_root = Path(__file__).resolve().parent.parent.parent.parent
+    packages_dir = reccli_root / "packages"
+    venv_python = reccli_root / "venv" / "bin" / "python3"
+
+    # Use venv python if available, else system python3
+    if venv_python.exists():
+        python_path = str(venv_python)
+    else:
+        python_path = shutil.which("python3") or "python3"
+
+    pythonpath = str(packages_dir)
+
+    if args.uninstall:
+        # Remove hooks from settings.json
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+            hooks = settings.get("hooks", {})
+            changed = False
+            for event_name in list(hooks.keys()):
+                hooks[event_name] = [
+                    entry for entry in hooks[event_name]
+                    if not any("reccli.hooks.handle_event" in h.get("command", "") for h in entry.get("hooks", []))
+                ]
+                if not hooks[event_name]:
+                    del hooks[event_name]
+                    changed = True
+                else:
+                    changed = True
+            if changed:
+                settings["hooks"] = hooks
+                settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+                print("Removed RecCli hooks from ~/.claude/settings.json")
+
+        # Remove MCP server
+        try:
+            subprocess.run(["claude", "mcp", "remove", "reccli"], capture_output=True)
+            print("Removed RecCli MCP server")
+        except FileNotFoundError:
+            pass
+
+        print("RecCli uninstalled from Claude Code.")
+        return 0
+
+    # --- Install ---
+
+    # 1. Add MCP server
+    print("Adding MCP server...")
+    mcp_cmd = ["claude", "mcp", "add", "--scope", "user", "reccli", "--",
+               "env", f"PYTHONPATH={pythonpath}", python_path, "-m", "reccli.mcp_server"]
+    try:
+        result = subprocess.run(mcp_cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"  MCP server registered (user scope)")
+        else:
+            # Might already exist — try remove then re-add
+            subprocess.run(["claude", "mcp", "remove", "reccli"], capture_output=True)
+            result = subprocess.run(mcp_cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"  MCP server re-registered (user scope)")
+            else:
+                print(f"  Warning: MCP registration failed: {result.stderr.strip()}")
+    except FileNotFoundError:
+        print("  Error: 'claude' CLI not found. Install Claude Code first.")
+        return 1
+
+    # 2. Add hooks to settings.json
+    print("Configuring hooks...")
+    settings_path = Path.home() / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if settings_path.exists():
+        settings = json.loads(settings_path.read_text())
+    else:
+        settings = {}
+
+    hook_command = f"cd /tmp && PYTHONPATH={pythonpath} {python_path} -m reccli.hooks.handle_event"
+    hook_entry = {"type": "command", "command": hook_command}
+
+    hook_events = {
+        "SessionStart": [{"matcher": "", "hooks": [hook_entry]}],
+        "UserPromptSubmit": [{"matcher": "", "hooks": [hook_entry]}],
+        "Stop": [{"matcher": "", "hooks": [hook_entry]}],
+        "PostToolUse": [{"matcher": "", "hooks": [hook_entry]}],
+        "PostCompact": [{"matcher": "", "hooks": [hook_entry]}],
+        "SessionEnd": [{"matcher": "", "hooks": [{**hook_entry, "timeout": 5000}]}],
+    }
+
+    existing_hooks = settings.get("hooks", {})
+
+    for event_name, entries in hook_events.items():
+        if event_name in existing_hooks:
+            # Check if reccli hook already exists
+            has_reccli = any(
+                "reccli.hooks.handle_event" in h.get("command", "")
+                for entry in existing_hooks[event_name]
+                for h in entry.get("hooks", [])
+            )
+            if has_reccli:
+                # Update the command in case paths changed
+                for entry in existing_hooks[event_name]:
+                    for h in entry.get("hooks", []):
+                        if "reccli.hooks.handle_event" in h.get("command", ""):
+                            h["command"] = hook_command
+                continue
+            # Add alongside existing hooks
+            existing_hooks[event_name].extend(entries)
+        else:
+            existing_hooks[event_name] = entries
+
+    settings["hooks"] = existing_hooks
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    print(f"  Hooks configured for: {', '.join(hook_events.keys())}")
+
+    # 3. Create ~/.reccli directory
+    reccli_dir = Path.home() / ".reccli"
+    reccli_dir.mkdir(exist_ok=True)
+    (reccli_dir / "active_sessions").mkdir(exist_ok=True)
+
+    print(f"\nRecCli is ready. Start a new Claude Code session to begin recording.")
+    print(f"  MCP server: reccli ({python_path})")
+    print(f"  Hooks: 6 events configured")
+    print(f"  Config: ~/.claude/settings.json")
+    return 0
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -1503,6 +1634,11 @@ Examples:
     episode_new_parser.add_argument('goal', help='Episode goal/description (e.g., "Refactor search scoping")')
     episode_new_parser.add_argument('-s', '--session', help='Session name or path (defaults to most recent)')
     episode_new_parser.set_defaults(func=cmd_episode_new)
+
+    # Setup command
+    setup_parser = subparsers.add_parser('setup', help='Configure Claude Code integration (MCP server + hooks)')
+    setup_parser.add_argument('--uninstall', action='store_true', help='Remove hooks and MCP server')
+    setup_parser.set_defaults(func=cmd_setup)
 
     # Parse arguments
     args = parser.parse_args()

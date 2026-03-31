@@ -125,11 +125,86 @@ def check_precompaction_threshold(session_id: str, cwd: str) -> Optional[str]:
     )
 
 
+def _recover_orphan_wals(project_root: Path, current_session_id: str) -> None:
+    """Finalize WALs from previous sessions that never got a clean SessionEnd.
+
+    This handles crashes, force-quits, and hook failures that left WALs behind.
+    Called at the start of each new session.
+    """
+    sessions_dir = _devsession_dir(project_root)
+    for wal_file in sessions_dir.glob(".hooks_wal_*.jsonl"):
+        # Skip the current session's WAL
+        wal_sid = wal_file.stem.replace(".hooks_wal_", "")
+        if wal_sid == current_session_id:
+            continue
+
+        try:
+            lines = wal_file.read_text(encoding="utf-8").strip().split("\n")
+            if len(lines) < 2:
+                wal_file.unlink(missing_ok=True)
+                continue
+
+            header = json.loads(lines[0])
+            records = []
+            for line in lines[1:]:
+                if line.strip():
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+            if not records:
+                wal_file.unlink(missing_ok=True)
+                continue
+
+            # Build conversation
+            from ..session.devsession import DevSession
+
+            conversation = []
+            for rec in records:
+                msg = {
+                    "role": rec.get("role", "system"),
+                    "content": rec.get("content", ""),
+                    "timestamp": rec.get("timestamp", ""),
+                }
+                if rec.get("tool_name"):
+                    msg["tool_name"] = rec["tool_name"]
+                conversation.append(msg)
+
+            session = DevSession(session_id=wal_sid)
+            session.metadata["working_directory"] = header.get("working_directory", "")
+            session.metadata["project_root"] = str(project_root)
+            session.metadata["source"] = "claude_code_hooks_recovered"
+            session.metadata["claude_session_id"] = wal_sid
+            session.conversation = conversation
+
+            output_path = default_devsession_path(project_root)
+            session.save(output_path, skip_validation=True)
+
+            # Clean up
+            wal_file.unlink(missing_ok=True)
+            live = sessions_dir / f".live_{wal_sid}.devsession"
+            live.unlink(missing_ok=True)
+
+            # Background finalize (summarize + embed + index)
+            if len(conversation) >= 4:
+                _spawn_background_finalize(output_path)
+
+        except Exception:
+            continue
+
+
 def start_session(session_id: str, cwd: str) -> None:
     """Create a new WAL file for this Claude Code session."""
     project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return
+
+    # Recover orphaned WALs from previous sessions that didn't get a clean end
+    try:
+        _recover_orphan_wals(project_root, session_id)
+    except Exception:
+        pass
 
     wal = _wal_path(project_root, session_id)
     if wal.exists():
@@ -146,16 +221,33 @@ def start_session(session_id: str, cwd: str) -> None:
     _append_to_wal(wal, header)
 
 
-def record_user_prompt(session_id: str, prompt: str, cwd: str) -> None:
-    """Append a user prompt to the active session WAL."""
+def _ensure_wal(session_id: str, cwd: str) -> Optional[Path]:
+    """Find project root and ensure WAL exists. Creates it lazily if needed."""
     project_root = _find_project_root(cwd, session_id)
     if project_root is None:
-        return
+        return None
 
     wal = _wal_path(project_root, session_id)
     if not wal.exists():
-        # Auto-start if hook fired before SessionStart (e.g. resume)
-        start_session(session_id, cwd)
+        # Lazy WAL creation — covers cases where SessionStart fired before
+        # load_project_context set the breadcrumb (cwd not inside project).
+        header = {
+            "format": "reccli-hooks-wal",
+            "version": 1,
+            "session_id": session_id,
+            "started_at": datetime.now().isoformat(),
+            "working_directory": cwd,
+            "project_root": str(project_root),
+        }
+        _append_to_wal(wal, header)
+    return wal
+
+
+def record_user_prompt(session_id: str, prompt: str, cwd: str) -> None:
+    """Append a user prompt to the active session WAL."""
+    wal = _ensure_wal(session_id, cwd)
+    if wal is None:
+        return
 
     _append_to_wal(wal, {
         "type": "user_prompt",
@@ -167,12 +259,8 @@ def record_user_prompt(session_id: str, prompt: str, cwd: str) -> None:
 
 def record_assistant_response(session_id: str, message: str, cwd: str) -> None:
     """Append an assistant response to the active session WAL."""
-    project_root = _find_project_root(cwd, session_id)
-    if project_root is None:
-        return
-
-    wal = _wal_path(project_root, session_id)
-    if not wal.exists():
+    wal = _ensure_wal(session_id, cwd)
+    if wal is None:
         return
 
     _append_to_wal(wal, {
@@ -191,12 +279,8 @@ def record_tool_use(
     cwd: str,
 ) -> None:
     """Append a tool use event to the active session WAL."""
-    project_root = _find_project_root(cwd, session_id)
-    if project_root is None:
-        return
-
-    wal = _wal_path(project_root, session_id)
-    if not wal.exists():
+    wal = _ensure_wal(session_id, cwd)
+    if wal is None:
         return
 
     # Truncate large tool responses to keep WAL manageable

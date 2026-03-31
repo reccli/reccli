@@ -13,6 +13,7 @@ Exit codes:
 
 import json
 import sys
+from pathlib import Path
 
 from . import session_recorder
 
