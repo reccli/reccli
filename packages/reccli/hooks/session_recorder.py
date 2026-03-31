@@ -356,6 +356,32 @@ def flush_active_wals(project_root: Path) -> list:
         session.metadata["claude_session_id"] = sid
         session.conversation = conversation
 
+        # Embed any messages that don't have embeddings yet
+        try:
+            from ..retrieval.embeddings import get_embedding_provider
+            provider = get_embedding_provider()
+            to_embed = []
+            to_embed_indices = []
+            for i, msg in enumerate(session.conversation):
+                if msg.get("deleted") or "embedding" in msg:
+                    continue
+                to_embed.append(msg)
+                to_embed_indices.append(i)
+
+            if to_embed:
+                texts = [m["content"] for m in to_embed]
+                embeddings = provider.embed_batch(texts)
+                embed_ts = datetime.now().isoformat()
+                for msg, emb in zip(to_embed, embeddings):
+                    msg["embedding"] = emb
+                    msg["embed_model"] = provider.model_name
+                    msg["embed_provider"] = provider.provider_name
+                    msg["embed_dim"] = provider.dimensions
+                    msg["embed_ts"] = embed_ts
+                    msg["text_hash"] = provider.compute_text_hash(msg["content"])
+        except Exception:
+            pass  # Fall back to BM25-only search
+
         # Write to a stable snapshot path keyed by session_id (overwrites on each flush)
         snapshot_path = sessions_dir / f".live_{sid}.devsession"
         session.save(snapshot_path, skip_validation=True)
