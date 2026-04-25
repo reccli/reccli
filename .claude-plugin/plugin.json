@@ -1,0 +1,43 @@
+{
+  "name": "reccli",
+  "description": "Persistent memory for AI coding agents. Automatically records sessions, builds project context, and gives your agent recall across conversations — no manual note-taking required.",
+  "version": "0.1.0",
+  "author": {
+    "name": "RecCli"
+  },
+  "homepage": "https://reccli.dev",
+  "repository": "https://github.com/reccli/reccli",
+  "license": "proprietary",
+  "keywords": [
+    "memory",
+    "context",
+    "session",
+    "recall",
+    "agent-memory",
+    "project-context"
+  ],
+  "mcpServers": {
+    "reccli": {
+      "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/python3",
+      "args": ["-m", "reccli.mcp_server"],
+      "env": {
+        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}/packages"
+      }
+    }
+  },
+  "hooks": "./hooks/hooks.json",
+  "userConfig": {
+    "license_key": {
+      "title": "License Key",
+      "type": "string",
+      "description": "Your RecCli Pro license key (get one at https://reccli.dev). Leave empty for free tier.",
+      "sensitive": true
+    },
+    "openai_api_key": {
+      "title": "OpenAI API Key",
+      "type": "string",
+      "description": "OpenAI API key for embeddings (enables hybrid search). Optional — BM25 search works without it.",
+      "sensitive": true
+    }
+  }
+}

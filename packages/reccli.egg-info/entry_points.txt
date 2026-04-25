@@ -1,0 +1,2 @@
+[console_scripts]
+reccli = reccli.runtime.cli:main

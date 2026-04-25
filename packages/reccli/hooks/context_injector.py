@@ -20,7 +20,7 @@ from ..project.devproject import (
 
 def _session_rules() -> str:
     """Session rules injected at start and re-injected after compaction."""
-    return (
+    rules = (
         "SESSION RULES:\n"
         "1. SAVE ON EXIT: When the user signals they're wrapping up ('that's it', 'thanks', 'I'm done', "
         "'let's stop here'), you MUST call save_session_notes before they leave. Do not wait to be asked.\n"
@@ -29,6 +29,34 @@ def _session_rules() -> str:
         "session and load that project?' If they confirm, call save_session_notes for the current project, "
         "then call load_project_context for the new project."
     )
+
+    # Session-signal forward pointer (gated by config)
+    try:
+        from ..runtime.config import Config
+        config = Config()
+        if config.data.get("session_signal", True):
+            rules += (
+                "\n3. SESSION SIGNAL: End every response with a hidden tag on its own line: "
+                "<!--session-signal: goal=<the user's current session goal> | "
+                "resolved=<what this response resolved, comma-separated> | "
+                "open=<what remains open, comma-separated>-->. "
+                "Set the goal when the user first states what they want to work on. "
+                "Carry it forward on every subsequent signal. Update it if the user redirects. "
+                "Open items must be in service of the goal — do not carry forward unrelated items "
+                "from previous sessions. "
+                "This tracks progress per response. It will be parsed and stripped automatically."
+                "\n4. AUTONOMOUS CONTINUATION: When you finish a reasoning chain and your session "
+                "signal has open items, call the evaluate_continuation MCP tool with your current "
+                "goal and open_items as parameters (do not pass working_directory — the tool reads "
+                "your intent directly). If it returns action=continue, work on the next item it "
+                "provides. If it returns action=wait or action=done, stop and let the user direct. "
+                "This lets you self-drive through a multi-step task without waiting for the user "
+                "to say 'continue' after each step."
+            )
+    except Exception:
+        pass
+
+    return rules
 
 
 def get_post_compact_context(cwd: str) -> Optional[str]:

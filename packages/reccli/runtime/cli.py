@@ -1264,22 +1264,160 @@ def cmd_episode_new(args):
         return 1
 
 
+CODEX_AGENTS_BEGIN = "<!-- BEGIN RECCLI CODEX INSTRUCTIONS -->"
+CODEX_AGENTS_END = "<!-- END RECCLI CODEX INSTRUCTIONS -->"
+
+
+def _codex_agents_block() -> str:
+    """Instructions Codex can load from AGENTS.md to emulate SessionStart hooks."""
+    return f"""{CODEX_AGENTS_BEGIN}
+# RecCli Codex Session Bootstrap
+
+At the start of a new Codex session, use RecCli project memory before doing substantive work.
+
+1. If the current working directory is inside a RecCli project, immediately call `mcp__reccli__.load_project_context` with that directory.
+2. If the current working directory is not inside a RecCli project, read `~/.reccli/projects.json` and ask the user:
+
+   `Which project would you like to work on today?`
+
+   List the registered project names as bullets. If the user chooses one, immediately call `mcp__reccli__.load_project_context` with that project's path before continuing. If they want a new project, use `mcp__reccli__.project_init` on the project root.
+3. When the user signals they are wrapping up, call `mcp__reccli__.save_session_notes` with the current project before ending the session.
+4. If the user switches projects mid-session, ask whether to save notes for the current project first; if they confirm, call `save_session_notes`, then call `load_project_context` for the new project.
+
+Codex does not currently provide Claude Code-style lifecycle hooks, so these instructions are the Codex-side equivalent of RecCli's Claude `SessionStart` and save-on-exit behavior.
+{CODEX_AGENTS_END}
+"""
+
+
+def _install_codex_agents_instructions() -> Path:
+    """Install or update the RecCli managed block in ~/AGENTS.md."""
+    agents_path = Path.home() / "AGENTS.md"
+    block = _codex_agents_block()
+
+    if agents_path.exists():
+        content = agents_path.read_text()
+        if CODEX_AGENTS_BEGIN in content and CODEX_AGENTS_END in content:
+            before, rest = content.split(CODEX_AGENTS_BEGIN, 1)
+            _, after = rest.split(CODEX_AGENTS_END, 1)
+            content = before.rstrip() + "\n\n" + block + after.lstrip()
+        else:
+            content = content.rstrip() + "\n\n" + block
+    else:
+        content = block
+
+    agents_path.write_text(content)
+    return agents_path
+
+
+def _uninstall_codex_agents_instructions() -> bool:
+    """Remove the RecCli managed block from ~/AGENTS.md. Returns True if changed."""
+    agents_path = Path.home() / "AGENTS.md"
+    if not agents_path.exists():
+        return False
+
+    content = agents_path.read_text()
+    if CODEX_AGENTS_BEGIN not in content or CODEX_AGENTS_END not in content:
+        return False
+
+    before, rest = content.split(CODEX_AGENTS_BEGIN, 1)
+    _, after = rest.split(CODEX_AGENTS_END, 1)
+    new_content = (before.rstrip() + "\n\n" + after.lstrip()).strip()
+    if new_content:
+        agents_path.write_text(new_content + "\n")
+    else:
+        agents_path.unlink()
+    return True
+
+
+def _setup_codex(args, python_path: str, pythonpath: str) -> int:
+    """Configure Codex CLI integration: MCP server plus AGENTS.md bootstrap."""
+
+    if getattr(args, 'uninstall', False):
+        config_path = Path.home() / ".codex" / "config.toml"
+        if config_path.exists():
+            content = config_path.read_text()
+            if "[mcp_servers.reccli]" in content:
+                # Remove the reccli section
+                lines = content.split("\n")
+                new_lines = []
+                skip = False
+                for line in lines:
+                    if line.strip() == "[mcp_servers.reccli]":
+                        skip = True
+                        continue
+                    if skip and line.strip().startswith("[") and line.strip() != "[mcp_servers.reccli]":
+                        skip = False
+                    if not skip:
+                        new_lines.append(line)
+                config_path.write_text("\n".join(new_lines))
+                print("Removed RecCli MCP server from ~/.codex/config.toml")
+            else:
+                print("RecCli not found in Codex config.")
+        else:
+            print("No Codex config found at ~/.codex/config.toml")
+        if _uninstall_codex_agents_instructions():
+            print("Removed RecCli Codex instructions from ~/AGENTS.md")
+        print("RecCli uninstalled from Codex CLI.")
+        return 0
+
+    # --- Install ---
+    config_path = Path.home() / ".codex" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build the TOML block
+    toml_block = (
+        '\n[mcp_servers.reccli]\n'
+        f'command = "{python_path}"\n'
+        f'args = ["-m", "reccli.mcp_server"]\n'
+        f'env = {{ PYTHONPATH = "{pythonpath}" }}\n'
+    )
+
+    if config_path.exists():
+        content = config_path.read_text()
+        if "[mcp_servers.reccli]" in content:
+            print("RecCli MCP server already configured in Codex.")
+        else:
+            # Append to existing config
+            with open(config_path, "a") as f:
+                f.write(toml_block)
+    else:
+        config_path.write_text(toml_block.lstrip())
+
+    agents_path = _install_codex_agents_instructions()
+
+    # Create ~/.reccli directory
+    reccli_dir = Path.home() / ".reccli"
+    reccli_dir.mkdir(exist_ok=True)
+    (reccli_dir / "active_sessions").mkdir(exist_ok=True)
+
+    print(f"RecCli configured for Codex CLI.")
+    print(f"  MCP server: reccli ({python_path})")
+    print(f"  Config: {config_path}")
+    print(f"  Startup instructions: {agents_path}")
+    print(f"\nAll MCP tools are available. Start a new Codex session to use them.")
+    print(f"Note: Codex does not expose Claude Code-style lifecycle hooks; ~/AGENTS.md provides the session-start project picker behavior.")
+    print(f"Use save_session_notes at the end of each session to preserve your work.")
+    return 0
+
+
 def cmd_setup(args):
-    """Configure Claude Code integration: MCP server + hooks for automatic recording."""
+    """Configure AI agent integration: MCP server + hooks for automatic recording."""
     import subprocess
-    import shutil
 
     reccli_root = Path(__file__).resolve().parent.parent.parent.parent
     packages_dir = reccli_root / "packages"
     venv_python = reccli_root / "venv" / "bin" / "python3"
 
-    # Use venv python if available, else system python3
+    # Use repo venv when present, otherwise preserve the interpreter that ran setup.
     if venv_python.exists():
         python_path = str(venv_python)
     else:
-        python_path = shutil.which("python3") or "python3"
+        python_path = sys.executable
 
     pythonpath = str(packages_dir)
+
+    if getattr(args, 'codex', False):
+        return _setup_codex(args, python_path, pythonpath)
 
     if args.uninstall:
         # Remove hooks from settings.json
@@ -1636,8 +1774,9 @@ Examples:
     episode_new_parser.set_defaults(func=cmd_episode_new)
 
     # Setup command
-    setup_parser = subparsers.add_parser('setup', help='Configure Claude Code integration (MCP server + hooks)')
+    setup_parser = subparsers.add_parser('setup', help='Configure AI agent integration (MCP server + hooks)')
     setup_parser.add_argument('--uninstall', action='store_true', help='Remove hooks and MCP server')
+    setup_parser.add_argument('--codex', action='store_true', help='Configure for OpenAI Codex CLI instead of Claude Code')
     setup_parser.set_defaults(func=cmd_setup)
 
     # Parse arguments

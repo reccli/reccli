@@ -294,6 +294,29 @@ The summary is AI-generated and provides efficient context for loading.
 }
 ```
 
+#### Summary item common fields
+
+All summary items (decisions, code_changes, problems_solved, open_issues, next_steps) share a set of common fields in addition to their category-specific fields. These are set by every summary producer (LLM-generated and agent-reported paths alike) and read by retrieval and context-injection layers.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Stable summary item identifier (`dec_*`, `chg_*`, `prb_*`, `iss_*`, `nxt_*`). Distinct from message and span IDs. |
+| `span_ids` | array[string] | Semantic source spans in the full conversation. |
+| `references` | array[string] | Key evidence message IDs within the range. |
+| `message_range` | object | Exact chronological slice: `{start, end, start_index, end_index}`. See "Range semantics" below. |
+| `t_first` / `t_last` | string | Temporal bounds derived from the source range. |
+| `confidence` | enum | `"low"`, `"medium"`, `"high"`. How reliable this item is — LLM-generated items carry model-reported confidence; agent-reported items default to `"medium"`. |
+| `pinned` | boolean | Marks this item as always-inject: context-injection layers should include pinned items regardless of retrieval relevance. Producers default to `false`. |
+| `locked` | boolean | Marks this item as protected from automatic updates: delta-op compaction passes (`update_item`, `merge_items`) must skip locked items unless the user explicitly unlocks. Producers default to `false`. |
+
+Range semantics for `message_range`: inclusive-exclusive 0-based indexing — `[start_index, end_index)`. A single message `msg_042` has `start_index=41, end_index=42`. A run from `msg_042` to `msg_050` has `start_index=41, end_index=50`.
+
+**Safe fallbacks.** If `message_range` is missing or malformed on a persisted item, consumers must not collapse to a single-message window (e.g. `end_index = start_index + 1`) — that silently truncates evidence. The correct fallback cascade is:
+
+1. If `references` is non-empty, use `start_index = min(ref_indices)`, `end_index = max(ref_indices) + 1`.
+2. Else if `span_ids` resolve to a valid span, use that span's range.
+3. Else fall back to the full conversation range `[0, len(conversation))` and mark the result as degraded so tooling can surface the issue.
+
 #### Summary.decisions
 
 Key technical decisions made during the session.
@@ -585,7 +608,62 @@ Semantic grouping is represented in `spans`.
 | `content` | string | Yes | Message content |
 | `embedding` | array[number] | No | Vector embedding (typically 1536-dim) for semantic search |
 | `tool_name` | string | Conditional | Required if `role` is `"tool"` |
+| `tool_response` | string | No | Full uncompacted tool response (see Tool Response Storage below) |
 | `metadata` | object | No | Additional context |
+
+#### Tool Response Storage
+
+Tool responses (especially Edit and Write) can be very large — a single Edit response
+may contain the full file content (~45KB+). Storing these verbatim in `content` bloats
+`.devsession` files and degrades search quality (file content drowns out semantic signal).
+
+The solution is a two-field pattern:
+
+- **`content`** — compact inline representation (~200 bytes for Edit/Write). Contains the
+  tool name, file path, truncated diff, and success/failure status. This is what gets
+  embedded and indexed for search, and what appears in conversation context windows.
+- **`tool_response`** — the full, untruncated tool response. Preserved for lossless
+  reconstruction, file recovery, and deep search when the compact content matches.
+
+```json
+{
+  "id": "msg_089",
+  "index": 89,
+  "timestamp": "2024-10-27T15:10:00Z",
+  "role": "tool",
+  "tool_name": "Edit",
+  "content": "Edit: {\"file_path\": \"api/stripe.js\", \"old_string\": \"...\", \"new_string\": \"...\"}\n→ {\"success\": true}",
+  "tool_response": "{\"success\": true, \"content\": \"const stripe = require('stripe')...full file content...\"}",
+  "metadata": {
+    "file_path": "api/stripe.js",
+    "operation": "edit"
+  }
+}
+```
+
+**Rules:**
+
+1. `content` is always the searchable, embeddable representation — it MUST be present
+   on every message regardless of whether `tool_response` exists.
+2. `tool_response` is only populated when the full response differs materially from
+   `content` (i.e., when compaction occurred). If the tool response is small enough
+   to fit in `content` without truncation, `tool_response` should be omitted.
+3. `tool_response` MUST survive WAL→conversation conversion. Both `flush_active_wals`
+   and `end_session` must carry this field through.
+4. Retrieval should use `content` for embedding and BM25 indexing. When expanding a
+   search result, `tool_response` should be available for full context reconstruction.
+5. For external sidecar extraction (artifact files for file recovery), `tool_response`
+   is the source. After extraction, `tool_response` MAY be dropped from the persisted
+   `.devsession` if storage pressure requires it — but only after artifacts are safely
+   written.
+
+**Compaction applicability:**
+
+| Tool | Compact `content` | `tool_response` |
+|------|-------------------|-----------------|
+| Edit / Write | file_path + truncated diff + success/failure (~200B) | Full response with file content |
+| Read / Glob / Grep | Truncated to 4KB | Full response if >50KB |
+| Other tools | Full response (no compaction) | Omitted |
 
 #### Conversation Mutation Rules
 
@@ -675,6 +753,18 @@ Production guidance:
 - Inline embeddings are acceptable for prototyping and small sessions.
 - External sidecars are preferred for large sessions to avoid JSON bloat and slow parses.
 - Vector data remains an acceleration structure, not the canonical memory representation.
+
+#### Embedding provider consistency
+
+Embeddings are provider- and dimension-specific. If the provider changes (e.g. `text-embedding-3-small` 1536D → `text-embedding-3-large` 3072D), every stored vector becomes incompatible with queries from the new provider, and cosine similarity on mixed dimensions will raise.
+
+Implementations must:
+
+- Record the provider identifier and dimensionality alongside the stored vectors (see `vector_index.embedding_model` and `vector_index.dimensions`).
+- Validate on index load that all vectors in the unified index share a single `embedding_model` and `dimensions` pair.
+- On mismatch, force a full re-embed rather than mixing provider outputs — partial re-embedding produces a split index that silently degrades search quality.
+
+Because embeddings are an acceleration structure, re-embedding is always safe: the conversation, summary, and span layers are the canonical memory and are not affected by regeneration.
 
 ### Vector Index Object
 
@@ -995,6 +1085,26 @@ results = hybrid_search(session, "webhook signature", "prb_52a8e0af")
    - `message_range`: Full span of discussion (complete context)
 4. Use `message_range` as the exact fallback locator
 
+**Computing `message_range` for agent-reported summaries (MCP path):**
+
+When the agent reports summary items as text (via `save_session_notes`), exact
+message ranges are not available from the LLM. Instead, ranges are computed
+post-hoc using BM25 keyword matching against the WAL conversation:
+
+1. Tokenize the summary item text (decision, problem, action, etc.)
+2. BM25-score every conversation message against the item's terms
+3. Collect messages scoring above 30% of the max score
+4. Split matches into clusters separated by gaps > 8 messages
+5. Select the cluster with the highest aggregate BM25 score
+6. The cluster's min/max indices become `[start_index, end_index)`
+7. Top-scoring messages within the cluster populate `references`
+
+This avoids session-wide `[0, N)` fallback ranges and produces tight semantic
+ranges without requiring an additional LLM call or embedding model. If no
+messages score above threshold, the full-session range is used as a safe fallback.
+
+Spans are then synthesized from these ranges via `ensure_summary_span_links`.
+
 **When loading context:**
 1. **Start with summary** (chronologically organized)
 2. **Resolve span IDs** to locate semantic source regions
@@ -1031,6 +1141,206 @@ Optional additional files or resources referenced in the session.
   }
 }
 ```
+
+### Session Behaviors
+
+Runtime behaviors that operate within a devsession, recorded in the WAL
+and conversation layers.
+
+#### Session-Signal (Forward Pointers)
+
+Assistant response messages may carry a `session_signal` field — a per-response
+forward pointer tracking what the response resolved, what remains open, and the
+user's current session goal.
+
+The signal is injected via a SESSION RULE that asks the agent to append an HTML
+comment tag to each response:
+
+```
+<!--session-signal: goal=fix hybrid search | resolved=BM25 range fix, span generation | open=index rebuild-->
+```
+
+The `goal` field anchors the signal chain to the user's current intent. Open
+items are only valid in service of the goal — items from previous sessions that
+are unrelated to the current goal are not carried forward. The goal is set when
+the user first states what they want to work on and updated if they redirect.
+
+The `Stop` hook extracts this tag, strips it from the stored `content`, and
+saves the parsed signal as a structured field on the conversation record:
+
+```json
+{
+  "id": "msg_042",
+  "role": "assistant",
+  "content": "Here's the fix for the BM25 range calculation...",
+  "session_signal": {
+    "goal": "fix hybrid search",
+    "resolved": ["BM25 range fix", "span generation"],
+    "open": ["index rebuild"]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_signal` | object | Optional. Present only when the agent included the tag. |
+| `session_signal.goal` | string | Optional. The user's current session goal. Set on first intent, carried forward, updated on redirect. |
+| `session_signal.resolved` | array[string] | Topics this response resolved. |
+| `session_signal.open` | array[string] | Topics that remain open after this response. Must be in service of the goal. |
+
+Session-signals enable incremental progress tracking without retrospective
+summarization. They power autonomous continuation via the `evaluate_continuation`
+MCP tool, which reads the latest signal, filters open items against the goal,
+and returns a continuation brief if there are actionable items the agent can
+self-direct on without user input.
+
+Gated by the `session_signal` config setting (on by default).
+
+##### Autonomous continuation filter algorithm
+
+`evaluate_continuation` decides whether the agent should self-direct by filtering
+`session_signal.open` against `session_signal.goal`. Implementations must follow
+this algorithm:
+
+1. **Tokenize the goal** — lowercase, split on whitespace, drop stop-words
+   (`the`, `a`, `an`, `and`, `or`, `but`, `in`, `on`, `at`, `to`, `for`, `of`,
+   `with`, `by`, `from`, `as`, `is`, `are`, `was`, `were`, `be`, `been`, `being`,
+   `this`, `that`) and tokens ≤ 2 characters.
+2. **Expand with the synonym map** — for each remaining goal token, union in
+   its cluster from the shared software-engineering synonym map (the same map
+   used by `search_expanded`). This prevents near-miss classifications like
+   "design shared memory" vs. "wire userConfig into MCP server" being filtered
+   out when they're in service of the same goal.
+3. **For each open item**, check for either:
+   - set intersection between the expanded goal vocabulary and the item's
+     tokenized non-stop-word tokens, OR
+   - substring containment: any goal token of length ≥ 4 appearing as a
+     substring anywhere in the item text.
+4. **Return one of**:
+   - `{action: "continue", next: <first actionable>, remaining: [...]}` — if
+     at least one open item passes the filter.
+   - `{action: "wait", filtered_items: [...]}` — if all open items are
+     off-goal (nothing to self-direct on).
+   - `{action: "done"}` — if open_items is empty.
+
+The algorithm is intentionally deterministic and dependency-free (no embedding
+API required) so evaluation is cheap and always available. Callers that want
+tighter matching can post-filter the `continue` result before acting.
+
+#### Locked and Pinned Memory
+
+Summary items carry two boolean flags that control how the compactor and
+context-injection layer treat them:
+
+**`pinned`** — context-injection layers (session-start, post-compact) should
+always surface pinned items regardless of retrieval relevance. Use this for
+architectural rules or decisions that must be remembered on every session.
+The `pin_memory` MCP tool is the canonical way to toggle this; the producer
+always writes `pinned: false` on new items.
+
+**`locked`** — the compactor's delta-op merge passes must treat locked items
+as authoritative and skip incoming content updates. Only two fields may be
+mutated on a locked item during compaction:
+
+- `t_last` — bumped as the linked region's timestamps advance.
+- `message_range.end_index` / `message_range.end` — extended when new messages
+  join the referenced region (but never contracted).
+
+All other fields (`decision`, `reasoning`, `problem`, `solution`, `action`,
+`priority`, `severity`, `impact`, `confidence`, `references`, `span_ids`) are
+frozen. The only way to edit a locked item is to manually unlock it in the
+`.devsession` file, or via the `edit_summary_item` MCP tool which also
+respects the lock.
+
+The combination lets the user protect both *what the memory says* (locked)
+and *whether it's always surfaced* (pinned) independently.
+
+#### File Reconstruction (`recover_file`)
+
+The `recover_file` tool reconstructs a file's historical content from artifact
+sidecars. The reconstruction contract is:
+
+1. **Prefer `file_content`** if the artifact stored the full content directly
+   (Write tool, or Edit when the sidecar captured a post-edit snapshot).
+2. **Otherwise, parse `raw_response`** as JSON and reconstruct based on the
+   tool that produced the artifact:
+   - Edit: requires `originalFile`, `oldString`, and `newString` — apply a
+     single replacement (`originalFile.replace(oldString, newString, 1)`).
+     If the Edit tool used `replace_all`, the artifact must store the
+     final content directly; single-replacement reconstruction is incorrect
+     for `replace_all` edits.
+   - Write: `content` field is authoritative.
+   - Other tools: reconstruction is not guaranteed; caller should fall back
+     to showing the raw response.
+3. **Version ordering** — snapshots are ordered newest-first by session
+   modification time. Version 0 is the most recent; version N is the
+   Nth-previous version.
+
+Implementations must preserve the `raw_response` field on tool messages until
+artifact extraction has successfully run. Dropping `raw_response` before
+extraction prevents later recovery.
+
+#### Auto-Reason (Reasoning Scaffold Injection)
+
+When enabled, the `UserPromptSubmit` hook detects user intent from the prompt
+text via fast regex heuristics and injects a reasoning scaffold into the
+agent's context. The scaffold guides the agent through a multiplicity-of-outcome
+pattern: diverge (5-7 hypotheses) → converge (1-2 best) → validate before acting.
+
+Two intent modes:
+
+| Mode | Trigger | Scaffold |
+|------|---------|----------|
+| **Debug** | error, bug, crash, failing, traceback, "why is X broken" | Reflect on 5-7 possible sources → distill to 1-2 → add error logs to validate → fix |
+| **Planning** | design, architecture, "should we", "let's figure out", "let's plan", refactor, migrate | Consider 5-7 approaches → evaluate trade-offs → narrow to 1-2 → justify |
+
+The injected scaffold appears in the agent's context as a system-level
+instruction. It is not stored in the conversation — it influences the agent's
+reasoning process but does not become part of the persisted record.
+
+Gated by the `auto_reason` config setting (off by default). Superseded by MMC
+when both are enabled.
+
+#### MMC (Multiple Model Comparison)
+
+MMC is self-consistency sampling applied to coding tasks. When enabled, it
+supersedes auto-reason: instead of a single agent following the reasoning
+scaffold, 3 parallel agents each independently run the full diverge→converge
+scaffold with a different analytical lens.
+
+**Debug lenses:**
+
+| Agent | Lens | Focus |
+|-------|------|-------|
+| 1 | Recent Changes | What changed most recently that could have caused this? |
+| 2 | Data Flow | Trace data from input to failure point — which transformation is wrong? |
+| 3 | Assumptions | What assumptions does the code make that might be violated? |
+
+**Planning lenses:**
+
+| Agent | Lens | Focus |
+|-------|------|-------|
+| 1 | Simplicity | What is the simplest solution with fewest moving parts? |
+| 2 | Robustness | What solution is most resilient to future changes and edge cases? |
+| 3 | Performance | What solution performs best as data grows and usage increases? |
+
+**Protocol:**
+
+1. `UserPromptSubmit` hook detects intent and injects the MMC protocol
+2. Protocol instructs the agent to spawn 3 agents IN PARALLEL via the Agent tool
+3. Each agent receives: the user's problem, the full reasoning scaffold, and its unique lens
+4. Each agent independently reflects on 5-7 possibilities and converges to 1-2
+5. The main agent compares all conclusions and extracts consensus:
+   - 2+ agents converged → high confidence
+   - Single-agent conclusion → lower confidence, noted as such
+6. Synthesis presented to user with confidence levels before any action
+
+The key insight: when multiple independent reasoning paths converge on the same
+answer, confidence is multiplicative. Each agent already eliminated weak
+hypotheses on its own before the comparison step.
+
+MMC is triggered by the same intent detection as auto-reason (debug and planning
+prompts). Gated by the `mmc` config setting (off by default).
 
 ## Usage Examples
 
@@ -1139,6 +1449,8 @@ When summary doesn't have enough detail:
 - Clarified that `.devproject` is optional and external to `.devsession`
 - Summary items now carry `span_ids` plus `references` and `message_range`
 - Canonicalized exact range semantics around `[start_index, end_index)`
+- Added `session_signal` field on assistant messages (forward pointers for progress tracking)
+- Added session behaviors: auto-reason scaffold injection, MMC parallel reasoning protocol
 
 ### 1.0.0 (Draft - October 2024)
 - Initial specification

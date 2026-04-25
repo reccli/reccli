@@ -823,6 +823,24 @@ Rules:
                 continue
 
             prior = merged[item_id]
+
+            # Locked items are authoritative — skip incoming updates entirely.
+            # Only allow range extension (t_last / message_range.end_index) so the
+            # linked-message span stays correct as the conversation grows.
+            if prior.get("locked"):
+                preserved = deepcopy(prior)
+                if "t_last" in item and item["t_last"]:
+                    preserved["t_last"] = item["t_last"]
+                if "message_range" in item and isinstance(item["message_range"], dict):
+                    mr = preserved.get("message_range", {}) or {}
+                    new_end = item["message_range"].get("end_index")
+                    if new_end is not None and new_end > mr.get("end_index", 0):
+                        mr["end_index"] = new_end
+                        mr["end"] = item["message_range"].get("end", mr.get("end"))
+                        preserved["message_range"] = mr
+                merged[item_id] = preserved
+                continue
+
             updated = deepcopy(prior)
             updated.update(item)
 

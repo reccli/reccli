@@ -292,6 +292,63 @@ It should not contain project-level decision graphs, heavy orchestration metadat
 Recommended top-level fields (included when available):
 
 - `update_history`
+- `hub_files`
+- `shared_infrastructure`
+- `unassigned`
+
+## Codebase-Scan Fields
+
+When `.devproject` is initialized from a codebase scan (see "Codebase Sync"), the LLM clustering step produces three additional top-level arrays beyond the core `features` list. These surface files that don't fit neatly inside a single feature and prevent them from disappearing from the project dashboard.
+
+### `hub_files`
+
+Files that are central to multiple features — entry points, orchestrators, top-level routers, `__init__.py` files that re-export multiple subsystems. These are called out explicitly so that a session touching a hub file doesn't get attributed to a single feature by accident and so agent dispatch can flag hub-file edits as potentially cross-cutting.
+
+```json
+{
+  "hub_files": [
+    {
+      "path": "packages/reccli/mcp_server.py",
+      "reason": "MCP tool dispatch; touches all session, project, retrieval, and config subsystems"
+    }
+  ]
+}
+```
+
+Recommended fields per entry:
+
+- `path`
+- `reason` — why this file is a hub (free text, short)
+
+### `shared_infrastructure`
+
+Cross-cutting files that most features depend on but that don't belong to any single feature: configuration loaders, logging setup, base classes, connection pools, build scripts, CI configs. Session evidence that touches only these files should not propose a new feature.
+
+```json
+{
+  "shared_infrastructure": [
+    {
+      "path": "packages/reccli/runtime/config.py",
+      "reason": "Config object consumed by retrieval, hooks, and CLI"
+    }
+  ]
+}
+```
+
+### `unassigned`
+
+Files the clustering step could not confidently assign to any feature. Keeping them visible in `.devproject` makes the unassigned tail an explicit review surface rather than a silent gap — users can either accept a proposed feature promotion or mark a file as shared infrastructure on the next review pass.
+
+```json
+{
+  "unassigned": [
+    "packages/reccli/runtime/wpc.py",
+    "packages/reccli/ui/src/bridge/python.mock.ts"
+  ]
+}
+```
+
+These three arrays are `source: "auto"` by convention: they represent scan output, not user-authored structure. Users can move entries into `features.files_touched` at any time, and the next re-sync will respect those assignments.
 
 ## `project` Object
 
@@ -669,6 +726,30 @@ Once `.devproject` is accepted, it is loaded as the primary context at the start
 - linked documents and session history paths
 
 This lets the agent orient itself to any part of the project without the user re-explaining context, and lets future `.devsession` summaries attach to an existing feature ID rather than constantly inventing new feature names.
+
+## Session-Start Resume Brief
+
+`.devproject` is loaded at the start of every new session, but it is not the only thing surfaced. Session-start context injection combines `.devproject` with a short **Resume From** brief extracted from the most recent `.devsession` summary.
+
+The brief is built by walking the latest session file, reading `summary.open_issues` and `summary.next_steps`, and emitting up to 5 of each as bullet points tagged `**Open:**` or `**Next:**`. The result is prepended to the normal `.devproject` feature map so the agent opens every session with an immediate answer to "where were we?"
+
+Example output:
+
+```text
+## Resume From (last session)
+- **Open:** Plugin hooks use ${CLAUDE_PLUGIN_DATA}/venv — untested on clean install
+- **Open:** userConfig values not yet wired into MCP server from plugin config
+- **Next:** Deploy reccli.dev storefront to Vercel
+- **Next:** Create RecCli Supabase project with licenses table
+```
+
+Design principles:
+
+- The brief is a **view**, not stored state. `.devproject` itself does not persist the resume brief; it is recomputed from the most recent `.devsession` each time the session starts.
+- Items surface in source order from `summary.open_issues` and `summary.next_steps`, capped at 5 each to keep the brief compact.
+- If the most recent session has no structured summary (stub or missing `overview`), the brief is omitted and the session-start flow surfaces an action-required block asking the agent to retroactively summarize.
+
+**Link to session-signal.** The resume brief is the downstream consumer of the session-signal forward pointers that the `Stop` hook extracts during each session (see `.devsession` spec, "Session-Signal"). Session-signals track progress live; the final `save_session_notes` call persists the condensed open/next state into `summary.open_issues` and `summary.next_steps`; the resume brief surfaces that state on the next session. This is the continuity loop.
 
 ## Bidirectional Authority Model
 

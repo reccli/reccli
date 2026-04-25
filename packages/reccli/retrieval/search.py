@@ -14,7 +14,269 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import json
 import math
+import re
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# Query-aware preview selection
+# ---------------------------------------------------------------------------
+
+# Sentence boundary: ., !, or ? followed by whitespace + an uppercase / opening
+# delimiter, OR a paragraph break. Conservative — prefers under-splitting to
+# over-splitting since search doesn't need linguistic perfection.
+_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-Z"\'\(\[])|\n\n+')
+
+_PREVIEW_STOP_WORDS = {
+    'the','a','an','and','or','but','in','on','at','to','for','of','with',
+    'by','from','as','is','are','was','were','be','been','being','this','that',
+    'it','its','if','then','than','so','do','does','did','can','could','would',
+    'should','will','have','has','had',
+}
+
+
+def _split_sentences(text: str, hard_max: int = 500) -> List[str]:
+    """Split text into sentences. Long 'sentences' (code blocks, URLs) are
+    further broken on newlines so no single unit dwarfs the rest."""
+    if not text:
+        return []
+    parts = _SENTENCE_SPLIT.split(text)
+    out: List[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if len(p) > hard_max:
+            for sub in p.split('\n'):
+                sub = sub.strip()
+                if sub:
+                    out.append(sub[:hard_max])
+        else:
+            out.append(p)
+    return out
+
+
+def _score_best_sentence(query: str, content: str, target_chars: int = 260) -> Tuple[str, float]:
+    """Return (best_sentence, bm25_score) for the query against content.
+
+    Score is 0.0 when there is no meaningful match (returns first-N-chars as sentence).
+    Otherwise score is the raw BM25 of the best sentence — unbounded; callers are
+    responsible for normalizing across a candidate pool if using it for ranking.
+    """
+    if not content:
+        return "", 0.0
+
+    query_terms = [t for t in query.lower().split() if len(t) > 2 and t not in _PREVIEW_STOP_WORDS]
+    if not query_terms:
+        return content[:target_chars], 0.0
+
+    sentences = _split_sentences(content)
+    if len(sentences) <= 1:
+        return content[:target_chars], 0.0
+
+    query_set = set(query_terms)
+    tokens_per = [s.lower().split() for s in sentences]
+    df: Dict[str, int] = {}
+    for tokens in tokens_per:
+        for term in query_set & set(tokens):
+            df[term] = df.get(term, 0) + 1
+
+    if not df:
+        return content[:target_chars], 0.0
+
+    N = len(sentences)
+    avg_len = max(1, sum(len(t) for t in tokens_per) / N)
+    k1, b = 1.5, 0.75
+
+    best_idx = 0
+    best_score = 0.0
+    for i, tokens in enumerate(tokens_per):
+        score = 0.0
+        dl = max(1, len(tokens))
+        for term in query_terms:
+            if term not in df:
+                continue
+            tf = tokens.count(term)
+            if tf == 0:
+                continue
+            idf = math.log((N - df[term] + 0.5) / (df[term] + 0.5) + 1.0)
+            score += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * (dl / avg_len)))
+        if score > best_score:
+            best_score = score
+            best_idx = i
+
+    if best_score < 0.5:
+        return content[:target_chars], 0.0
+
+    best = sentences[best_idx]
+    if len(best) < 120 and best_idx + 1 < len(sentences):
+        combined = best + " " + sentences[best_idx + 1]
+        if len(combined) <= target_chars:
+            return combined, best_score
+    if len(best) > target_chars:
+        return best[:target_chars - 1] + "…", best_score
+    return best, best_score
+
+
+def _pick_best_sentence(query: str, content: str, target_chars: int = 260) -> str:
+    """Backward-compatible thin wrapper around _score_best_sentence."""
+    return _score_best_sentence(query, content, target_chars)[0]
+
+
+def _enrich_and_rerank(
+    sessions_dir: Path,
+    results: List[Dict],
+    query: str,
+    top_k: int,
+    sentence_boost: float = 0.0,
+) -> List[Dict]:
+    """Enrich content_previews with best sentences; optionally re-rank.
+
+    Default behavior (sentence_boost=0.0): enrichment only — content_preview
+    gets replaced with the query-relevant sentence, but final_score ordering
+    is preserved. This is the conservative, zero-risk mode and is what ships
+    to users.
+
+    With sentence_boost > 0, deep candidates with strong sentence matches can
+    leapfrog shallow top-ranked hits via an additive blend (norm-squared for
+    non-linear damping of weak matches). EMPIRICAL NOTE: enabling the boost
+    on small candidate pools (e.g. LongMemEval haystacks with only ~60-70
+    messages total) caused regressions on enumeration-style questions —
+    re-ranking concentrated results on fewer distinct sessions at the expense
+    of diversity. Kept off by default until we have evidence it helps.
+    """
+    if not query or not results:
+        return results[:top_k]
+
+    from ..session.devsession import DevSession
+
+    session_cache: Dict[str, DevSession] = {}
+    enriched: List[Dict] = []
+
+    for result in results:
+        role = result.get('role', '')
+        # Spans/summary-items keep their curated previews and don't get a boost
+        if role in ('span', 'summary'):
+            result = {**result, 'sentence_score': 0.0}
+            enriched.append(result)
+            continue
+
+        session_id = result.get('session')
+        msg_index = result.get('message_index')
+        if not session_id or msg_index is None:
+            result = {**result, 'sentence_score': 0.0}
+            enriched.append(result)
+            continue
+
+        if session_id not in session_cache:
+            session_file = sessions_dir / f"{session_id}.devsession"
+            if not session_file.exists():
+                result = {**result, 'sentence_score': 0.0}
+                enriched.append(result)
+                continue
+            try:
+                session_cache[session_id] = DevSession.load(session_file, verify_checksums=False)
+            except Exception:
+                result = {**result, 'sentence_score': 0.0}
+                enriched.append(result)
+                continue
+
+        session = session_cache[session_id]
+        conv = session.conversation
+        if not (0 <= msg_index < len(conv)):
+            result = {**result, 'sentence_score': 0.0}
+            enriched.append(result)
+            continue
+
+        msg = conv[msg_index]
+        full_content = msg.get('content', '') or ''
+        if role == 'tool' and msg.get('tool_response'):
+            full_content = f"{full_content}\n{msg['tool_response']}"
+
+        best_sentence, sentence_score = _score_best_sentence(query, full_content)
+
+        updated = {**result, 'sentence_score': sentence_score}
+        if len(full_content) > 260 and best_sentence and best_sentence != (result.get('content_preview') or ''):
+            updated['content_preview'] = best_sentence
+        enriched.append(updated)
+
+    # Blend sentence_score into final_score. Additive, scaled to pool's max
+    # final_score, and NON-LINEAR (squared norm) so weak matches barely move
+    # while strong matches can lift a deep hit into the top_k window.
+    #
+    # Concretely: a sentence at 30% of the pool's best gets only (0.3**2)=9% boost
+    # while one at 90% gets (0.9**2)=81% boost. This prevents over-disruption of
+    # rankings that were already correctly scored by the full pipeline, while
+    # still rescuing deep hits where the match is clearly strong.
+    max_sentence = max((r.get('sentence_score', 0.0) for r in enriched), default=0.0)
+    max_final = max((r.get('final_score', 0.0) for r in enriched), default=0.0)
+    if max_sentence > 0 and max_final > 0:
+        for r in enriched:
+            norm = r.get('sentence_score', 0.0) / max_sentence
+            r['final_score'] = r.get('final_score', 0.0) + max_final * sentence_boost * (norm ** 2)
+
+    enriched.sort(key=lambda x: x.get('final_score', 0.0), reverse=True)
+    return enriched[:top_k]
+
+
+def _candidate_pool_size(top_k: int) -> int:
+    """Pool to scan for sentence re-ranking. Capped so very large top_k doesn't
+    blow up disk I/O; floored at 30 so small top_k still gets a meaningful re-rank."""
+    return min(max(top_k * 4, 30), 60)
+
+
+def _log(sessions_dir: Path, component: str, message: str, severity: str = "warning") -> None:
+    """Forward to hooks._log_issue with the project_root derived from sessions_dir.
+
+    Sessions live at <project_root>/devsession/, so project_root is sessions_dir.parent.
+    """
+    try:
+        from ..hooks.session_recorder import _log_issue
+        _log_issue(component, message, severity=severity, project_root=sessions_dir.parent)
+    except Exception:
+        pass  # Logger must never take down the caller
+
+
+def _msg_id_to_index(msg_id: str) -> Optional[int]:
+    """Convert a msg_NNN identifier to its 0-based conversation index."""
+    if not msg_id or not msg_id.startswith("msg_"):
+        return None
+    try:
+        return int(msg_id[4:]) - 1
+    except ValueError:
+        return None
+
+
+def validate_index_dimensions(index: Dict) -> Tuple[bool, Optional[str]]:
+    """Validate that index embeddings have a consistent dimension.
+
+    Returns (ok, reason). If ok is False, reason describes the mismatch.
+    Caller should treat mismatch as a signal to force rebuild rather than
+    mix dimensions — cosine on mixed dims raises in cosine_similarity().
+    """
+    declared = index.get('embedding', {}).get('dimensions')
+    vectors = index.get('unified_vectors') or []
+    if not vectors or declared is None:
+        return True, None
+
+    # Prefer matrix path if present — cheap to check
+    mat = index.get('embeddings_matrix')
+    if mat is not None:
+        try:
+            shape = getattr(mat, 'shape', None)
+            if shape and len(shape) == 2 and shape[1] != declared:
+                return False, f"embeddings_matrix dim {shape[1]} != declared {declared}"
+        except Exception:
+            pass
+        return True, None
+
+    # Else check inline vectors
+    for v in vectors:
+        emb = v.get('embedding')
+        if emb:
+            if len(emb) != declared:
+                return False, f"vector {v.get('id', '?')} dim {len(emb)} != declared {declared}"
+            break  # One check is enough — all vectors share a dim by construction
+    return True, None
 
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -205,20 +467,26 @@ def bm25_search(
 
     for vector in vectors:
         content = vector.get('content_preview', '').lower()
-        terms = set(content.split())
-        doc_lengths.append(len(content.split()))
+        tool_resp = (vector.get('tool_response_preview') or '').lower()
+        full_text = f"{content} {tool_resp}" if tool_resp else content
+        terms = set(full_text.split())
+        doc_lengths.append(len(full_text.split()))
 
         for term in terms:
             df[term] = df.get(term, 0) + 1
 
     avg_doc_length = sum(doc_lengths) / len(doc_lengths) if doc_lengths else 0
+    if avg_doc_length <= 0:
+        avg_doc_length = 1.0
 
     # Calculate BM25 scores
     results = []
 
     for idx, vector in enumerate(vectors):
         content = vector.get('content_preview', '').lower()
-        doc_terms = content.split()
+        tool_resp = (vector.get('tool_response_preview') or '').lower()
+        full_text = f"{content} {tool_resp}" if tool_resp else content
+        doc_terms = full_text.split()
         doc_length = len(doc_terms)
 
         # Calculate BM25 score
@@ -257,10 +525,47 @@ def bm25_search(
     return results[:k]
 
 
+def _compute_bm25_weight(bm25_results: List[Dict], query: str) -> float:
+    """Compute adaptive BM25 weight based on query term specificity.
+
+    When query terms are rare in the corpus (high IDF), BM25 is more
+    discriminative than dense embeddings. Boost BM25 contribution in those cases.
+
+    Returns a weight multiplier for BM25 scores in RRF (1.0 = equal, >1 = BM25 favored).
+    """
+    if not bm25_results:
+        return 1.0
+
+    # Check score spread — a large gap between top and median BM25 scores
+    # indicates the query terms are highly discriminative (domain-specific).
+    scores = [r.get('bm25_score', 0) for r in bm25_results]
+    if len(scores) < 3:
+        return 1.0
+    # Need at least one positive score to compute spread
+    if scores[0] <= 0:
+        return 1.0
+
+    top_score = scores[0]  # already sorted descending
+    median_score = scores[len(scores) // 2]
+
+    if median_score <= 0:
+        # Most docs don't match at all — query is very specific, BM25 dominant
+        return 2.5
+
+    spread_ratio = top_score / median_score
+    if spread_ratio > 4.0:
+        return 2.0  # Strong keyword signal
+    elif spread_ratio > 2.0:
+        return 1.5  # Moderate keyword signal
+
+    return 1.0
+
+
 def reciprocal_rank_fusion(
     dense_results: List[Dict],
     bm25_results: List[Dict],
-    k0: int = 60
+    k0: int = 60,
+    bm25_weight: float = 1.0,
 ) -> List[Dict]:
     """
     Reciprocal Rank Fusion (RRF) to combine dense and sparse results
@@ -269,6 +574,7 @@ def reciprocal_rank_fusion(
         dense_results: Results from dense search
         bm25_results: Results from BM25 search
         k0: RRF parameter (default 60)
+        bm25_weight: Multiplier for BM25 RRF contribution (>1 = BM25 favored)
 
     Returns:
         Fused results with RRF scores
@@ -284,12 +590,12 @@ def reciprocal_rank_fusion(
             score = 1.0 / (k0 + rank)
             rrf_scores[vec_id] = (score, result)
 
-    # Add BM25 scores
+    # Add BM25 scores (with adaptive weight)
     for result in bm25_results:
         vec_id = result['id']
         rank = result.get('bm25_rank', 0)
         if rank > 0:
-            score = 1.0 / (k0 + rank)
+            score = bm25_weight * (1.0 / (k0 + rank))
 
             if vec_id in rrf_scores:
                 # Combine scores
@@ -402,22 +708,33 @@ def compute_tau(kind: str, query: str) -> float:
     """
     Compute intent-aware time decay parameter τ (in hours)
 
+    Precedence:
+      1. Result kind (decisions decay slowly regardless of query wording)
+      2. Query intent (only if kind is generic: note/log/code/doc)
+      3. Default (3 days)
+
     Args:
-        kind: Message kind (decision, code, problem, etc.)
-        query: Query string (to detect intent)
+        kind: Message kind (decision, code, problem, etc.) — the *result's* kind
+        query: Query string (used only if kind is not intrinsically decision-like)
 
     Returns:
         τ in hours
     """
+    # Kind-first: a decision is a decision regardless of how you searched for it
+    if kind == 'decision':
+        return 30 * 24.0  # 30 days
+    if kind == 'problem':
+        return 14 * 24.0  # 14 days — problems stay relevant longer than code
+
     query_lower = query.lower()
 
-    # Error/debug queries: fast decay (8 hours)
+    # Error/debug queries: fast decay (8 hours) — only for generic-kind results
     if any(word in query_lower for word in ['error', 'crash', 'bug', 'failed', 'exception']):
         return 8.0
 
-    # Decision queries: slow decay (30 days)
-    if kind == 'decision' or any(word in query_lower for word in ['decision', 'why', 'approach', 'design']):
-        return 30 * 24.0  # 30 days
+    # Decision-intent queries: slow decay even for generic-kind results
+    if any(word in query_lower for word in ['decision', 'why', 'approach', 'design']):
+        return 30 * 24.0
 
     # Default: 3 days
     return 3 * 24.0
@@ -646,7 +963,8 @@ def search(
     time: Optional[Dict] = None,
     scope: Optional[Dict] = None,
     provider = None,
-    current_section: str = 'default'
+    current_section: str = 'default',
+    file_path: Optional[str] = None,
 ) -> List[Dict]:
     """
     Hybrid search: Dense ANN + BM25 + RRF + Temporal boosts
@@ -659,6 +977,7 @@ def search(
         scope: Scope filter (session_id, section, episode_id)
         provider: Embedding provider (for query embedding)
         current_section: Current working section (for boosts)
+        file_path: Filter results to messages that reference this file path
 
     Returns:
         List of search results with badges
@@ -672,13 +991,18 @@ def search(
             try:
                 from .vector_index import build_unified_index
                 build_unified_index(sessions_dir, verbose=False)
-            except Exception:
-                pass
+            except Exception as e:
+                _log(sessions_dir, "search", f"auto-build of unified index failed: {e}", severity="error")
         if not index_path.exists():
             return []
 
     with open(index_path, 'r') as f:
         index = json.load(f)
+
+    # Validate embedding dimensions — a mismatch means dense search will raise.
+    ok, reason = validate_index_dimensions(index)
+    if not ok:
+        _log(sessions_dir, "search", f"embedding dimension mismatch ({reason}); run rebuild_index", severity="error")
 
     # Dense search (requires embeddings — gracefully degrade to BM25-only if unavailable)
     dense_results = []
@@ -688,14 +1012,17 @@ def search(
             provider = get_embedding_provider()
         query_embedding = provider.embed(query)
         dense_results = dense_search(index, query_embedding, k=200)
-    except Exception:
-        pass  # Fall back to BM25-only
+    except Exception as e:
+        _log(sessions_dir, "search.dense", f"dense search failed, falling back to BM25-only: {e}")
 
     # BM25 sparse search (always available — no API needed)
     bm25_results = bm25_search(index, query, k=200)
 
+    # Adaptive BM25 weighting: boost BM25 when query terms are domain-specific
+    bm25_weight = _compute_bm25_weight(bm25_results, query)
+
     # Reciprocal Rank Fusion (works with dense-only, BM25-only, or both)
-    rrf_results = reciprocal_rank_fusion(dense_results, bm25_results, k0=60)
+    rrf_results = reciprocal_rank_fusion(dense_results, bm25_results, k0=60, bm25_weight=bm25_weight)
 
     # 4. Apply temporal filters
     if time:
@@ -704,6 +1031,10 @@ def search(
     # 5. Apply scope filters
     if scope:
         rrf_results = apply_scope_filter(rrf_results, scope)
+
+    # 5.6. File path filter — keep only results whose content mentions the file
+    if file_path:
+        rrf_results = _filter_by_file_path(rrf_results, file_path)
 
     # 5.5. Cross-check stale vector hits against the canonical session file.
     rrf_results = filter_deleted_results(sessions_dir, rrf_results)
@@ -718,16 +1049,312 @@ def search(
     # 8. Sort by final score and return top k
     rrf_results.sort(key=lambda x: x['final_score'], reverse=True)
 
-    # 9. Add badges
-    for result in rrf_results[:top_k]:
+    # 9. Smart previews — enrich top_k previews with query-relevant sentences.
+    #    Candidate pool is kept at top_k; re-ranking mode (sentence_boost > 0)
+    #    is available in _enrich_and_rerank but off by default after empirical
+    #    evidence it hurt enumeration queries on small haystacks.
+    final = _enrich_and_rerank(sessions_dir, rrf_results[:top_k], query, top_k)
+
+    # 10. Add badges
+    for result in final:
         result['badges'] = compute_badges(result, index, current_section)
 
-    return rrf_results[:top_k]
+    return final
+
+
+def search_expanded(
+    sessions_dir: Path,
+    query: str,
+    top_k: int = 30,
+    time: Optional[Dict] = None,
+    scope: Optional[Dict] = None,
+    provider=None,
+    current_section: str = 'default',
+    file_path: Optional[str] = None,
+    max_variations: int = 3,
+) -> List[Dict]:
+    """Multi-query search with synonym expansion and result fusion (MMC).
+
+    Runs the original query plus synonym-expanded variations through BM25,
+    then fuses all result sets via RRF. Dense search runs once since
+    embeddings already capture semantic similarity.
+
+    Args:
+        sessions_dir: Path to .devsessions directory
+        query: Search query
+        top_k: Number of results
+        time: Temporal filter
+        scope: Scope filter
+        provider: Embedding provider
+        current_section: Current working section
+        file_path: File path filter
+        max_variations: Max synonym variations to generate
+
+    Returns:
+        List of search results with badges
+    """
+    from .query_expansion import expand_query
+
+    queries = expand_query(query, max_variations=max_variations)
+
+    # Load index once
+    index_path = sessions_dir / 'index.json'
+    if not index_path.exists():
+        session_files = list(sessions_dir.glob("*.devsession")) if sessions_dir.exists() else []
+        if session_files:
+            try:
+                from .vector_index import build_unified_index
+                build_unified_index(sessions_dir, verbose=False)
+            except Exception as e:
+                _log(sessions_dir, "search_expanded", f"auto-build of unified index failed: {e}", severity="error")
+        if not index_path.exists():
+            return []
+
+    with open(index_path, 'r') as f:
+        index = json.load(f)
+
+    ok, reason = validate_index_dimensions(index)
+    if not ok:
+        _log(sessions_dir, "search_expanded", f"embedding dimension mismatch ({reason}); run rebuild_index", severity="error")
+
+    # Dense search: run once with original query (embeddings capture synonymy)
+    dense_results = []
+    try:
+        if provider is None:
+            from .embeddings import get_embedding_provider
+            provider = get_embedding_provider()
+        query_embedding = provider.embed(query)
+        dense_results = dense_search(index, query_embedding, k=200)
+    except Exception as e:
+        _log(sessions_dir, "search_expanded.dense", f"dense search failed, falling back to BM25-only: {e}")
+
+    # BM25: run for each query variation, collect all results
+    all_bm25 = []
+    for q in queries:
+        bm25_results = bm25_search(index, q, k=200)
+        all_bm25.extend(bm25_results)
+
+    # Deduplicate by id, keeping best BM25 score per document
+    best_bm25 = {}
+    for r in all_bm25:
+        vid = r['id']
+        if vid not in best_bm25 or r.get('bm25_score', 0) > best_bm25[vid].get('bm25_score', 0):
+            best_bm25[vid] = r
+
+    # Re-rank the deduplicated set
+    deduped = sorted(best_bm25.values(), key=lambda x: x.get('bm25_score', 0), reverse=True)
+    for rank, r in enumerate(deduped):
+        r['bm25_rank'] = rank + 1
+
+    # RRF fusion
+    bm25_weight = _compute_bm25_weight(deduped, query)
+    rrf_results = reciprocal_rank_fusion(dense_results, deduped, k0=60, bm25_weight=bm25_weight)
+
+    # Standard post-processing pipeline
+    if time:
+        rrf_results = apply_temporal_filter(rrf_results, time)
+    if scope:
+        rrf_results = apply_scope_filter(rrf_results, scope)
+    if file_path:
+        rrf_results = _filter_by_file_path(rrf_results, file_path)
+    rrf_results = filter_deleted_results(sessions_dir, rrf_results)
+
+    for result in rrf_results:
+        result['final_score'] = apply_boosts(result, index, query, current_section)
+    rrf_results = [r for r in rrf_results if r['final_score'] > 0]
+    rrf_results.sort(key=lambda x: x['final_score'], reverse=True)
+
+    final = _enrich_and_rerank(sessions_dir, rrf_results[:top_k], query, top_k)
+
+    for result in final:
+        result['badges'] = compute_badges(result, index, current_section)
+
+    return final
+
+
+def _filter_by_file_path(results: List[Dict], file_path: str) -> List[Dict]:
+    """Filter search results to those mentioning a specific file path."""
+    # Match on filename or relative path (e.g. "webhook/route.ts" or "route.ts")
+    basename = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+    return [
+        r for r in results
+        if file_path in (r.get("content_preview") or r.get("content") or "")
+        or basename in (r.get("content_preview") or r.get("content") or "")
+        or file_path in str(r.get("tool_name", ""))
+    ]
+
+
+def search_by_file(
+    sessions_dir: Path,
+    file_path: str,
+    top_k: int = 20,
+) -> List[Dict]:
+    """Find all conversation messages that reference a specific file.
+
+    Scans all .devsession files directly (no index needed) for messages
+    that mention the file path or basename in their content or tool_name.
+
+    Args:
+        sessions_dir: Path to .devsessions directory
+        file_path: File path to search for (full or partial)
+        top_k: Maximum results to return
+
+    Returns:
+        List of matching messages with session context
+    """
+    from ..session.devsession import DevSession
+
+    basename = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+    results = []
+
+    session_files = sorted(
+        list(sessions_dir.glob("*.devsession")) + list(sessions_dir.glob(".live_*.devsession")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    for sf in session_files:
+        try:
+            session = DevSession.load(sf, verify_checksums=False)
+        except Exception:
+            continue
+
+        for idx, msg in enumerate(session.conversation):
+            content = msg.get("content", "")
+            tool_name = msg.get("tool_name", "")
+            if file_path in content or basename in content or file_path in tool_name:
+                results.append({
+                    "session": sf.stem,
+                    "session_file": str(sf),
+                    "message_index": idx,
+                    "role": msg.get("role", "?"),
+                    "tool_name": tool_name,
+                    "content_preview": content[:300],
+                    "timestamp": msg.get("timestamp", ""),
+                    "result_id": f"{sf.stem}_msg_{idx:03d}",
+                })
+
+        if len(results) >= top_k:
+            break
+
+    return results[:top_k]
+
+
+def search_by_time_range(
+    sessions_dir: Path,
+    start_time: str,
+    end_time: str,
+    query: Optional[str] = None,
+    top_k: int = 20,
+    provider=None,
+) -> List[Dict]:
+    """Find conversation messages within a time range.
+
+    Scans .devsession files for messages with timestamps in [start_time, end_time].
+    Optionally filters by a query string for relevance.
+
+    Args:
+        sessions_dir: Path to .devsessions directory
+        start_time: ISO timestamp (inclusive) e.g. "2026-03-29" or "2026-03-29T10:00:00"
+        end_time: ISO timestamp (inclusive) e.g. "2026-03-29T23:59:59"
+        query: Optional text filter — only return messages containing this string
+        top_k: Maximum results to return
+        provider: Embedding provider (unused, for future semantic filtering)
+
+    Returns:
+        List of matching messages with session context
+    """
+    from ..session.devsession import DevSession
+
+    # Normalize short dates to full-day ranges
+    if len(start_time) == 10:  # "2026-03-29"
+        start_time = start_time + "T00:00:00"
+    if len(end_time) == 10:
+        end_time = end_time + "T23:59:59"
+
+    results = []
+
+    session_files = sorted(
+        list(sessions_dir.glob("*.devsession")) + list(sessions_dir.glob(".live_*.devsession")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    query_lower = query.lower() if query else None
+
+    for sf in session_files:
+        try:
+            session = DevSession.load(sf, verify_checksums=False)
+        except Exception:
+            continue
+
+        for idx, msg in enumerate(session.conversation):
+            ts = msg.get("timestamp", "")
+            if not ts:
+                continue
+
+            if ts < start_time or ts > end_time:
+                continue
+
+            content = msg.get("content", "")
+            if query_lower and query_lower not in content.lower():
+                continue
+
+            # When a query is provided, pick the most relevant sentence as the preview.
+            # Without a query, fall back to first-300-char truncation.
+            if query and len(content) > 300:
+                preview = _pick_best_sentence(query, content, target_chars=300)
+            else:
+                preview = content[:300]
+
+            results.append({
+                "session": sf.stem,
+                "session_file": str(sf),
+                "message_index": idx,
+                "role": msg.get("role", "?"),
+                "tool_name": msg.get("tool_name", ""),
+                "content_preview": preview,
+                "timestamp": ts,
+                "result_id": f"{sf.stem}_msg_{idx:03d}",
+            })
+
+        if len(results) >= top_k:
+            break
+
+    return results[:top_k]
+
+
+_SUMMARY_ITEM_PREFIXES = ("dec_", "chg_", "prb_", "iss_", "nxt_")
+
+
+def _find_summary_item(summary: Optional[Dict], item_id: str) -> Optional[Dict]:
+    """Look up a summary item by its ID across all categories."""
+    if not summary:
+        return None
+    for category in ("decisions", "code_changes", "problems_solved", "open_issues", "next_steps"):
+        for item in summary.get(category, []):
+            if item.get("id") == item_id:
+                return item
+    return None
+
+
+def _find_span(spans: list, span_id: str) -> Optional[Dict]:
+    """Look up a span by its ID."""
+    for span in spans:
+        if span.get("id") == span_id:
+            return span
+    return None
 
 
 def expand_result(sessions_dir: Path, result_id: str, context_window: int = 5) -> Optional[Dict]:
     """
-    Expand a search result to show full context
+    Expand a search result to show full context using tri-layer traversal.
+
+    The expansion strategy depends on what was hit:
+    - Summary item (dec_*, chg_*, etc.): follow message_range for exact slice,
+      highlight references, include linked spans
+    - Span (spn_*): use span's start_index/end_index for the semantic region
+    - Message (msg_*): use ±context_window around the message
 
     Args:
         sessions_dir: Path to .devsessions directory
@@ -765,23 +1392,107 @@ def expand_result(sessions_dir: Path, result_id: str, context_window: int = 5) -
     from ..session.devsession import DevSession
     session = DevSession.load(session_file)
 
-    # Get message index
-    msg_index = target_vector['message_index']
-    if 0 <= msg_index < len(session.conversation) and session.conversation[msg_index].get("deleted"):
+    msg_id = target_vector.get('message_id', '')
+    conv_len = len(session.conversation)
+
+    # --- Summary item hit: traverse summary → message_range → conversation ---
+    if any(msg_id.startswith(p) for p in _SUMMARY_ITEM_PREFIXES):
+        summary_item = _find_summary_item(session.summary, msg_id)
+        if summary_item:
+            # Collect linked spans first — used both for range fallback and returned payload
+            linked_spans = []
+            for spn_id in summary_item.get("span_ids", []):
+                span = _find_span(session.spans, spn_id)
+                if span:
+                    linked_spans.append(span)
+
+            # Safe-fallback cascade for missing/malformed message_range
+            # (spec: references → span → full range with degraded flag)
+            mr = summary_item.get("message_range") or {}
+            start_idx = mr.get("start_index")
+            end_idx = mr.get("end_index")
+            degraded = False
+
+            if start_idx is None or end_idx is None or end_idx <= start_idx:
+                # 1. Try references
+                ref_indices = [
+                    i for i in (_msg_id_to_index(r) for r in summary_item.get("references", []))
+                    if i is not None
+                ]
+                if ref_indices:
+                    start_idx = min(ref_indices)
+                    end_idx = max(ref_indices) + 1
+                # 2. Try first linked span
+                elif linked_spans:
+                    span0 = linked_spans[0]
+                    start_idx = span0.get("start_index", 0)
+                    end_idx = span0.get("end_index") or conv_len
+                # 3. Full range, flagged degraded
+                else:
+                    start_idx = 0
+                    end_idx = conv_len
+                    degraded = True
+
+            # Clamp to conversation bounds
+            start_idx = max(0, min(start_idx, conv_len))
+            end_idx = max(start_idx, min(end_idx, conv_len))
+
+            context_messages = session.conversation[start_idx:end_idx]
+
+            return {
+                'result': target_vector,
+                'session': session_id,
+                'hit_type': 'summary_item',
+                'summary_item': summary_item,
+                'linked_spans': linked_spans,
+                'references': summary_item.get("references", []),
+                'context_start': start_idx,
+                'context_end': end_idx,
+                'context_messages': context_messages,
+                'degraded_range': degraded,
+                'summary': session.summary,
+            }
+
+    # --- Span hit: use span boundaries ---
+    if msg_id.startswith("spn_"):
+        span = _find_span(session.spans, msg_id)
+        if span:
+            start_idx = span.get("start_index", 0)
+            end_idx = span.get("end_index") or (start_idx + context_window + 1)
+            start_idx = max(0, min(start_idx, conv_len))
+            end_idx = max(start_idx, min(end_idx, conv_len))
+
+            context_messages = session.conversation[start_idx:end_idx]
+
+            return {
+                'result': target_vector,
+                'session': session_id,
+                'hit_type': 'span',
+                'span': span,
+                'references': span.get("references", []),
+                'context_start': start_idx,
+                'context_end': end_idx,
+                'context_messages': context_messages,
+                'summary': session.summary,
+            }
+
+    # --- Message hit: ±context_window ---
+    msg_index = target_vector.get('message_index', 0)
+    if 0 <= msg_index < conv_len and session.conversation[msg_index].get("deleted"):
         return None
 
-    # Get context window
     start_idx = max(0, msg_index - context_window)
-    end_idx = min(len(session.conversation), msg_index + context_window + 1)
+    end_idx = min(conv_len, msg_index + context_window + 1)
 
     context_messages = session.conversation[start_idx:end_idx]
 
     return {
         'result': target_vector,
         'session': session_id,
+        'hit_type': 'message',
         'message_index': msg_index,
         'context_start': start_idx,
         'context_end': end_idx,
         'context_messages': context_messages,
-        'summary': session.summary
+        'summary': session.summary,
     }

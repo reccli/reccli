@@ -1,9 +1,8 @@
 """
 Embedding providers for RecCli Phase 5
 
-Supports multiple embedding backends:
-- OpenAI text-embedding-3-small (default)
-- Local sentence-transformers (optional)
+Supports OpenAI text-embedding-3-small for dense embeddings.
+Falls back to BM25-only search when no API key is configured.
 
 All providers return L2-normalized vectors for consistent cosine similarity.
 """
@@ -136,92 +135,24 @@ class OpenAIEmbeddings(EmbeddingProvider):
         return "openai"
 
 
-class LocalEmbeddings(EmbeddingProvider):
-    """
-    Local sentence-transformers embeddings (optional)
-
-    Models (recommended order):
-    - nomic-ai/nomic-embed-text-v1.5: 768-dim, strong quality, Matryoshka support
-    - BAAI/bge-base-en-v1.5: 768-dim, strong quality
-    - BAAI/bge-small-en-v1.5: 384-dim, good quality, fast
-
-    Pros: Free, offline, no API keys needed
-    Cons: First load downloads model (~500MB), slower than API on large batches
-    """
-
-    def __init__(self, model: str = "nomic-ai/nomic-embed-text-v1.5"):
-        """
-        Initialize local embeddings
-
-        Args:
-            model: HuggingFace model name
-        """
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            raise ImportError(
-                "sentence-transformers not installed. Install with: pip install sentence-transformers"
-            )
-
-        print(f"Loading local embedding model: {model}...")
-        self.model = SentenceTransformer(model, trust_remote_code=True)
-        self._model_name = model
-        self._dimensions = self.model.get_sentence_embedding_dimension()
-        print(f"✓ Model loaded ({self._dimensions} dimensions)")
-
-    def embed(self, text: str) -> List[float]:
-        """Embed a single text"""
-        embedding = self.model.encode(text, convert_to_numpy=True)
-        return embedding.tolist()
-
-    def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
-        """
-        Embed multiple texts in batch
-
-        Args:
-            texts: List of texts to embed
-            batch_size: Batch size for inference
-
-        Returns:
-            List of embeddings
-        """
-        if not texts:
-            return []
-
-        embeddings = self.model.encode(
-            texts,
-            batch_size=batch_size,
-            show_progress_bar=len(texts) > 100,
-            convert_to_numpy=True
-        )
-
-        return embeddings.tolist()
-
-    @property
-    def dimensions(self) -> int:
-        return self._dimensions
-
-    @property
-    def model_name(self) -> str:
-        return self._model_name
-
-    @property
-    def provider_name(self) -> str:
-        return "local"
-
-
 def get_embedding_provider(config: Optional[Dict] = None) -> EmbeddingProvider:
     """
-    Factory function for embedding providers
+    Factory function for embedding providers.
+
+    Returns OpenAI embeddings if an API key is available, otherwise raises
+    so callers can fall back to BM25-only search.
 
     Args:
         config: Configuration dict with keys:
-            - provider: 'openai' (default) or 'local'
+            - provider: 'openai' (default)
             - model: Model name
             - api_key: API key (for OpenAI)
 
     Returns:
         EmbeddingProvider instance
+
+    Raises:
+        RuntimeError: If no OpenAI API key is available.
 
     Examples:
         # Use default (OpenAI text-embedding-3-small)
@@ -232,48 +163,27 @@ def get_embedding_provider(config: Optional[Dict] = None) -> EmbeddingProvider:
             'provider': 'openai',
             'model': 'text-embedding-3-large'
         })
-
-        # Use local embeddings
-        provider = get_embedding_provider({
-            'provider': 'local',
-            'model': 'nomic-ai/nomic-embed-text-v1.5'
-        })
     """
     if config is None:
         config = {}
 
-    provider = config.get('provider', 'openai')
-
-    if provider == 'openai':
-        # Fall back to local embeddings if no API key available
-        api_key = config.get('api_key')
-        if not api_key:
-            try:
-                from ..runtime.config import Config
-                api_key = Config().get_api_key('openai')
-            except Exception:
-                pass
-        if api_key:
-            return OpenAIEmbeddings(
-                api_key=api_key,
-                model=config.get('model', 'text-embedding-3-small')
-            )
-        # No API key — fall back to local
+    api_key = config.get('api_key')
+    if not api_key:
         try:
-            return LocalEmbeddings(
-                model=config.get('model', 'nomic-ai/nomic-embed-text-v1.5')
-            )
-        except RuntimeError:
-            raise RuntimeError(
-                "No embedding provider available. Either set an OpenAI API key "
-                "or install sentence-transformers: pip install sentence-transformers"
-            )
-    elif provider == 'local':
-        return LocalEmbeddings(
-            model=config.get('model', 'nomic-ai/nomic-embed-text-v1.5')
+            from ..runtime.config import Config
+            api_key = Config().get_api_key('openai')
+        except Exception:
+            pass
+    if api_key:
+        return OpenAIEmbeddings(
+            api_key=api_key,
+            model=config.get('model', 'text-embedding-3-small')
         )
-    else:
-        raise ValueError(f"Unknown embedding provider: {provider}")
+
+    raise RuntimeError(
+        "No OpenAI API key configured. Dense search is unavailable; "
+        "search will use BM25 keyword matching only."
+    )
 
 
 def normalize_vector(vector: List[float]) -> List[float]:

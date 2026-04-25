@@ -25,7 +25,6 @@ docs/
   specs/          DEVSESSION_FORMAT.md, DEVPROJECT_FORMAT.md, MESSAGE_RANGE_SPEC.md
   architecture/   ARCHITECTURE.md, CONTEXT_LOADING.md, RECCLI_CLI_UI.md
   product/        RECCLI_ONE_PAGER.md, PROJECT_ONBOARDING.md
-apps/web/         Legacy Next.js prototype (not active)
 archive/          Earlier implementations (v2 recorder, old src/)
 ```
 
@@ -57,6 +56,13 @@ The MCP server (`mcp_server.py`) exposes these tools to Claude Code:
 | `expand_search_result` | Expand a search result to show full conversation context |
 | `save_session_notes` | Save structured session summary — merges WAL conversation + summary |
 | `summarize_previous_session` | Retroactively summarize an unsummarized previous session |
+| `toggle_auto_reason` | Enable/disable auto-reason scaffold injection (off by default, for when agent is stuck) |
+| `toggle_mmc` | Enable/disable MMC parallel reasoning — 3 agents with varied framings + consensus extraction |
+| `toggle_expanded_search` | Enable/disable synonym-expanded multi-query search |
+| `list_sessions` | Browse all recorded sessions — message counts, summary status, overview snippets |
+| `configure` | View or change RecCli settings (auto_reason, mmc, session_signal, expanded_search) |
+| `evaluate_continuation` | Accept goal + open_items from agent (not WAL), filter against goal, return continuation brief for autonomous mode |
+| `list_issues` | Surface accumulated issue flags from hooks/tools — diagnose silent failures |
 
 ## Hooks (Claude Code integration)
 
@@ -65,8 +71,8 @@ Hooks in `~/.claude/settings.json` fire automatically on Claude Code events:
 | Hook | What it does |
 |------|-------------|
 | `SessionStart` | Creates WAL, injects registered project list into context |
-| `UserPromptSubmit` | Appends user prompt to WAL, checks pre-compaction threshold (~400K tokens) |
-| `Stop` | Appends assistant response to WAL |
+| `UserPromptSubmit` | Appends user prompt to WAL, checks pre-compaction threshold, injects auto-reason scaffold |
+| `Stop` | Appends assistant response to WAL, extracts session-signal forward pointer |
 | `PostToolUse` | Appends tool call + result to WAL |
 | `PostCompact` | Flushes WAL to .devsession, validates .devproject, re-injects project context |
 | `SessionEnd` | Finalizes WAL → .devsession, merges with existing summary, spawns background embed+summarize |
@@ -80,9 +86,26 @@ Hooks in `~/.claude/settings.json` fire automatically on Claude Code events:
 5. **User wraps up** → Claude proactively calls `save_session_notes` (SESSION RULE in start prompt)
 6. **`/exit`** → WAL merged into .devsession, background: summarize + embed + index
 
+### Auto-Reason + MMC (hooks/auto_reason.py)
+
+Detects user intent (debug/planning) from prompt text via regex heuristics at `UserPromptSubmit`. Two modes:
+
+- **Auto-Reason** (`auto_reason` config, off by default): Injects a single-agent diverge→converge→validate scaffold. Fallback for when the agent is stuck.
+- **MMC** (`mmc` config, off by default): Supersedes auto-reason. Injects instructions for 3 parallel agents, each running the full reasoning scaffold with a different analytical lens (debug: recent changes / data flow / assumptions; planning: simplicity / robustness / performance). Main agent then extracts consensus from their independent conclusions. Self-consistency sampling applied to coding tasks.
+
+### Session-Signal (forward pointers) + Autonomous Continuation
+
+Injects a SESSION RULE asking Claude to append `<!--session-signal: goal=<session goal> | resolved=... | open=...-->` to each response. The `goal` field anchors the signal chain to the user's current intent — open items must be in service of the goal, preventing carry-forward of unrelated items from previous sessions. The `Stop` hook extracts this tag, strips it from stored content, and saves the parsed signal (including goal) as a `session_signal` field on the WAL record. Gated by `session_signal` config (on by default).
+
+The `evaluate_continuation` MCP tool reads the latest signal, filters open items against the goal via keyword overlap, and returns a continuation brief. A SESSION RULE (AUTONOMOUS CONTINUATION) tells the agent to call this tool after completing a reasoning chain with open items. If it returns `action=continue`, the agent self-directs to the next item. If `action=wait` or `action=done`, the agent stops and lets the user direct.
+
+### Expanded Search (retrieval/query_expansion.py)
+
+Expands queries with synonyms from a software engineering vocabulary, runs multiple BM25 passes, and fuses results. Dense search runs once (embeddings already capture synonymy). Gated by `expanded_search` config (off by default).
+
 ### Embedding providers
 
-Cascading fallback: OpenAI text-embedding-3-small (1536D) → local nomic-embed-text-v1.5 (768D) → BM25 only.
+OpenAI text-embedding-3-small (1536D) when API key is configured, otherwise BM25-only search.
 Embeddings stored in sidecar `.npy` files (binary, memory-mapped) not inline JSON.
 
 ### API key resolution

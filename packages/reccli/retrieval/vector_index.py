@@ -286,6 +286,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
                 'role': msg.get('role', 'unknown'),
                 'kind': msg_type,
                 'content_preview': msg['content'][:200] if len(msg['content']) > 200 else msg['content'],
+                'tool_response_preview': msg['tool_response'][:2000] if msg.get('tool_response') else None,
                 'text_hash': msg.get('text_hash', compute_text_hash(msg['content'])),
 
                 # Metadata

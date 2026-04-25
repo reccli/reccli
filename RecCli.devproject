@@ -2,8 +2,8 @@
   "format": "devproject",
   "version": "2.1.0",
   "project_root": "/Users/will/coding-projects/reccli",
-  "updated_at": "2026-03-27T04:27:42Z",
-  "last_updated_session": null,
+  "updated_at": "2026-04-25T22:33:41Z",
+  "last_updated_session": "session_20260425_153331",
   "project": {
     "name": "reccli",
     "description": "reccli is a temporal memory engine for AI coding agents implementing a tri-layer memory system: .devproject (project feature map), .devsession summary (compacted working memory), and .devsession full conversation (source of truth). It runs as an MCP server and Claude Code hook integration, enabling agents to accumulate structured memory across sessions through hybrid search, LLM summarization, and temporal-semantic linking between memory layers.",
@@ -175,10 +175,6 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "apps/web/api_routes_reference.js",
-        "apps/web/pages/api/create-checkout.ts",
-        "apps/web/pages/api/validate-license.ts",
-        "apps/web/pages/api/webhook.ts",
         "packages/reccli/backend/server.py",
         "packages/reccli/retrieval/embeddings.py",
         "packages/reccli/retrieval/memory_middleware.py",
@@ -772,12 +768,7 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "apps/web/next-env.d.ts",
-        "apps/web/next.config.js",
-        "apps/web/pages/_app.js",
-        "apps/web/pages/index.tsx",
-        "apps/web/postcss.config.js",
-        "apps/web/tailwind.config.js"
+        "packages/reccli/ui/src/index.tsx"
       ],
       "file_boundaries": [
         "apps/web/**",
@@ -962,6 +953,1817 @@
     }
   ],
   "session_index": [],
-  "proposals": [],
+  "proposals": [
+    {
+      "proposal_id": "projupd_20260331050918",
+      "status": "pending",
+      "created_at": "2026-03-31T05:09:18Z",
+      "source_session_id": "session_20260330_220918",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/handle_event.py — added Path import"
+            ],
+            "session_ids_add": [
+              "session_20260330_220918"
+            ],
+            "last_updated_session": "session_20260330_220918",
+            "updated_at": "2026-03-31T05:09:18Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py — _ensure_wal(), _recover_orphan_wals(), lazy WAL creation for all record_* functions"
+            ],
+            "session_ids_add": [
+              "session_20260330_220918"
+            ],
+            "last_updated_session": "session_20260330_220918",
+            "updated_at": "2026-03-31T05:09:18Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/runtime/cli.py — cmd_setup command for automated MCP + hooks configuration"
+            ],
+            "session_ids_add": [
+              "session_20260330_220918"
+            ],
+            "last_updated_session": "session_20260330_220918",
+            "updated_at": "2026-03-31T05:09:18Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260330_220918",
+            "path": "devsession/03302026_2209.devsession",
+            "started_at": "2026-03-30T22:09:18.158724",
+            "ended_at": "2026-03-30T22:09:18.209586",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405164410",
+      "status": "pending",
+      "created_at": "2026-04-05T16:44:10Z",
+      "source_session_id": "session_20260405_094409",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_094409"
+            ],
+            "last_updated_session": "session_20260405_094409",
+            "updated_at": "2026-04-05T16:44:10Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_094409"
+            ],
+            "last_updated_session": "session_20260405_094409",
+            "updated_at": "2026-04-05T16:44:10Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_094409"
+            ],
+            "last_updated_session": "session_20260405_094409",
+            "updated_at": "2026-04-05T16:44:10Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_094409",
+            "path": "devsession/04052026_0944.devsession",
+            "started_at": "2026-04-05T09:44:09.669917",
+            "ended_at": "2026-04-05T09:44:09.805770",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405172154",
+      "status": "pending",
+      "created_at": "2026-04-05T17:21:54Z",
+      "source_session_id": "session_20260405_102153",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_102153"
+            ],
+            "last_updated_session": "session_20260405_102153",
+            "updated_at": "2026-04-05T17:21:54Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_102153"
+            ],
+            "last_updated_session": "session_20260405_102153",
+            "updated_at": "2026-04-05T17:21:54Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_102153",
+            "path": "devsession/04052026_1021.devsession",
+            "started_at": "2026-04-05T10:21:53.726681",
+            "ended_at": "2026-04-05T10:21:53.776078",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405173409",
+      "status": "pending",
+      "created_at": "2026-04-05T17:34:09Z",
+      "source_session_id": "session_20260405_103409",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_103409"
+            ],
+            "last_updated_session": "session_20260405_103409",
+            "updated_at": "2026-04-05T17:34:09Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_103409"
+            ],
+            "last_updated_session": "session_20260405_103409",
+            "updated_at": "2026-04-05T17:34:09Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_103409"
+            ],
+            "last_updated_session": "session_20260405_103409",
+            "updated_at": "2026-04-05T17:34:09Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_103409",
+            "path": "devsession/04052026_1034.devsession",
+            "started_at": "2026-04-05T10:34:09.313401",
+            "ended_at": "2026-04-05T10:34:09.313970",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405184651",
+      "status": "pending",
+      "created_at": "2026-04-05T18:46:51Z",
+      "source_session_id": "session_20260405_114651",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devsession_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVSESSION_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260405_114651"
+            ],
+            "last_updated_session": "session_20260405_114651",
+            "updated_at": "2026-04-05T18:46:51Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-05T18:46:51Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_114651"
+            ],
+            "last_updated_session": "session_20260405_114651",
+            "updated_at": "2026-04-05T18:46:51Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "session_ids_add": [
+              "session_20260405_114651"
+            ],
+            "last_updated_session": "session_20260405_114651",
+            "updated_at": "2026-04-05T18:46:51Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_114651"
+            ],
+            "last_updated_session": "session_20260405_114651",
+            "updated_at": "2026-04-05T18:46:51Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_114651"
+            ],
+            "last_updated_session": "session_20260405_114651",
+            "updated_at": "2026-04-05T18:46:51Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_114651",
+            "path": "devsession/04052026_1146.devsession",
+            "started_at": "2026-04-05T11:46:51.072234",
+            "ended_at": "2026-04-05T11:46:51.125390",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_docs_specs_devsession_format_md"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405190621",
+      "status": "pending",
+      "created_at": "2026-04-05T19:06:21Z",
+      "source_session_id": "session_20260405_120620",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_120620"
+            ],
+            "last_updated_session": "session_20260405_120620",
+            "updated_at": "2026-04-05T19:06:21Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devsession_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVSESSION_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260405_120620"
+            ],
+            "last_updated_session": "session_20260405_120620",
+            "updated_at": "2026-04-05T19:06:21Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-05T19:06:21Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_120620",
+            "path": "devsession/04052026_1206.devsession",
+            "started_at": "2026-04-05T12:06:20.971080",
+            "ended_at": "2026-04-05T12:06:20.974362",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_docs_specs_devsession_format_md"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405191917",
+      "status": "pending",
+      "created_at": "2026-04-05T19:19:17Z",
+      "source_session_id": "session_20260405_121916",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_121916"
+            ],
+            "last_updated_session": "session_20260405_121916",
+            "updated_at": "2026-04-05T19:19:17Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_121916",
+            "path": "devsession/04052026_1219.devsession",
+            "started_at": "2026-04-05T12:19:16.326633",
+            "ended_at": "2026-04-05T12:19:16.390952",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405192741",
+      "status": "pending",
+      "created_at": "2026-04-05T19:27:41Z",
+      "source_session_id": "session_20260405_122740",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_testing_bm25_message_range_fix_end_to_en",
+            "feature_version": 1,
+            "title": "Testing BM25 message range fix end-to-end in functional",
+            "description": "Testing BM25 message range fix end-to-end in functional operation of save_session_notes",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260405_122740"
+            ],
+            "last_updated_session": "session_20260405_122740",
+            "updated_at": "2026-04-05T19:27:41Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-05T19:27:41Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_122740",
+            "path": "devsession/04052026_1227.devsession",
+            "started_at": "2026-04-05T12:27:40.723531",
+            "ended_at": "2026-04-05T12:27:40.732256",
+            "feature_ids": [
+              "feat_testing_bm25_message_range_fix_end_to_en"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260405201434",
+      "status": "pending",
+      "created_at": "2026-04-05T20:14:34Z",
+      "source_session_id": "session_20260405_131433",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "session_ids_add": [
+              "session_20260405_131433"
+            ],
+            "last_updated_session": "session_20260405_131433",
+            "updated_at": "2026-04-05T20:14:34Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/session/devsession.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_131433"
+            ],
+            "last_updated_session": "session_20260405_131433",
+            "updated_at": "2026-04-05T20:14:34Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_requirements_txt",
+            "feature_version": 1,
+            "title": "Modified requirements.txt",
+            "description": "Modified requirements.txt",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "requirements.txt"
+            ],
+            "file_boundaries": [
+              "requirements.txt"
+            ],
+            "session_ids": [
+              "session_20260405_131433"
+            ],
+            "last_updated_session": "session_20260405_131433",
+            "updated_at": "2026-04-05T20:14:34Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-05T20:14:34Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_md",
+            "feature_version": 1,
+            "title": "Modified CLAUDE.md",
+            "description": "Modified CLAUDE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "CLAUDE.md"
+            ],
+            "file_boundaries": [
+              "CLAUDE.md"
+            ],
+            "session_ids": [
+              "session_20260405_131433"
+            ],
+            "last_updated_session": "session_20260405_131433",
+            "updated_at": "2026-04-05T20:14:34Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-05T20:14:34Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_131433",
+            "path": "devsession/04052026_1314.devsession",
+            "started_at": "2026-04-05T13:14:33.674256",
+            "ended_at": "2026-04-05T13:14:33.742431",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_claude_md",
+              "feat_requirements_txt"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260406022136",
+      "status": "pending",
+      "created_at": "2026-04-06T02:21:36Z",
+      "source_session_id": "session_20260405_192134",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/auto_reason.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/query_expansion.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/handle_event.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/context_injector.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/runtime/config.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/session/devsession.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_auto_reason.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_requirements_txt",
+            "feature_version": 1,
+            "title": "Modified requirements.txt",
+            "description": "Modified requirements.txt",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "requirements.txt"
+            ],
+            "file_boundaries": [
+              "requirements.txt"
+            ],
+            "session_ids": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T02:21:36Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_md",
+            "feature_version": 1,
+            "title": "Modified CLAUDE.md",
+            "description": "Modified CLAUDE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "CLAUDE.md"
+            ],
+            "file_boundaries": [
+              "CLAUDE.md"
+            ],
+            "session_ids": [
+              "session_20260405_192134"
+            ],
+            "last_updated_session": "session_20260405_192134",
+            "updated_at": "2026-04-06T02:21:36Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T02:21:36Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_192134",
+            "path": "devsession/04052026_1921.devsession",
+            "started_at": "2026-04-05T19:21:34.857428",
+            "ended_at": "2026-04-05T19:21:35.167990",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_claude_md",
+              "feat_requirements_txt"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260406031515",
+      "status": "pending",
+      "created_at": "2026-04-06T03:15:15Z",
+      "source_session_id": "session_20260405_201514",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/auto_reason.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/handle_event.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/context_injector.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/query_expansion.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/runtime/config.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/session/devsession.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_auto_reason.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_requirements_txt",
+            "feature_version": 1,
+            "title": "Modified requirements.txt",
+            "description": "Modified requirements.txt",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "requirements.txt"
+            ],
+            "file_boundaries": [
+              "requirements.txt"
+            ],
+            "session_ids": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T03:15:15Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_md",
+            "feature_version": 1,
+            "title": "Modified CLAUDE.md",
+            "description": "Modified CLAUDE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "CLAUDE.md"
+            ],
+            "file_boundaries": [
+              "CLAUDE.md"
+            ],
+            "session_ids": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T03:15:15Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devsession_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVSESSION_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260405_201514"
+            ],
+            "last_updated_session": "session_20260405_201514",
+            "updated_at": "2026-04-06T03:15:15Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T03:15:15Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_201514",
+            "path": "devsession/04052026_2015.devsession",
+            "started_at": "2026-04-05T20:15:14.260805",
+            "ended_at": "2026-04-05T20:15:14.612186",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_claude_md",
+              "feat_docs_specs_devsession_format_md",
+              "feat_requirements_txt"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260406040259",
+      "status": "pending",
+      "created_at": "2026-04-06T04:02:59Z",
+      "source_session_id": "session_20260405_210258",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_210258"
+            ],
+            "last_updated_session": "session_20260405_210258",
+            "updated_at": "2026-04-06T04:02:59Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/context_injector.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_210258"
+            ],
+            "last_updated_session": "session_20260405_210258",
+            "updated_at": "2026-04-06T04:02:59Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_210258"
+            ],
+            "last_updated_session": "session_20260405_210258",
+            "updated_at": "2026-04-06T04:02:59Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devsession_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVSESSION_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260405_210258"
+            ],
+            "last_updated_session": "session_20260405_210258",
+            "updated_at": "2026-04-06T04:02:59Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T04:02:59Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_md",
+            "feature_version": 1,
+            "title": "Modified CLAUDE.md",
+            "description": "Modified CLAUDE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "CLAUDE.md"
+            ],
+            "file_boundaries": [
+              "CLAUDE.md"
+            ],
+            "session_ids": [
+              "session_20260405_210258"
+            ],
+            "last_updated_session": "session_20260405_210258",
+            "updated_at": "2026-04-06T04:02:59Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T04:02:59Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_210258",
+            "path": "devsession/04052026_2102.devsession",
+            "started_at": "2026-04-05T21:02:58.956470",
+            "ended_at": "2026-04-05T21:02:59.048379",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_claude_md",
+              "feat_docs_specs_devsession_format_md"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260406051631",
+      "status": "pending",
+      "created_at": "2026-04-06T05:16:31Z",
+      "source_session_id": "session_20260405_221630",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_221630"
+            ],
+            "last_updated_session": "session_20260405_221630",
+            "updated_at": "2026-04-06T05:16:31Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/handle_event.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_221630"
+            ],
+            "last_updated_session": "session_20260405_221630",
+            "updated_at": "2026-04-06T05:16:31Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_221630"
+            ],
+            "last_updated_session": "session_20260405_221630",
+            "updated_at": "2026-04-06T05:16:31Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_auto_reason.py"
+            ],
+            "session_ids_add": [
+              "session_20260405_221630"
+            ],
+            "last_updated_session": "session_20260405_221630",
+            "updated_at": "2026-04-06T05:16:31Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_md",
+            "feature_version": 1,
+            "title": "Modified CLAUDE.md",
+            "description": "Modified CLAUDE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "CLAUDE.md"
+            ],
+            "file_boundaries": [
+              "CLAUDE.md"
+            ],
+            "session_ids": [
+              "session_20260405_221630"
+            ],
+            "last_updated_session": "session_20260405_221630",
+            "updated_at": "2026-04-06T05:16:31Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-06T05:16:31Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260405_221630",
+            "path": "devsession/04052026_2216.devsession",
+            "started_at": "2026-04-05T22:16:30.799298",
+            "ended_at": "2026-04-05T22:16:30.821662",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_claude_md"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260418032510",
+      "status": "pending",
+      "created_at": "2026-04-18T03:25:10Z",
+      "source_session_id": "session_20260417_202509",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/context_injector.py"
+            ],
+            "session_ids_add": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/runtime/config.py"
+            ],
+            "session_ids_add": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z"
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_plugin_plugin_json",
+            "feature_version": 1,
+            "title": "Modified .claude-plugin/plugin.json",
+            "description": "Modified .claude-plugin/plugin.json",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              ".claude-plugin/plugin.json"
+            ],
+            "file_boundaries": [
+              ".claude-plugin/**"
+            ],
+            "session_ids": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T03:25:10Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_hooks_hooks_json",
+            "feature_version": 1,
+            "title": "Modified hooks/hooks.json",
+            "description": "Modified hooks/hooks.json",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "hooks/hooks.json"
+            ],
+            "file_boundaries": [
+              "hooks/**"
+            ],
+            "session_ids": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T03:25:10Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_claude_md",
+            "feature_version": 1,
+            "title": "Modified CLAUDE.md",
+            "description": "Modified CLAUDE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "CLAUDE.md"
+            ],
+            "file_boundaries": [
+              "CLAUDE.md"
+            ],
+            "session_ids": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T03:25:10Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_reccli_config_json",
+            "feature_version": 1,
+            "title": "Modified ~/reccli/config.json",
+            "description": "Modified ~/reccli/config.json",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "~/reccli/config.json"
+            ],
+            "file_boundaries": [
+              "~/reccli/**"
+            ],
+            "session_ids": [
+              "session_20260417_202509"
+            ],
+            "last_updated_session": "session_20260417_202509",
+            "updated_at": "2026-04-18T03:25:10Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T03:25:10Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260417_202509",
+            "path": "devsession/04172026_2025.devsession",
+            "started_at": "2026-04-17T20:25:09.810563",
+            "ended_at": "2026-04-17T20:25:09.838414",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_claude_md",
+              "feat_claude_plugin_plugin_json",
+              "feat_hooks_hooks_json",
+              "feat_reccli_config_json"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260418171325",
+      "status": "pending",
+      "created_at": "2026-04-18T17:13:25Z",
+      "source_session_id": "session_20260418_101324",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_product_reccli_deep_dive_md",
+            "feature_version": 1,
+            "title": "Modified docs/product/RECCLI_DEEP_DIVE.md",
+            "description": "Modified docs/product/RECCLI_DEEP_DIVE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/product/RECCLI_DEEP_DIVE.md"
+            ],
+            "file_boundaries": [
+              "docs/product/**"
+            ],
+            "session_ids": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T17:13:25Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devsession_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "description": "Modified docs/specs/DEVSESSION_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVSESSION_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T17:13:25Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_devproject_format_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/DEVPROJECT_FORMAT.md",
+            "description": "Modified docs/specs/DEVPROJECT_FORMAT.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/DEVPROJECT_FORMAT.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T17:13:25Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_docs_specs_mcp_tool_surface_md",
+            "feature_version": 1,
+            "title": "Modified docs/specs/MCP_TOOL_SURFACE.md",
+            "description": "Modified docs/specs/MCP_TOOL_SURFACE.md",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/specs/MCP_TOOL_SURFACE.md"
+            ],
+            "file_boundaries": [
+              "docs/specs/**"
+            ],
+            "session_ids": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T17:13:25Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/mcp_server.py"
+            ],
+            "session_ids_add": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py"
+            ],
+            "session_ids_add": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/auto_reason.py"
+            ],
+            "session_ids_add": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_llm_summarization_session_compaction",
+          "changes": {
+            "session_ids_add": [
+              "session_20260418_101324"
+            ],
+            "last_updated_session": "session_20260418_101324",
+            "updated_at": "2026-04-18T17:13:25Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260418_101324",
+            "path": "devsession/04182026_1013.devsession",
+            "started_at": "2026-04-18T10:13:24.398886",
+            "ended_at": "2026-04-18T10:13:24.728490",
+            "feature_ids": [
+              "feat_api_routes",
+              "feat_docs_product_reccli_deep_dive_md",
+              "feat_docs_specs_devproject_format_md",
+              "feat_docs_specs_devsession_format_md",
+              "feat_docs_specs_mcp_tool_surface_md",
+              "feat_llm_summarization_session_compaction"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260418202509",
+      "status": "pending",
+      "created_at": "2026-04-18T20:25:09Z",
+      "source_session_id": "session_20260418_132508",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_consolidated_roadmap_md_items_into_sessi",
+            "feature_version": 1,
+            "title": "Consolidated ROADMAP.md items into session next_steps — the",
+            "description": "Consolidated ROADMAP.md items into session next_steps — the memory engine is the authoritative todo list; flat markdown was redundant. New items promoted from roadmap: merge_sessions, export_session, diff_summaries, delta-op fuzz tests, embedding migration tool, continuation embedding matching.",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260418_132508"
+            ],
+            "last_updated_session": "session_20260418_132508",
+            "updated_at": "2026-04-18T20:25:09Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-18T20:25:09Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260418_132508",
+            "path": "devsession/04182026_1325.devsession",
+            "started_at": "2026-04-18T13:25:08.264784",
+            "ended_at": "2026-04-18T13:25:08.381950",
+            "feature_ids": [
+              "feat_consolidated_roadmap_md_items_into_sessi"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260425222120",
+      "status": "pending",
+      "created_at": "2026-04-25T22:21:20Z",
+      "source_session_id": "session_20260425_152119",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_verified_that_reccli_mcp_is_active_in_co",
+            "feature_version": 1,
+            "title": "Verified that RecCli MCP is active in Codex",
+            "description": "Verified that RecCli MCP is active in Codex and reachable from the current session. Confirmed the Codex MCP config points at the local reccli checkout and venv.",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260425_152119"
+            ],
+            "last_updated_session": "session_20260425_152119",
+            "updated_at": "2026-04-25T22:21:20Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-25T22:21:20Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_152119",
+            "path": "devsession/04252026_1521.devsession",
+            "started_at": "2026-04-25T15:21:19.646162",
+            "ended_at": "2026-04-25T15:21:19.716419",
+            "feature_ids": [
+              "feat_verified_that_reccli_mcp_is_active_in_co"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260425222841",
+      "status": "pending",
+      "created_at": "2026-04-25T22:28:41Z",
+      "source_session_id": "session_20260425_152834",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/runtime/cli.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_152834"
+            ],
+            "last_updated_session": "session_20260425_152834",
+            "updated_at": "2026-04-25T22:28:41Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_152834",
+            "path": "devsession/04252026_1528.devsession",
+            "started_at": "2026-04-25T15:28:34.664638",
+            "ended_at": "2026-04-25T15:28:36.491965",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260425223341",
+      "status": "pending",
+      "created_at": "2026-04-25T22:33:41Z",
+      "source_session_id": "session_20260425_153331",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "README.md",
+              "packages/reccli/runtime/cli.py",
+              "pyproject.toml",
+              "requirements.txt"
+            ],
+            "session_ids_add": [
+              "session_20260425_153331"
+            ],
+            "last_updated_session": "session_20260425_153331",
+            "updated_at": "2026-04-25T22:33:41Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_153331",
+            "path": "devsession/04252026_1533.devsession",
+            "started_at": "2026-04-25T15:33:31.500635",
+            "ended_at": "2026-04-25T15:33:33.009128",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    }
+  ],
   "update_history": []
 }

@@ -12,12 +12,29 @@ with temporal-semantic links between the layers so an agent can recover exact pr
 
 ## MCP Server
 
-reccli runs as an MCP server, giving any compatible agent (Claude Code, Cursor, Windsurf) persistent project memory.
+reccli runs as an MCP server, giving compatible coding agents persistent project memory.
+
+### Codex / ChatGPT
 
 ```bash
+git clone https://github.com/reccli/reccli.git
+cd reccli
 pip install -r requirements.txt
-claude mcp add --scope user reccli -- python -m reccli.mcp_server
+python3 -m reccli.runtime.cli setup --codex
 ```
+
+This configures the RecCli MCP server in `~/.codex/config.toml` and installs Codex-visible startup instructions in `~/AGENTS.md` so new Codex sessions can ask which registered project to load.
+
+### Claude Code
+
+```bash
+git clone https://github.com/reccli/reccli.git
+cd reccli
+pip install -r requirements.txt
+python3 -m reccli.runtime.cli setup
+```
+
+Claude Code setup configures both the MCP server and lifecycle hooks for session start, prompt recording, tool recording, compaction, and session end.
 
 **Tools exposed:**
 

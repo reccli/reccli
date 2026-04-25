@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from . import session_recorder
+from .session_recorder import _log_issue
 
 
 def main():
@@ -43,7 +44,7 @@ def main():
             if context:
                 print(context)
         except Exception:
-            pass
+            _log_issue("hooks/SessionStart", "Failed to inject session start context")
 
     elif hook_name == "UserPromptSubmit":
         prompt = event.get("prompt", "")
@@ -56,7 +57,28 @@ def main():
             if reminder:
                 print(reminder)
         except Exception:
-            pass
+            _log_issue("hooks/UserPromptSubmit", "Failed pre-compaction threshold check")
+
+        # Auto-reason / MMC injection (gated by config)
+        if prompt:
+            try:
+                from ..runtime.config import Config
+                config = Config()
+                mmc_enabled = config.data.get("mmc", False)
+                auto_reason_enabled = config.data.get("auto_reason", False)
+
+                if mmc_enabled:
+                    from .auto_reason import get_mmc_protocol
+                    protocol = get_mmc_protocol(prompt)
+                    if protocol:
+                        print(protocol)
+                elif auto_reason_enabled:
+                    from .auto_reason import get_reasoning_scaffold
+                    scaffold = get_reasoning_scaffold(prompt)
+                    if scaffold:
+                        print(scaffold)
+            except Exception:
+                _log_issue("hooks/UserPromptSubmit", "Failed auto-reason/MMC injection")
 
     elif hook_name == "Stop":
         message = event.get("last_assistant_message", "")
@@ -85,14 +107,14 @@ def main():
                     if root:
                         session_recorder.set_active_project(session_id, root)
             except Exception:
-                pass
+                _log_issue("hooks/PostToolUse", "Failed to set active project breadcrumb")
 
     elif hook_name == "PostCompact":
         # 1. Flush WAL to .devsession and trigger background summarization
         try:
             session_recorder.compact_session(session_id, cwd)
         except Exception:
-            pass
+            _log_issue("hooks/PostCompact", "Failed to compact session")
 
         # 2. Validate .devproject file paths and detect new files (fast, no LLM)
         stale_note = ""
@@ -100,7 +122,7 @@ def main():
             from .context_injector import validate_and_note_staleness
             stale_note = validate_and_note_staleness(cwd) or ""
         except Exception:
-            pass
+            _log_issue("hooks/PostCompact", "Failed devproject staleness check")
 
         # 3. Re-inject .devproject context + staleness notes (stdout → Claude's context)
         try:
@@ -111,7 +133,7 @@ def main():
                     context += "\n" + stale_note
                 print(context)
         except Exception:
-            pass
+            _log_issue("hooks/PostCompact", "Failed post-compact context injection")
 
     elif hook_name == "SessionEnd":
         session_recorder.end_session(session_id, cwd)

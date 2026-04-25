@@ -808,7 +808,6 @@ class DevSession:
 
         Example:
             session.generate_embeddings()  # Use default OpenAI
-            session.generate_embeddings(LocalEmbeddings())  # Use local model
         """
         from ..retrieval.embeddings import get_embedding_provider
         from datetime import datetime

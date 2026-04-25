@@ -605,6 +605,155 @@ class DevSessionRegressionTests(unittest.TestCase):
             self.assertEqual(updated["session_index"][0]["session_id"], "session_001")
             self.assertEqual(updated["proposals"], [])
 
+    def test_devproject_filters_single_file_echo_descriptions(self):
+        """Drop one-file 'Modified X' candidates that produce filename-shaped features.
+
+        Mirrors the parasitic add_feature ops observed in real .devproject files
+        (e.g. feat_projectplan_md, feat_supabase_migrations_*_sql).
+        """
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            session_path = project_root / "sessions" / "session_low_signal.devsession"
+            session_path.parent.mkdir()
+
+            session = DevSession("session_low_signal")
+            session.metadata["project_root"] = str(project_root)
+            session.summary = create_summary_skeleton(model="test-model", session_hash="hash")
+            session.summary["code_changes"] = [
+                create_code_change_item(
+                    files=["projectplan.md"],
+                    description="Modified projectplan.md",
+                    change_type="feature",
+                    references=["msg_001"],
+                    message_range={"start": "msg_001", "end": "msg_001", "start_index": 0, "end_index": 1},
+                ),
+                create_code_change_item(
+                    files=["supabase/migrations/20260331_add_part_qa_tables.sql"],
+                    description="Modified supabase/migrations/20260331_add_part_qa_tables.sql",
+                    change_type="feature",
+                    references=["msg_002"],
+                    message_range={"start": "msg_002", "end": "msg_002", "start_index": 1, "end_index": 2},
+                ),
+                create_code_change_item(
+                    files=[".env.local"],
+                    description="Modified .env.local",
+                    change_type="feature",
+                    references=["msg_003"],
+                    message_range={"start": "msg_003", "end": "msg_003", "start_index": 2, "end_index": 3},
+                ),
+            ]
+
+            manager = DevProjectManager(project_root)
+            _, proposal = manager.generate_proposal_for_session(session, session_path)
+
+            if proposal is not None:
+                add_feature_ids = [op["feature"]["feature_id"] for op in proposal["diff"] if op["op"] == "add_feature"]
+                self.assertNotIn("feat_projectplan_md", add_feature_ids)
+                self.assertNotIn("feat_env_local", add_feature_ids)
+                for fid in add_feature_ids:
+                    self.assertNotIn("supabase_migrations", fid)
+
+    def test_devproject_apply_grouping_uses_domain_titles(self):
+        """Delegated grouping JSON produces domain-named features, not filename-shaped ones."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            session_path = project_root / "sessions" / "session_grouped.devsession"
+            session_path.parent.mkdir()
+
+            session = DevSession("session_grouped")
+            session.metadata["project_root"] = str(project_root)
+            session.summary = create_summary_skeleton(model="test-model", session_hash="hash")
+            session.summary["overview"] = "Added recommended-material classification system."
+            session.summary["code_changes"] = [
+                create_code_change_item(
+                    files=[
+                        "supabase/migrations/20260404_add_recommended_material.sql",
+                        "apps/web/lib/material-classifier.ts",
+                        "apps/web/admin/MaterialReview.tsx",
+                    ],
+                    description="Materials recommendation work",
+                    change_type="feature",
+                    references=["msg_001", "msg_005"],
+                    message_range={"start": "msg_001", "end": "msg_005", "start_index": 0, "end_index": 5},
+                )
+            ]
+
+            manager = DevProjectManager(project_root)
+            grouping = {
+                "candidates": [
+                    {
+                        "match_existing_feature_id": None,
+                        "title": "Materials Recommendation System",
+                        "description": "Recommended-material field with AI classification and admin review surface.",
+                        "files": [
+                            "supabase/migrations/20260404_add_recommended_material.sql",
+                            "apps/web/lib/material-classifier.ts",
+                            "apps/web/admin/MaterialReview.tsx",
+                        ],
+                    }
+                ],
+                "unassigned": ["projectplan.md"],
+            }
+
+            _, proposal = manager.apply_grouping_proposal(session, session_path, grouping)
+            self.assertIsNotNone(proposal)
+            add_ops = [op for op in proposal["diff"] if op["op"] == "add_feature"]
+            self.assertEqual(len(add_ops), 1)
+            feat = add_ops[0]["feature"]
+            self.assertEqual(feat["feature_id"], "feat_materials_recommendation_system")
+            self.assertEqual(feat["title"], "Materials Recommendation System")
+            self.assertNotIn("projectplan.md", feat["files_touched"])
+
+    def test_devproject_apply_grouping_attaches_to_existing_feature(self):
+        """When the grouping picks match_existing_feature_id, emit update_feature, not add_feature."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            manager = DevProjectManager(project_root)
+            document = manager.load_or_create()
+            document["features"] = [
+                {
+                    "feature_id": "feat_materials_recommendation_system",
+                    "feature_version": 2,
+                    "title": "Materials Recommendation System",
+                    "description": "Recommended material classification.",
+                    "status": "in-progress",
+                    "source": "manual",
+                    "files_touched": ["apps/web/lib/material-classifier.ts"],
+                    "file_boundaries": ["apps/web/lib/**"],
+                    "session_ids": ["session_old"],
+                    "last_updated_session": "session_old",
+                    "updated_at": "2026-04-01T00:00:00Z",
+                }
+            ]
+            manager.save(document)
+
+            session = DevSession("session_extend")
+            session.metadata["project_root"] = str(project_root)
+            session.summary = create_summary_skeleton(model="test-model", session_hash="hash")
+
+            grouping = {
+                "candidates": [
+                    {
+                        "match_existing_feature_id": "feat_materials_recommendation_system",
+                        "title": "",
+                        "description": "Added admin review surface for material classification.",
+                        "files": ["apps/web/admin/MaterialReview.tsx"],
+                    }
+                ],
+                "unassigned": [],
+            }
+            session_path = project_root / "sessions" / "session_extend.devsession"
+            session_path.parent.mkdir()
+
+            _, proposal = manager.apply_grouping_proposal(session, session_path, grouping)
+            self.assertIsNotNone(proposal)
+            op_types = {op["op"] for op in proposal["diff"]}
+            self.assertIn("update_feature", op_types)
+            self.assertNotIn("add_feature", op_types)
+
     def test_devproject_updates_existing_feature_by_file_overlap(self):
         with tempfile.TemporaryDirectory() as td:
             project_root = Path(td)

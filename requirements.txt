@@ -1,5 +1,8 @@
 # RecCli Python dependencies
 
+# Install this checkout so `python3 -m reccli...` works after a fresh clone.
+-e .
+
 # Core CLI + session system
 prompt_toolkit>=3.0.0
 tiktoken>=0.5.0
@@ -9,9 +12,6 @@ blake3>=0.4.0
 # Provider clients
 anthropic>=0.7.0
 openai>=1.0.0
-
-# Embeddings / local retrieval options
-sentence-transformers>=2.2.0
 
 # Structural code parsing for project initialization
 tree-sitter

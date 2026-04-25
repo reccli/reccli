@@ -634,14 +634,35 @@ class DevProjectManager:
             session.spans = ensure_summary_span_links(session.summary, getattr(session, "spans", []))
 
         summary = getattr(session, "summary", None) or {}
-        session_id = session.session_id
         candidates = self._extract_feature_candidates(session, summary)
+        return self._build_proposal_from_candidates(session, session_path, candidates, document)
+
+    def _build_proposal_from_candidates(
+        self,
+        session,
+        session_path: Path,
+        candidates: List[Dict[str, Any]],
+        document: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        if document is None:
+            document = self.load_or_create()
+        session_id = session.session_id
+        existing_features = document.get("features", [])
+        existing_ids = {f.get("feature_id") for f in existing_features if f.get("feature_id")}
 
         diff: List[Dict[str, Any]] = []
         linked_feature_ids: List[str] = []
 
         for candidate in candidates:
-            match = self._match_feature(document.get("features", []), candidate)
+            match = self._match_feature(existing_features, candidate)
+            # If the candidate carries an existing feature_id (e.g. from delegated grouping),
+            # honor it even when file overlap doesn't make the connection.
+            if match is None and candidate.get("feature_id") in existing_ids:
+                match = next(
+                    (f for f in existing_features if f.get("feature_id") == candidate["feature_id"]),
+                    None,
+                )
+
             if match is None:
                 diff.append({"op": "add_feature", "feature": candidate})
                 linked_feature_ids.append(candidate["feature_id"])
@@ -696,6 +717,168 @@ class DevProjectManager:
         document["last_updated_session"] = session_id
         self.save(document)
         return document, proposal
+
+    def session_has_semantic_content(self, summary: Optional[Dict[str, Any]]) -> bool:
+        """Whether a session summary is rich enough to benefit from delegated LLM grouping."""
+        if not summary:
+            return False
+        if not summary.get("code_changes"):
+            return False
+        overview = (summary.get("overview") or "").strip()
+        has_overview = len(overview) >= 30 and overview.lower() != "agent-reported session notes."
+        has_decisions = bool(summary.get("decisions"))
+        has_problems = bool(summary.get("problems_solved"))
+        return has_overview or has_decisions or has_problems
+
+    def build_grouping_prompt(self, session, session_path: Path) -> str:
+        """Return a prompt + JSON payload asking the agent to produce feature-grouping JSON.
+
+        Designed to be returned as an MCP tool result so the agent can produce
+        domain-grounded grouping in-conversation, then call propose_feature_grouping.
+        """
+        summary = getattr(session, "summary", None) or {}
+        document = self.load_or_create()
+        existing_features = document.get("features", [])
+
+        all_files = sorted({
+            self._normalize_file_path(p)
+            for change in (summary.get("code_changes") or [])
+            for p in (change.get("files") or [])
+            if isinstance(p, str) and p.strip()
+        })
+
+        def _decision_text(d):
+            if isinstance(d, dict):
+                return d.get("decision") or d.get("text") or ""
+            return str(d)
+
+        def _problem_text(p):
+            if isinstance(p, dict):
+                return p.get("problem") or p.get("text") or ""
+            return str(p)
+
+        existing_summary = [
+            {
+                "feature_id": f.get("feature_id"),
+                "title": f.get("title"),
+                "description": (f.get("description") or "")[:200],
+                "file_boundaries": f.get("file_boundaries", [])[:10],
+            }
+            for f in existing_features
+        ]
+
+        payload = {
+            "session_id": session.session_id,
+            "session_path": str(session_path),
+            "overview": summary.get("overview", ""),
+            "decisions": [t for t in (_decision_text(d) for d in (summary.get("decisions") or [])) if t],
+            "problems_solved": [t for t in (_problem_text(p) for p in (summary.get("problems_solved") or [])) if t],
+            "files_touched": all_files,
+            "existing_features": existing_summary,
+        }
+
+        instructions = (
+            "Group this session's work into domain-meaningful feature candidates for the project's "
+            "`.devproject` map, then call `propose_feature_grouping` with your JSON.\n\n"
+            "## Rules\n"
+            "- Feature names must reflect DOMAIN CONCEPTS the project's developers would recognize "
+            "(e.g. \"Materials Recommendation System\", \"Auto-Review Queue\") — NOT filenames or generic terms.\n"
+            "- Prefer attaching files to an existing feature when the work extends it. Set "
+            "`match_existing_feature_id` and leave `title` blank.\n"
+            "- Only propose a NEW feature when the session introduces a genuinely new domain area.\n"
+            "- EXCLUDE scratchpad/config files from all candidates — put them in `unassigned`. "
+            "Examples: projectplan.md, .env, .env.local, .gitignore, .vercel/**, .next/**, .turbo/**.\n"
+            "- Never name a feature after a file. \"Materials Recommendation\" is good. "
+            "\"Modified projectplan.md\" is bad.\n"
+            "- Prefer 2-5 candidates total. Split only when changes span genuinely unrelated domains.\n\n"
+            "## Required output (pass as `grouping_json` to `propose_feature_grouping`)\n"
+            "```json\n"
+            "{\n"
+            "  \"candidates\": [\n"
+            "    {\n"
+            "      \"match_existing_feature_id\": \"feat_xxx or null\",\n"
+            "      \"title\": \"Domain Name (ignored if match_existing_feature_id set)\",\n"
+            "      \"description\": \"1-2 sentences describing the work\",\n"
+            "      \"files\": [\"path/a.ts\", \"path/b.py\"]\n"
+            "    }\n"
+            "  ],\n"
+            "  \"unassigned\": [\"path/scratchpad.md\"]\n"
+            "}\n"
+            "```\n\n"
+        )
+        return instructions + "## Session payload\n```json\n" + json.dumps(payload, indent=2, ensure_ascii=False) + "\n```"
+
+    def apply_grouping_proposal(
+        self,
+        session,
+        session_path: Path,
+        grouping: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """Apply the agent's in-conversation grouping JSON to produce a proposal."""
+        document = self.load_or_create()
+        candidates = self._candidates_from_grouping(grouping, session, document.get("features", []))
+        return self._build_proposal_from_candidates(session, session_path, candidates, document)
+
+    def _candidates_from_grouping(
+        self,
+        grouping: Dict[str, Any],
+        session,
+        existing_features: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        existing_ids = {f.get("feature_id") for f in existing_features if f.get("feature_id")}
+        existing_by_id = {f.get("feature_id"): f for f in existing_features if f.get("feature_id")}
+        now = _utc_now()
+        session_id = session.session_id
+        candidates: List[Dict[str, Any]] = []
+
+        for raw in (grouping.get("candidates") or []):
+            files = sorted({
+                self._normalize_file_path(p)
+                for p in (raw.get("files") or [])
+                if isinstance(p, str) and p.strip()
+            })
+            if not files:
+                continue
+
+            existing_id_raw = raw.get("match_existing_feature_id")
+            existing_id = str(existing_id_raw).strip() if existing_id_raw else ""
+
+            if existing_id and existing_id in existing_ids:
+                feature_id = existing_id
+                title = existing_by_id[existing_id].get("title") or existing_id
+                description = (raw.get("description") or "").strip() or existing_by_id[existing_id].get("description") or "Feature work from session summary"
+            else:
+                title = (raw.get("title") or "").strip()
+                if not title:
+                    continue
+                derived_id = f"feat_{_slugify(title[:60])}"
+                if derived_id in existing_ids:
+                    feature_id = derived_id
+                    title = existing_by_id[derived_id].get("title") or title
+                else:
+                    feature_id = derived_id
+                description = (raw.get("description") or "").strip() or "Feature work from session summary"
+
+            candidates.append({
+                "feature_id": feature_id,
+                "feature_version": 1,
+                "title": title,
+                "description": description,
+                "status": "in-progress",
+                "source": "auto",
+                "files_touched": files,
+                "file_boundaries": self._candidate_boundaries(files),
+                "session_ids": [session_id],
+                "last_updated_session": session_id,
+                "updated_at": now,
+                "staleness": {
+                    "status": "unknown",
+                    "checked_at": now,
+                    "signals": [],
+                },
+            })
+
+        return candidates
 
     def apply_proposal(self, proposal_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         document = self.load_or_create()
@@ -3970,6 +4153,42 @@ Return valid JSON only:
             },
         }
 
+    def _is_low_signal_change(self, files: List[str], description: str) -> bool:
+        """Skip single-file candidates that are description-echoes or scratchpad/config noise.
+
+        These produce one-file "features" like feat_projectplan_md whose names
+        and descriptions are filenames rather than domain concepts.
+        """
+        if len(files) != 1:
+            return False
+
+        single = files[0]
+        single_lower = single.lower()
+        basename = Path(single).name.lower()
+        desc_clean = description.strip().rstrip(".").lower()
+
+        echo_phrases = {
+            f"modified {basename}", f"updated {basename}", f"changed {basename}",
+            f"added {basename}", f"touched {basename}",
+            f"modified {single_lower}", f"updated {single_lower}", f"changed {single_lower}",
+            f"added {single_lower}", f"touched {single_lower}",
+        }
+        if desc_clean in echo_phrases:
+            return True
+        if basename in desc_clean and len(desc_clean.split()) <= 5:
+            return True
+
+        noise_basenames = ("projectplan.md", ".gitignore", ".env", ".env.local", ".env.production", ".env.development")
+        noise_path_segments = ("/.vercel/", "/.next/", "/.turbo/", "/.env.", "/node_modules/")
+
+        if basename in noise_basenames:
+            return True
+        slashed = "/" + single_lower
+        if any(seg in slashed for seg in noise_path_segments):
+            return True
+
+        return False
+
     def _extract_feature_candidates(self, session, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         code_changes = list(summary.get("code_changes", []) or [])
         overview = (summary.get("overview") or "").strip()
@@ -3986,6 +4205,8 @@ Return valid JSON only:
                 continue
 
             description = change.get("description") or "Feature work from session summary"
+            if self._is_low_signal_change(files, description):
+                continue
             candidate = {
                 "feature_id": f"feat_{_slugify(files[0])}",
                 "feature_version": 1,
@@ -4020,7 +4241,18 @@ Return valid JSON only:
         if grouped:
             return grouped
 
-        if overview:
+        # Overview-only fallback: only mint a feature from the overview when there
+        # were no code_changes at all. If code_changes existed but were all
+        # filtered as low-signal, the link_session op alone is enough — don't
+        # promote a generic overview-derived feature for a session that was
+        # entirely scratchpad/config touches.
+        boilerplate_overviews = {
+            "agent-reported session notes",
+            "agent-reported session notes.",
+            "session notes",
+            "no changes",
+        }
+        if not code_changes and overview and overview.lower().rstrip(".") not in boilerplate_overviews:
             return [{
                 "feature_id": f"feat_{_slugify(overview[:40])}",
                 "feature_version": 1,

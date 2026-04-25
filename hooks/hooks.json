@@ -1,0 +1,75 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "diff -q \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" \"${CLAUDE_PLUGIN_DATA}/requirements.txt\" >/dev/null 2>&1 || (cd \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/requirements.txt\" . && python3 -m venv venv && ./venv/bin/pip install -q -r requirements.txt) || rm -f \"${CLAUDE_PLUGIN_DATA}/requirements.txt\""
+          },
+          {
+            "type": "command",
+            "command": "cd /tmp && PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/packages ${CLAUDE_PLUGIN_DATA}/venv/bin/python3 -m reccli.hooks.handle_event"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /tmp && PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/packages ${CLAUDE_PLUGIN_DATA}/venv/bin/python3 -m reccli.hooks.handle_event"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /tmp && PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/packages ${CLAUDE_PLUGIN_DATA}/venv/bin/python3 -m reccli.hooks.handle_event"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /tmp && PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/packages ${CLAUDE_PLUGIN_DATA}/venv/bin/python3 -m reccli.hooks.handle_event"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /tmp && PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/packages ${CLAUDE_PLUGIN_DATA}/venv/bin/python3 -m reccli.hooks.handle_event"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /tmp && PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/packages ${CLAUDE_PLUGIN_DATA}/venv/bin/python3 -m reccli.hooks.handle_event",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
