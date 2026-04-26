@@ -1423,6 +1423,92 @@ def propose_patch(
 
 
 @mcp.tool()
+def run_mmc(
+    prompt: str,
+    mode: str = "auto",
+    provider: str = "auto",
+    model: str = "auto",
+    working_directory: str = "",
+    timeout_seconds: int = 600,
+) -> str:
+    """Dispatch a multi-mode-consensus 3-lens parallel reasoning pass on demand.
+
+    The complementary surface to the auto-surface MMC hook: where the hook
+    fires automatically when a prompt's phrasing matches a topic or
+    difficulty pattern, this tool runs MMC explicitly when the agent (or
+    user, via tool call) decides the problem warrants parallel reasoning.
+
+    Each sub-agent reasons about the same prompt with a different
+    analytical lens (debug: recent changes / data flow / assumptions;
+    planning: simplicity / robustness / performance) plus the
+    diverge→converge→validate scaffold for that mode. Sub-agents run
+    independently — that independence is what makes the cross-lens
+    comparison signal meaningful.
+
+    Returns the 3 raw responses for the calling agent to synthesize:
+    identify where 2+ lenses converged on the same root cause / approach
+    (high-confidence findings), and note unique conclusions from a single
+    lens as lower-confidence.
+
+    Args:
+        prompt: The user's original problem statement, verbatim.
+        mode: ``"auto"`` (default; uses the prompt-text intent detection
+            and falls back to ``"planning"``), ``"debug"``, or ``"planning"``.
+        provider: ``"auto"`` (default; host-detected to match the calling
+            CLI), ``"claude"``, or ``"codex"``.
+        model: ``"auto"`` (default), explicit model name, or ``"none"``.
+        working_directory: Project root for codex's ``--cd``. Defaults to
+            the resolved project root, or the current working directory
+            when no project is detected.
+        timeout_seconds: Per-sub-agent subprocess timeout.
+
+    Returns the resolved mode, framings, and raw responses as a JSON string.
+    """
+    provider_normalized = (provider or "auto").strip().lower()
+    if provider_normalized in {"", "auto"}:
+        provider_normalized = _detect_default_provider()
+    if provider_normalized == "none":
+        return "run_mmc requires a real provider; got 'none'. Use 'auto', 'claude', or 'codex'."
+
+    model_normalized: Optional[str] = (model or "").strip()
+    if model_normalized.lower() in {"", "none", "default"}:
+        model_normalized = None
+    elif model_normalized.lower() == "auto":
+        model_normalized = _detect_default_model(provider_normalized)
+
+    if working_directory:
+        project_root = _resolve_root(working_directory) or Path(working_directory)
+    else:
+        project_root = Path.cwd()
+
+    from .mmc import run_mmc_consensus
+
+    try:
+        result = run_mmc_consensus(
+            prompt,
+            mode=mode,
+            provider=provider_normalized,
+            model=model_normalized,
+            working_directory=project_root,
+            timeout_seconds=timeout_seconds,
+        )
+    except ValueError as exc:
+        return json.dumps(
+            {"status": "invalid_request", "error": str(exc)},
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        return json.dumps(
+            {"status": "error", "error": str(exc)},
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
 def search_by_time(
     start_time: str,
     working_directory: str,

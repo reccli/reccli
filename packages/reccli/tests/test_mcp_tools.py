@@ -103,6 +103,7 @@ from reccli.mcp_server import (  # noqa: E402
     rebuild_index,
     recover_file,
     replay_audit_agent,
+    run_mmc,
 )
 
 
@@ -2055,6 +2056,144 @@ class HookFixRegressionTests(unittest.TestCase):
         self.assertEqual(adversarial.removeprefix(".hooks_wal_"), "a.hooks_wal_b")
         # str.replace would have given "ab" — the broken behavior.
         self.assertEqual(adversarial.replace(".hooks_wal_", ""), "ab")
+
+
+class RunMMCTests(unittest.TestCase):
+    """Tests for run_mmc — explicit on-demand MMC dispatch."""
+
+    def test_run_mmc_dispatches_three_lenses_for_planning(self):
+        # Mock run_provider_prompt to return a unique payload per call so we
+        # can verify each framing produced its own subprocess invocation.
+        calls = []
+
+        def fake_dispatch(provider, project_root, prompt, timeout_seconds, output_path=None, model=None):
+            calls.append(prompt)
+            return {
+                "stdout": f"response_{len(calls)}",
+                "stderr": "",
+                "returncode": 0,
+                "raw_output": f"response_{len(calls)}",
+            }
+
+        import unittest.mock as _mock
+        with _mock.patch(
+            "reccli.agent_providers.run_provider_prompt",
+            side_effect=fake_dispatch,
+        ):
+            out = json.loads(run_mmc(
+                "How should we architect the auth layer?",
+                mode="planning",
+                provider="claude",
+                model="none",
+            ))
+
+        self.assertEqual(out["mode"], "planning")
+        self.assertEqual(out["framings_count"], 3)
+        self.assertEqual(len(out["responses"]), 3)
+        self.assertEqual(len(calls), 3)
+        # Each sub-prompt embeds a distinct framing.
+        self.assertIn("SIMPLICITY", calls[0])
+        self.assertIn("ROBUSTNESS", calls[1])
+        self.assertIn("PERFORMANCE", calls[2])
+        # All sub-prompts include the user's original problem.
+        for c in calls:
+            self.assertIn("auth layer", c)
+
+    def test_run_mmc_auto_mode_falls_back_to_planning(self):
+        # Prompt with no debug/planning topic and no difficulty signals —
+        # detect_intent returns None — auto mode must fall back to planning.
+        def fake_dispatch(provider, project_root, prompt, timeout_seconds, output_path=None, model=None):
+            return {"stdout": "ok", "stderr": "", "returncode": 0, "raw_output": "ok"}
+
+        import unittest.mock as _mock
+        with _mock.patch(
+            "reccli.agent_providers.run_provider_prompt",
+            side_effect=fake_dispatch,
+        ):
+            out = json.loads(run_mmc(
+                "Help me think through this",
+                mode="auto",
+                provider="claude",
+                model="none",
+            ))
+
+        self.assertEqual(out["mode"], "planning")
+        self.assertEqual(out["mode_requested"], "auto")
+
+    def test_run_mmc_debug_mode_uses_debug_framings(self):
+        calls = []
+
+        def fake_dispatch(provider, project_root, prompt, timeout_seconds, output_path=None, model=None):
+            calls.append(prompt)
+            return {"stdout": "ok", "stderr": "", "returncode": 0, "raw_output": "ok"}
+
+        import unittest.mock as _mock
+        with _mock.patch(
+            "reccli.agent_providers.run_provider_prompt",
+            side_effect=fake_dispatch,
+        ):
+            run_mmc(
+                "Why is the test failing?",
+                mode="debug",
+                provider="claude",
+                model="none",
+            )
+
+        self.assertIn("RECENT CHANGES", calls[0])
+        self.assertIn("DATA FLOW", calls[1])
+        self.assertIn("ASSUMPTIONS", calls[2])
+
+    def test_run_mmc_dispatch_failure_does_not_abort_remaining(self):
+        # If one framing fails, the others should still complete and the
+        # response array should report the failure for the offending lens.
+        results = [
+            {"stdout": "ok", "stderr": "", "returncode": 0, "raw_output": "lens1"},
+            Exception("simulated provider crash"),
+            {"stdout": "ok", "stderr": "", "returncode": 0, "raw_output": "lens3"},
+        ]
+
+        def fake_dispatch(provider, project_root, prompt, timeout_seconds, output_path=None, model=None):
+            r = results.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        import unittest.mock as _mock
+        with _mock.patch(
+            "reccli.agent_providers.run_provider_prompt",
+            side_effect=fake_dispatch,
+        ):
+            out = json.loads(run_mmc(
+                "How should we architect the cache?",
+                mode="planning",
+                provider="claude",
+                model="none",
+            ))
+
+        self.assertEqual(len(out["responses"]), 3)
+        self.assertEqual(out["responses"][0]["raw_output"], "lens1")
+        self.assertIsNotNone(out["responses"][1]["error"])
+        self.assertIn("simulated provider crash", out["responses"][1]["error"])
+        self.assertEqual(out["responses"][2]["raw_output"], "lens3")
+
+    def test_run_mmc_rejects_provider_none(self):
+        out = run_mmc(
+            "anything",
+            mode="planning",
+            provider="none",
+            model="none",
+        )
+        self.assertIn("requires a real provider", out)
+
+    def test_run_mmc_rejects_empty_prompt(self):
+        out = json.loads(run_mmc(
+            "   ",
+            mode="planning",
+            provider="claude",
+            model="none",
+        ))
+        self.assertEqual(out["status"], "invalid_request")
+        self.assertIn("non-empty", out["error"])
 
 
 if __name__ == "__main__":
