@@ -41,6 +41,7 @@ Dates below are **first seen in git**, not guaranteed filesystem creation dates.
 | `docs/product/RECCLI_ONE_PAGER.md` | 2026-03-13 | Product-level summary of what RecCli is | canonical | keep | Best short positioning doc. |
 | `docs/product/PROJECT_INITIALIZATION.md` | 2025-10-28 | Optional future project-selection/init flow | reference | keep with status note | Useful, but not current shipped behavior. |
 | `docs/product/PROJECT_ONBOARDING.md` | 2025-10-29 | Optional future onboarding/scoping flow | reference | keep with status note | Future-state product doc, not startup contract. |
+| `docs/product/AGENT_HARNESS.md` | 2026-04-25 (working tree) | Feature-scoped multi-agent audit harness (MCP-implemented) | reference | keep current | RecCli-generic design plus current `audit_feature`/`replay_audit_agent` behavior: PII-redacted context packs, sequential-by-default dispatch with quota abort, audit_analysis overlap measurement. |
 
 ## Architecture
 

@@ -28,6 +28,7 @@ Use these to understand what RecCli is and how it should be positioned.
 - [RECCLI_ONE_PAGER.md](./product/RECCLI_ONE_PAGER.md)
 - [PROJECT_INITIALIZATION.md](./product/PROJECT_INITIALIZATION.md)
 - [PROJECT_ONBOARDING.md](./product/PROJECT_ONBOARDING.md)
+- [AGENT_HARNESS.md](./product/AGENT_HARNESS.md)
 
 ## Architecture
 

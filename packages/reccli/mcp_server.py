@@ -9,6 +9,7 @@ Transport: stdio (stdout is the MCP channel — never print() to stdout)
 
 import json
 import math
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,118 @@ mcp = FastMCP("reccli")
 def _resolve_root(working_directory: str) -> Optional[Path]:
     from .project.devproject import discover_project_root
     return discover_project_root(Path(working_directory).expanduser().resolve())
+
+
+def _detect_default_provider() -> str:
+    """Pick the audit child provider that matches the host CLI.
+
+    The audit child should run on the same auth/quota/billing surface the
+    caller is already paying for. Detection order:
+
+    1. ``RECCLI_HOST`` env var — explicit override. Recommended for Codex MCP
+       setup: ``env = { RECCLI_HOST = "codex" }`` in the codex config.toml
+       mcp_servers block, since Codex CLI does not reliably pass its own
+       session env vars through to MCP subprocesses.
+    2. ``CLAUDECODE`` / ``CLAUDE_CODE_SESSION_ID`` → "claude". Claude Code
+       passes these to MCP subprocesses automatically.
+    3. ``CODEX_SESSION_ID`` / ``CODEX_HOME`` → "codex". Some Codex versions
+       pass these through; many do not — prefer ``RECCLI_HOST``.
+    4. Best-effort parent process inspection via ``ps``.
+    5. Fallback to "claude".
+    """
+    host_override = (os.environ.get("RECCLI_HOST") or "").strip().lower()
+    if host_override in {"claude", "codex"}:
+        return host_override
+
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        return "claude"
+    if os.environ.get("CODEX_SESSION_ID") or os.environ.get("CODEX_HOME"):
+        return "codex"
+
+    detected = _detect_provider_from_process_tree()
+    if detected:
+        return detected
+
+    return "claude"
+
+
+def _detect_provider_from_process_tree() -> Optional[str]:
+    """Walk up the parent process chain and look for codex/claude markers.
+
+    Uses ``ps`` since psutil is not a dependency. Best-effort only — returns
+    None on any failure rather than raising.
+    """
+    import subprocess
+    try:
+        pid = os.getpid()
+        for _ in range(10):
+            ppid_proc = subprocess.run(
+                ["ps", "-o", "ppid=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=2, check=False,
+            )
+            if ppid_proc.returncode != 0:
+                return None
+            ppid_str = (ppid_proc.stdout or "").strip()
+            if not ppid_str:
+                return None
+            try:
+                ppid = int(ppid_str)
+            except ValueError:
+                return None
+            if ppid <= 1 or ppid == pid:
+                return None
+            args_proc = subprocess.run(
+                ["ps", "-o", "args=", "-p", str(ppid)],
+                capture_output=True, text=True, timeout=2, check=False,
+            )
+            if args_proc.returncode != 0:
+                return None
+            args = (args_proc.stdout or "").lower()
+            if "codex" in args:
+                return "codex"
+            # Claude Code's CLI script path contains "/claude/" or invokes "claude"
+            if "/claude/" in args or args.rstrip().endswith(" claude") or args.startswith("claude "):
+                return "claude"
+            pid = ppid
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return None
+
+
+_CODEX_MODEL_LINE_RE = __import__("re").compile(r'^model\s*=\s*"([^"]+)"')
+
+
+def _detect_default_model(provider: str) -> Optional[str]:
+    """Return the model name configured for the host CLI, or None.
+
+    For codex, parses ``~/.codex/config.toml`` for the top-level ``model``
+    key. For claude, returns None — Claude Code's session model is set via
+    ``/model`` and is not persisted to a settings file or env var, so the
+    spawned subprocess uses the CLI's compiled default unless the caller
+    passes ``model`` explicitly.
+    """
+    provider = (provider or "").strip().lower()
+    if provider == "codex":
+        config_path = Path.home() / ".codex" / "config.toml"
+        if not config_path.exists():
+            return None
+        try:
+            text = config_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        in_top_level = True
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                in_top_level = False
+                continue
+            if not in_top_level or not line or line.startswith("#"):
+                continue
+            match = _CODEX_MODEL_LINE_RE.match(line)
+            if match:
+                return match.group(1)
+        return None
+    return None
 
 
 def _get_embedding_provider():
@@ -771,6 +884,542 @@ def search_by_file(
         return f"No messages found referencing '{file_path}'."
 
     return _format_file_search_results(results, file_path)
+
+
+@mcp.tool()
+def audit_feature(
+    working_directory: str,
+    feature_id: str,
+    agents: int = 6,
+    provider: str = "auto",
+    mode: str = "report",
+    focus: str = "",
+    max_files: int = 8,
+    max_file_chars: int = 12000,
+    timeout_seconds: int = 1800,
+    max_concurrency: int = 1,
+    model: str = "auto",
+    files: Optional[List[str]] = None,
+    globs: Optional[List[str]] = None,
+) -> str:
+    """Dispatch read-only audit agents scoped to one feature.
+
+    Each agent runs through the host CLI adapter (Claude Code or Codex) that
+    the caller is already authenticated with — no API keys required. The tool
+    resolves a `.devproject` feature, creates an audit context pack under
+    `devsession/agent-audits/<date>/<feature>/`, then dispatches one or more
+    independent audit agents through the selected provider adapter.
+
+    Audit *scope* defaults to the feature's ``files_touched``. Pass explicit
+    ``files`` and/or ``globs`` to override scope when the feature map is stale,
+    or to audit a product capability that crosses feature boundaries. The
+    feature is still resolved for description, docs, and session linkage.
+
+    Args:
+        working_directory: Path to the project or any subdirectory within it.
+        feature_id: Feature ID or exact feature title from `.devproject`.
+        agents: Number of independent audit agents to run. Default 6.
+        provider: "auto" (default; host-detected to match the calling CLI — Claude Code -> "claude", Codex CLI -> "codex"), "codex" (read-only enforced by Codex sandbox), "claude" (read-only enforced by --tools ""), or "none" (prepare artifacts without dispatch).
+        mode: Must be "report" in v1.
+        focus: Optional narrower instruction for this audit.
+        max_files: Max files to include with full text in the context pack. Applies to feature-derived scope and to override scope alike.
+        max_file_chars: Max characters to include per file.
+        timeout_seconds: Per-agent subprocess timeout.
+        max_concurrency: Max provider subprocesses to run at once. Default 1 (sequential): a quota error on one agent aborts the rest of the batch instead of burning quota on every remaining agent. Pass >1 to run in parallel.
+        model: "auto" (default), explicit model name (e.g. "opus", "sonnet", "gpt-5.5"), or "" / "none" to use the CLI's compiled default. With "auto" the codex provider parses ~/.codex/config.toml; the claude provider has no env-based detection and falls through to the CLI default unless an explicit model is passed.
+        files: Explicit list of relative paths to use as audit scope. When provided (or globs is provided), replaces feature.files_touched. Paths outside project_root are ignored.
+        globs: Glob patterns expanded against project_root (e.g. ["src/app/api/**/*.ts", "scripts/*digest*.ts"]). Recursive `**` patterns are supported. Combined with `files` (deduped, files first then globs in result order). When provided, replaces feature.files_touched.
+    """
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    if (mode or "report").strip().lower() != "report":
+        return "Feature audit failed: v1 only supports mode='report'."
+
+    provider_requested = provider
+    provider_normalized = (provider or "auto").strip().lower()
+    if provider_normalized == "auto":
+        provider_normalized = _detect_default_provider()
+
+    model_requested = model
+    model_normalized = (model or "").strip()
+    if model_normalized.lower() in {"", "none", "default"}:
+        model_normalized = None
+    elif model_normalized.lower() == "auto":
+        model_normalized = _detect_default_model(provider_normalized)
+
+    try:
+        from .agent_harness import create_agent_harness_run
+        from .agent_providers import run_audit_agents
+
+        run = create_agent_harness_run(
+            project_root=project_root,
+            feature_id=feature_id,
+            mode="audit",
+            agent_count=agents,
+            focus=focus,
+            max_files=max_files,
+            max_file_chars=max_file_chars,
+            files=files,
+            globs=globs,
+        )
+        agent_results = run_audit_agents(
+            provider=provider_normalized,
+            project_root=project_root,
+            run_dir=Path(run["run_dir"]),
+            context_pack_path=Path(run["context_pack_path"]),
+            agents=run["agents"],
+            timeout_seconds=timeout_seconds,
+            max_concurrency=max_concurrency,
+            model=model_normalized,
+        )
+    except Exception as e:
+        return f"Feature audit failed: {e}"
+    failed_results = [
+        r for r in agent_results
+        if r.get("status") != "completed"
+        or r.get("parse_status", "valid_json") in {"parse_failed", "empty"}
+    ]
+    quota_skipped = sum(
+        1 for r in agent_results
+        if r.get("status") == "skipped" and "quota" in (r.get("skip_reason") or "").lower()
+    )
+    quota_hit = quota_skipped > 0 or any(r.get("quota_error") for r in agent_results)
+
+    if provider_normalized == "none":
+        status = "prepared"
+        status_reason = "Dry run; no provider dispatched."
+    elif not failed_results:
+        status = "completed"
+        status_reason = f"All {len(agent_results)} agents completed with parseable output."
+    elif quota_hit:
+        status = "partial"
+        completed_count = len(agent_results) - len(failed_results)
+        status_reason = (
+            f"Provider quota hit. {completed_count} of {len(agent_results)} agents completed; "
+            f"{quota_skipped} skipped to preserve quota. Retry later or switch provider."
+        )
+    else:
+        status = "partial"
+        status_reason = f"{len(failed_results)} of {len(agent_results)} agents failed, timed out, or returned empty/unparseable output."
+
+    # Aggregate per-agent findings into the run-level report.md. Skip on dry runs
+    # so the prepared-artifact stub stays intact.
+    if provider_normalized != "none":
+        try:
+            from .agent_harness import write_merged_report
+            write_merged_report(
+                Path(run["run_dir"]),
+                agent_results,
+                bundle_status=status,
+                bundle_status_reason=status_reason,
+            )
+        except Exception:
+            pass  # report aggregation is best-effort; per-agent files remain authoritative
+
+    bundle = {
+        "status": status,
+        "status_reason": status_reason,
+        "provider": provider_normalized,
+        "provider_requested": provider_requested,
+        "model": model_normalized,
+        "model_requested": model_requested,
+        "mode": "report",
+        "max_concurrency": max_concurrency,
+        "quota_hit": quota_hit,
+        "run_id": run["run_id"],
+        "run_dir": run["run_dir"],
+        "context_pack": run["context_pack_path"],
+        "report": run["report_path"],
+        "feature": run["feature"],
+        "scope": run.get("scope"),
+        "gitignore": run.get("gitignore"),
+        "agent_results": agent_results,
+    }
+
+    # Persist the bundle to disk so audit_status() can return it later.
+    # This is the recovery path when the caller's MCP client times out at its
+    # tool boundary (codex hangs up at 120s) — the audit subprocess keeps
+    # running here and writes results normally; the caller can then call
+    # audit_status(run_id) and get the exact same JSON back.
+    try:
+        bundle_path = Path(run["run_dir"]) / "bundle.json"
+        bundle_path.write_text(
+            json.dumps(bundle, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # bundle persistence is best-effort; the synchronous return is authoritative
+
+    return json.dumps(bundle, indent=2, ensure_ascii=False)
+
+
+def _find_agent_audit_run(project_root: Path, run_id_or_path: str) -> Path:
+    explicit = Path(run_id_or_path).expanduser()
+    if explicit.exists() and explicit.is_dir():
+        return explicit.resolve()
+
+    audit_root = project_root / "devsession" / "agent-audits"
+    matches = [path for path in audit_root.glob(f"*/*/{run_id_or_path}") if path.is_dir()]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise FileNotFoundError(f"Audit run '{run_id_or_path}' not found under {audit_root}")
+    raise ValueError(f"Multiple audit runs matched '{run_id_or_path}'")
+
+
+@mcp.tool()
+def audit_status(working_directory: str, run_id: str) -> str:
+    """Retrieve the bundle JSON for an audit run.
+
+    Recovery path for callers whose MCP client timed out at its tool boundary
+    (codex hangs up at 120s) while the audit subprocess kept running and finished
+    on disk. ``audit_feature`` writes ``<run_dir>/bundle.json`` as its final
+    step; this tool returns that file verbatim, so the caller gets the same
+    JSON they would have received from the original synchronous call.
+
+    Args:
+        working_directory: Path to the project or any subdirectory within it.
+        run_id: Audit run ID returned by audit_feature, or the explicit run_dir path.
+
+    Returns:
+        The persisted bundle JSON when ``bundle.json`` exists. Otherwise a
+        small status object indicating ``in_progress`` (with per-agent findings
+        progress so far) or ``not_found`` if the run_id can't be resolved.
+    """
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    try:
+        run_dir = _find_agent_audit_run(project_root, run_id)
+    except FileNotFoundError as e:
+        return json.dumps(
+            {"status": "not_found", "run_id": run_id, "error": str(e)},
+            indent=2,
+            ensure_ascii=False,
+        )
+    except ValueError as e:
+        return json.dumps(
+            {"status": "ambiguous", "run_id": run_id, "error": str(e)},
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    bundle_path = run_dir / "bundle.json"
+    if bundle_path.exists():
+        return bundle_path.read_text(encoding="utf-8")
+
+    # No bundle yet — the run is in progress, never started, or crashed
+    # before audit_feature got to its final write.
+    progress: List[Dict[str, Any]] = []
+    for findings_file in sorted(run_dir.glob("agent_*_findings.json")):
+        agent_id = findings_file.stem.removesuffix("_findings")
+        try:
+            data = json.loads(findings_file.read_text(encoding="utf-8"))
+            findings = data.get("findings", [])
+            progress.append({
+                "agent_id": agent_id,
+                "status": data.get("status", "unknown"),
+                "findings": len(findings) if isinstance(findings, list) else 0,
+            })
+        except Exception:
+            progress.append({"agent_id": agent_id, "status": "unreadable", "findings": 0})
+
+    return json.dumps(
+        {
+            "status": "in_progress",
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "agent_progress": progress,
+            "note": (
+                "bundle.json not yet written. The audit subprocess may still be "
+                "running, or it may have crashed before audit_feature finalized. "
+                "Per-agent files under run_dir are authoritative; this view is a "
+                "best-effort progress snapshot."
+            ),
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def consolidate_audit(
+    working_directory: str,
+    run_id: str,
+    judge_provider: str = "none",
+    judge_model: str = "auto",
+    max_judge_clusters: int = 50,
+) -> str:
+    """Cluster N agents' findings into a deduplicated, ranked set.
+
+    Reads completed ``agent_*_findings.json`` files in the run directory,
+    clusters them via the shared similarity heuristic from ``audit_analysis``
+    (title token Jaccard + file-path overlap), picks a representative per
+    cluster, and ranks by (agent_count, severity, confidence) — agreement is
+    the dominant signal. Writes ``consolidated.json`` next to ``bundle.json``
+    so ``audit_status`` and other callers can find it.
+
+    Args:
+        working_directory: Path to the project or any subdirectory.
+        run_id: Audit run ID returned by ``audit_feature``, or run_dir path.
+        judge_provider: ``"none"`` (default; deterministic clustering only,
+            free and millisecond-fast), ``"auto"`` (host-detected), ``"claude"``,
+            or ``"codex"`` to add an LLM judge pass that may merge clusters
+            the heuristic missed. Failures fall back to deterministic ordering;
+            this tool never raises on judge errors.
+        judge_model: ``"auto"`` (default), explicit model name, or ``"none"``.
+            Only meaningful when judge_provider is set.
+        max_judge_clusters: Caps how many clusters the judge sees. Pathological
+            runs with hundreds of clusters won't trigger runaway LLM cost.
+
+    Returns the consolidated bundle as a JSON string. The same payload is
+    persisted to ``<run_dir>/consolidated.json`` for caller-side recovery.
+    """
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    try:
+        run_dir = _find_agent_audit_run(project_root, run_id)
+    except FileNotFoundError as e:
+        return json.dumps(
+            {"status": "not_found", "run_id": run_id, "error": str(e)},
+            indent=2,
+            ensure_ascii=False,
+        )
+    except ValueError as e:
+        return json.dumps(
+            {"status": "ambiguous", "run_id": run_id, "error": str(e)},
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    judge_provider_normalized = (judge_provider or "").strip().lower()
+    if judge_provider_normalized in {"", "none"}:
+        judge_provider_resolved: Optional[str] = None
+    elif judge_provider_normalized == "auto":
+        judge_provider_resolved = _detect_default_provider()
+    else:
+        judge_provider_resolved = judge_provider_normalized
+
+    judge_model_normalized: Optional[str] = (judge_model or "").strip()
+    if judge_model_normalized.lower() in {"", "none", "default"}:
+        judge_model_normalized = None
+    elif judge_model_normalized.lower() == "auto":
+        judge_model_normalized = _detect_default_model(
+            judge_provider_resolved or "claude"
+        )
+
+    from .audit_consolidation import consolidate_audit_run
+
+    try:
+        result = consolidate_audit_run(
+            run_dir,
+            project_root=project_root,
+            judge_provider=judge_provider_resolved,
+            judge_model=judge_model_normalized,
+            max_judge_clusters=max_judge_clusters,
+        )
+    except Exception as e:
+        # consolidate_audit_run is documented to never raise, but defend the
+        # MCP boundary anyway.
+        return json.dumps(
+            {"status": "error", "run_id": run_id, "error": str(e)},
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def replay_audit_agent(
+    working_directory: str,
+    run_id: str,
+    agent_id: str,
+    provider: str = "auto",
+    timeout_seconds: int = 1800,
+    model: str = "auto",
+) -> str:
+    """Re-run one agent from an existing feature audit.
+
+    Use this when one audit agent times out, returns unparseable output, or
+    needs to be retried without re-running the whole audit.
+
+    Args:
+        working_directory: Path to the project or any subdirectory within it.
+        run_id: Audit run ID returned by audit_feature, or the explicit run_dir path.
+        agent_id: Agent ID to replay, e.g. "agent_03".
+        provider: "auto" (default; host-detected), "claude", "codex", or "none".
+        timeout_seconds: Per-agent subprocess timeout.
+        model: "auto" (default), explicit model name (e.g. "opus", "gpt-5.5"), or "none" to use the CLI default.
+    """
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    provider_normalized = (provider or "auto").strip().lower()
+    if provider_normalized == "auto":
+        provider_normalized = _detect_default_provider()
+
+    model_normalized = (model or "").strip()
+    if model_normalized.lower() in {"", "none", "default"}:
+        model_normalized = None
+    elif model_normalized.lower() == "auto":
+        model_normalized = _detect_default_model(provider_normalized)
+
+    try:
+        from .agent_providers import run_agent_provider
+
+        run_dir = _find_agent_audit_run(project_root, run_id)
+        context_pack_path = run_dir / "context_pack.json"
+        if not context_pack_path.exists():
+            return f"Replay failed: missing context pack at {context_pack_path}"
+        context_pack = json.loads(context_pack_path.read_text(encoding="utf-8"))
+        agent = next(
+            (item for item in context_pack.get("agents", []) if item.get("agent_id") == agent_id),
+            None,
+        )
+        if agent is None:
+            available = ", ".join(item.get("agent_id", "?") for item in context_pack.get("agents", []))
+            return f"Replay failed: agent '{agent_id}' not found. Available agents: {available or 'none'}"
+
+        result = run_agent_provider(
+            provider=provider_normalized,
+            project_root=project_root,
+            run_dir=run_dir,
+            context_pack_path=context_pack_path,
+            agent=agent,
+            timeout_seconds=timeout_seconds,
+            model=model_normalized,
+        )
+    except Exception as e:
+        return f"Replay failed: {e}"
+
+    # Re-aggregate the merged report so the replayed agent's findings are reflected.
+    try:
+        from .agent_harness import write_merged_report
+        all_results = []
+        for findings_file in sorted(run_dir.glob("agent_*_findings.json")):
+            stem = findings_file.stem.removesuffix("_findings")
+            all_results.append({
+                "agent_id": stem,
+                "findings_path": str(findings_file),
+                "status": "completed",
+            })
+        write_merged_report(run_dir, all_results)
+    except Exception:
+        pass
+
+    # Update the persisted bundle.json so audit_status reflects the replayed
+    # agent's new findings instead of the original (failed/stale) result.
+    try:
+        bundle_path = run_dir / "bundle.json"
+        if bundle_path.exists():
+            persisted = json.loads(bundle_path.read_text(encoding="utf-8"))
+            agent_results_list = persisted.get("agent_results", [])
+            replaced = False
+            for i, ar in enumerate(agent_results_list):
+                if ar.get("agent_id") == agent_id:
+                    agent_results_list[i] = result
+                    replaced = True
+                    break
+            if not replaced:
+                agent_results_list.append(result)
+            persisted["agent_results"] = agent_results_list
+            bundle_path.write_text(
+                json.dumps(persisted, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+    except Exception:
+        pass
+
+    return json.dumps({
+        "status": result.get("status"),
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "model": model_normalized,
+        "agent_result": result,
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def propose_patch(
+    working_directory: str,
+    run_id: str,
+    agent_id: str,
+    finding_index: int,
+    provider: str = "auto",
+    file_budget: int = 50_000,
+    timeout_seconds: int = 600,
+    model: str = "auto",
+) -> str:
+    """Dispatch one agent to propose a unified-diff patch for one audit finding.
+
+    Reads the named finding from a completed audit run, loads referenced source
+    files fresh from disk with a generous per-file budget (default 50K chars),
+    dispatches a single agent to produce a unified diff, and runs
+    `git apply --check` to test applicability.
+
+    Does NOT apply the diff. Returns the diff path and applicability status.
+    The caller runs `git apply <patch_dir>/patch.diff` if they want to apply it.
+
+    Patch artifacts are written under the audit run directory:
+        <run_dir>/patches/<agent_id>_finding_<index>_<timestamp>/
+            prompt.md, raw_response.txt, patch.diff, result.json,
+            stdout.txt, stderr.txt
+
+    Args:
+        working_directory: Path to the project or any subdirectory within it.
+        run_id: Audit run ID returned by audit_feature, or the explicit run_dir path.
+        agent_id: Agent ID whose finding should be patched (e.g. "agent_01").
+        finding_index: Zero-based index into that agent's findings array.
+        provider: "auto" (default; host-detected to match the calling CLI),
+            "claude", or "codex". "none" is not supported — propose_patch
+            requires a real provider.
+        file_budget: Max characters per file in the diff prompt. Files larger
+            than this are tail-truncated to a line boundary with the starting
+            line number annotated so diff @@ headers stay accurate. Default 50000.
+        timeout_seconds: Subprocess timeout for the diff-generation agent.
+        model: "auto" (default), explicit model name (e.g. "opus", "sonnet", "gpt-5.5"), or "none" for the CLI default. With "auto" the codex provider parses ~/.codex/config.toml; the claude provider has no env-based detection and falls through to the CLI default unless explicit.
+    """
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    provider_normalized = (provider or "auto").strip().lower()
+    if provider_normalized == "auto":
+        provider_normalized = _detect_default_provider()
+    if provider_normalized == "none":
+        return "propose_patch requires a real provider; got 'none'. Use 'auto', 'claude', or 'codex'."
+
+    model_normalized = (model or "").strip()
+    if model_normalized.lower() in {"", "none", "default"}:
+        model_normalized = None
+    elif model_normalized.lower() == "auto":
+        model_normalized = _detect_default_model(provider_normalized)
+
+    try:
+        from .propose_patch import propose_patch_for_finding
+
+        run_dir = _find_agent_audit_run(project_root, run_id)
+        result = propose_patch_for_finding(
+            project_root=project_root,
+            run_dir=run_dir,
+            agent_id=agent_id,
+            finding_index=finding_index,
+            provider=provider_normalized,
+            file_budget=file_budget,
+            timeout_seconds=timeout_seconds,
+            model=model_normalized,
+        )
+    except Exception as exc:
+        return f"propose_patch failed: {exc}"
+
+    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
