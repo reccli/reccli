@@ -2,8 +2,8 @@
   "format": "devproject",
   "version": "2.1.0",
   "project_root": "/Users/will/coding-projects/reccli",
-  "updated_at": "2026-04-25T22:33:41Z",
-  "last_updated_session": "session_20260425_153331",
+  "updated_at": "2026-04-26T21:11:07Z",
+  "last_updated_session": "session_20260426_140526",
   "project": {
     "name": "reccli",
     "description": "reccli is a temporal memory engine for AI coding agents implementing a tri-layer memory system: .devproject (project feature map), .devsession summary (compacted working memory), and .devsession full conversation (source of truth). It runs as an MCP server and Claude Code hook integration, enabling agents to accumulate structured memory across sessions through hybrid search, LLM summarization, and temporal-semantic linking between memory layers.",
@@ -168,77 +168,6 @@
       }
     },
     {
-      "feature_id": "feat_api_routes",
-      "feature_version": 1,
-      "title": "API Routes",
-      "description": "Code contributing to api routes.",
-      "status": "in-progress",
-      "source": "auto",
-      "files_touched": [
-        "packages/reccli/backend/server.py",
-        "packages/reccli/retrieval/embeddings.py",
-        "packages/reccli/retrieval/memory_middleware.py",
-        "packages/reccli/retrieval/retrieval.py",
-        "packages/reccli/retrieval/streaming_retrieval.py",
-        "packages/reccli/retrieval/vector_index.py"
-      ],
-      "file_boundaries": [
-        "apps/web/**",
-        "apps/web/pages/api/**",
-        "packages/reccli/**",
-        "packages/reccli/backend/**",
-        "packages/reccli/hooks/**",
-        "packages/reccli/recording/**",
-        "packages/reccli/retrieval/**",
-        "packages/reccli/runtime/**",
-        "packages/reccli/session/**",
-        "packages/reccli/summarization/**",
-        "src/export/**",
-        "src/ui/**"
-      ],
-      "docs": [
-        {
-          "path": "apps/web/SETUP_GUIDE.md",
-          "title": "RecCli Next.js Components",
-          "relevance": "primary",
-          "score": 1.5,
-          "signals": [
-            "doc_in_boundary",
-            "doc_text_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/archive/progress/phases/PHASE_6_IMPLEMENTATION.md",
-          "title": "Phase 6: Memory Middleware - Implementation",
-          "relevance": "primary",
-          "score": 3.3,
-          "signals": [
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        },
-        {
-          "path": "docs/reference/API_KEY_SECURITY.md",
-          "title": "API Key Security",
-          "relevance": "primary",
-          "score": 5.1667,
-          "signals": [
-            "doc_title_matches_feature_terms",
-            "doc_name_matches_feature_alias",
-            "doc_semantic_matches_feature"
-          ]
-        }
-      ],
-      "session_ids": [],
-      "last_updated_session": null,
-      "updated_at": "2026-03-27T04:27:39Z",
-      "staleness": {
-        "status": "current",
-        "checked_at": "2026-03-27T04:27:42Z",
-        "signals": []
-      }
-    },
-    {
       "feature_id": "feat_hybrid_search_retrieval_engine",
       "feature_version": 1,
       "title": "Hybrid Search & Retrieval Engine",
@@ -246,7 +175,12 @@
       "status": "in-progress",
       "source": "auto",
       "files_touched": [
-        "packages/reccli/retrieval/__init__.py"
+        "packages/reccli/retrieval/__init__.py",
+        "packages/reccli/retrieval/embeddings.py",
+        "packages/reccli/retrieval/memory_middleware.py",
+        "packages/reccli/retrieval/retrieval.py",
+        "packages/reccli/retrieval/streaming_retrieval.py",
+        "packages/reccli/retrieval/vector_index.py"
       ],
       "file_boundaries": [
         "packages/reccli/retrieval/**"
@@ -724,6 +658,7 @@
       "source": "auto",
       "files_touched": [
         "packages/reccli/backend/__init__.py",
+        "packages/reccli/backend/server.py",
         "packages/reccli/ui/src/bridge/python.mock.ts",
         "packages/reccli/ui/src/bridge/python.ts",
         "packages/reccli/ui/src/components/Chat.tsx",
@@ -890,6 +825,28 @@
         "checked_at": "2026-03-27T04:27:42Z",
         "signals": []
       }
+    },
+    {
+      "feature_id": "feat_agent_audit_harness",
+      "title": "Agent Audit Harness",
+      "description": "Read-only feature-scoped multi-agent audits dispatched through subscription-auth CLI adapters (Claude Code or Codex). Builds a feature-scoped context pack from .devproject, fans out N independent audit agents, parses structured findings, aggregates a severity-sorted merged report, persists bundle.json for caller-side recovery on MCP timeout, supports single-agent replay, single-finding patch proposal with git-apply check, and cross-agent finding consolidation (deterministic clustering with optional LLM-judge dedup, bounded by max_judge_clusters with never-throws fallback).",
+      "status": "in-progress",
+      "file_boundaries": [
+        "packages/reccli/agent_harness.py",
+        "packages/reccli/agent_providers.py",
+        "packages/reccli/audit_analysis.py",
+        "packages/reccli/audit_consolidation.py",
+        "packages/reccli/propose_patch.py"
+      ],
+      "files_touched": [
+        "packages/reccli/agent_harness.py",
+        "packages/reccli/agent_providers.py",
+        "packages/reccli/audit_analysis.py",
+        "packages/reccli/audit_consolidation.py",
+        "packages/reccli/propose_patch.py"
+      ],
+      "docs": [],
+      "sessions": []
     }
   ],
   "hub_files": [
@@ -2763,7 +2720,351 @@
           }
         }
       ]
+    },
+    {
+      "proposal_id": "projupd_20260425224902",
+      "status": "pending",
+      "created_at": "2026-04-25T22:49:02Z",
+      "source_session_id": "session_20260425_154855",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_standalone_cli_llm_chat_interface",
+          "changes": {
+            "files_touched_add": [
+              ".gitattributes",
+              "benchmarks/longmemeval/data/longmemeval_s_cleaned.json"
+            ],
+            "session_ids_add": [
+              "session_20260425_154855"
+            ],
+            "last_updated_session": "session_20260425_154855",
+            "updated_at": "2026-04-25T22:49:02Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_154855",
+            "path": "devsession/04252026_1548.devsession",
+            "started_at": "2026-04-25T15:48:55.987142",
+            "ended_at": "2026-04-25T15:48:59.154254",
+            "feature_ids": [
+              "feat_standalone_cli_llm_chat_interface"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260426003004",
+      "status": "pending",
+      "created_at": "2026-04-26T00:30:04Z",
+      "source_session_id": "session_20260425_172948",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "docs/README.md",
+              "docs/document-index.md",
+              "docs/product/AGENT_HARNESS.md",
+              "packages/reccli/agent_harness.py",
+              "packages/reccli/agent_providers.py",
+              "packages/reccli/mcp_server.py",
+              "packages/reccli/tests/test_mcp_tools.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_172948"
+            ],
+            "last_updated_session": "session_20260425_172948",
+            "updated_at": "2026-04-26T00:30:04Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_172948",
+            "path": "devsession/04252026_1729.devsession",
+            "started_at": "2026-04-25T17:29:48.271027",
+            "ended_at": "2026-04-25T17:29:51.967455",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260426025830",
+      "status": "pending",
+      "created_at": "2026-04-26T02:58:30Z",
+      "source_session_id": "session_20260425_195829",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_continued_harness_hardening_after_the_in",
+            "feature_version": 1,
+            "title": "Continued harness hardening after the initial three bug",
+            "description": "Continued harness hardening after the initial three bug fixes: removed the duplicate run_agent_harness MCP tool, brought AGENT_HARNESS.md up-to-date with this session's changes, and removed the codex-as-default bias by adding host-aware provider detection. 197 tests passing.</overview>\n<parameter name=\"decisions\">[\"Removed run_agent_harness MCP tool because audit_feature(provider='none') covers the same dry-run packaging use case with strictly better output (JSON bundle vs markdown). Three audit-related MCP tools (audit_feature, replay_audit_agent, run_agent_harness) collapsed to two. Also deleted the now-orphan format_agent_harness_result helper.\", \"Added _detect_default_provider() and changed audit_feature/replay_audit_agent default from 'codex'/'claude' to 'auto'. Detection reads CLAUDECODE/CLAUDE_CODE_SESSION_ID env vars (→ claude) and CODEX_HOME/CODEX_SESSION_ID (→ codex), falling back to claude when host is unknown. Reason: the codex-as-harness default was personal-use bias from Will's original prompt, not a product principle. Audit children should run on the same auth/quota surface as the host CLI the user is paying for. Bundle now reports both provider (resolved) and provider_requested (raw input) for debuggability.\", \"Updated AGENT_HARNESS.md and document-index.md to reflect: sequential-by-default with quota abort, PII redaction at session-context layer, auto-gitignore behavior, audit_analysis overlap measurement tool, and the new auto-provider detection. Removed the 'default codex because of sandbox' framing entirely; each provider's read-only mechanism is now described neutrally.\"]</parameter>\n<parameter name=\"problems_solved\">[\"Tool surface bloat: three MCP tools for one workflow created confusion and maintenance overhead. Down to two now.\", \"Personal-use bias leaking into product defaults: codex was hardcoded as audit child regardless of host CLI. With auto-detection, Claude Code users get claude children, Codex CLI users get codex children, billing/auth aligns with host.\", \"Stale docs: AGENT_HARNESS.md still referenced max_concurrency=4, didn't mention quota_hit/redaction/gitignore/audit_analysis, and presented codex-as-default as a principle rather than a pragmatic personal preference.\"]</parameter>\n<parameter name=\"open_issues\">[\"Real-codex stderr grep still pending; needs codex quota reset (~20:07 PT) to do the empirical end-to-end verification of the redaction fix's downstream behavior.\", \"Sequential-default decision still provisional pending the codex retry of the 4 failed 3DCarParts features.\", \"audit_analysis.py is intentionally unwired from the MCP server. Once 3-5 more real audits exist, design the dedup parent pass — likely embedding-based or LLM-judge, not token-jaccard.\", \"feat_api_routes in the .devproject is misclustered — packages/reccli/** is incorrectly attributed to it, lumping most of the RecCli backend under 'API Routes'. Separate cleanup, but worth doing before the next audit pass to avoid running broad audits with wrong scope.\", \"Layer 2 redesign deferred: ideally the audit harness uses the host's native subagent system (Claude Code Task tool) instead of subprocessing claude/codex CLIs. Would require an MCP-side 'host-task' provider that returns a dispatch directive, and a follow-up audit_collect_findings tool to assemble the bundle after the host runs subagents. Logged for future, not built.\"]</parameter>\n<parameter name=\"next_steps\">[\"After codex resets, retry the 4 failed 3DCarParts features sequentially with provider='auto' (will resolve to claude in current session, but Will can override) to validate sequential mode + auto-detection end-to-end.\", \"Run audit_analysis.measure_audit_overlap across all 5 completed runs to grow the overlap dataset.\", \"Fix feat_api_routes file_boundaries before next audit batch: remove packages/reccli/** from its scope.\", \"Consider designing Layer 2: host-task provider + audit_collect_findings to use the host CLI's native subagent system instead of subprocessing.\"]</parameter>\n<parameter name=\"files_changed\">[\"packages/reccli/mcp_server.py\", \"packages/reccli/agent_harness.py\", \"packages/reccli/tests/test_mcp_tools.py\", \"docs/product/AGENT_HARNESS.md\", \"docs/document-index.md\"]",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260425_195829"
+            ],
+            "last_updated_session": "session_20260425_195829",
+            "updated_at": "2026-04-26T02:58:30Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-04-26T02:58:30Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_195829",
+            "path": "devsession/04252026_1958.devsession",
+            "started_at": "2026-04-25T19:58:29.351993",
+            "ended_at": "2026-04-25T19:58:29.352309",
+            "feature_ids": [
+              "feat_continued_harness_hardening_after_the_in"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260426030944",
+      "status": "pending",
+      "created_at": "2026-04-26T03:09:44Z",
+      "source_session_id": "session_20260425_200913",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/agent_providers.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_200913"
+            ],
+            "last_updated_session": "session_20260425_200913",
+            "updated_at": "2026-04-26T03:09:44Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_mcp_tools.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_200913"
+            ],
+            "last_updated_session": "session_20260425_200913",
+            "updated_at": "2026-04-26T03:09:44Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_200913",
+            "path": "devsession/04252026_2009.devsession",
+            "started_at": "2026-04-25T20:09:13.245218",
+            "ended_at": "2026-04-25T20:09:16.009313",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260426053621",
+      "status": "pending",
+      "created_at": "2026-04-26T05:36:21Z",
+      "source_session_id": "session_20260425_223533",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "docs/product/AGENT_HARNESS.md",
+              "packages/reccli/agent_harness.py",
+              "packages/reccli/agent_providers.py",
+              "packages/reccli/mcp_server.py",
+              "packages/reccli/propose_patch.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_223533"
+            ],
+            "last_updated_session": "session_20260425_223533",
+            "updated_at": "2026-04-26T05:36:21Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_mcp_tools.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_223533"
+            ],
+            "last_updated_session": "session_20260425_223533",
+            "updated_at": "2026-04-26T05:36:21Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_223533",
+            "path": "devsession/04252026_2235.devsession",
+            "started_at": "2026-04-25T22:35:33.701516",
+            "ended_at": "2026-04-25T22:35:37.850855",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260426060212",
+      "status": "pending",
+      "created_at": "2026-04-26T06:02:12Z",
+      "source_session_id": "session_20260425_230155",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "docs/product/AGENT_HARNESS.md",
+              "packages/reccli/agent_harness.py",
+              "packages/reccli/agent_providers.py",
+              "packages/reccli/mcp_server.py",
+              "packages/reccli/propose_patch.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_230155"
+            ],
+            "last_updated_session": "session_20260425_230155",
+            "updated_at": "2026-04-26T06:02:12Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_mcp_tools.py"
+            ],
+            "session_ids_add": [
+              "session_20260425_230155"
+            ],
+            "last_updated_session": "session_20260425_230155",
+            "updated_at": "2026-04-26T06:02:12Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260425_230155",
+            "path": "devsession/04252026_2301.devsession",
+            "started_at": "2026-04-25T23:01:55.474221",
+            "ended_at": "2026-04-25T23:01:58.992712",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260426210615",
+      "status": "pending",
+      "created_at": "2026-04-26T21:06:15Z",
+      "source_session_id": "session_20260426_140526",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/hooks/context_injector.py",
+              "packages/reccli/hooks/handle_event.py",
+              "packages/reccli/hooks/session_recorder.py"
+            ],
+            "session_ids_add": [
+              "session_20260426_140526"
+            ],
+            "last_updated_session": "session_20260426_140526",
+            "updated_at": "2026-04-26T21:06:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/agent_harness.py",
+              "packages/reccli/agent_providers.py",
+              "packages/reccli/audit_consolidation.py",
+              "packages/reccli/mcp_server.py",
+              "packages/reccli/propose_patch.py"
+            ],
+            "session_ids_add": [
+              "session_20260426_140526"
+            ],
+            "last_updated_session": "session_20260426_140526",
+            "updated_at": "2026-04-26T21:06:15Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_api_routes",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_mcp_tools.py"
+            ],
+            "session_ids_add": [
+              "session_20260426_140526"
+            ],
+            "last_updated_session": "session_20260426_140526",
+            "updated_at": "2026-04-26T21:06:15Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260426_140526",
+            "path": "devsession/04262026_1405.devsession",
+            "started_at": "2026-04-26T14:05:26.975316",
+            "ended_at": "2026-04-26T14:05:29.326737",
+            "feature_ids": [
+              "feat_api_routes"
+            ]
+          }
+        }
+      ]
     }
   ],
-  "update_history": []
+  "update_history": [
+    {
+      "timestamp": "2026-04-26T21:11:07Z",
+      "summary": "Manual cleanup: deleted feat_api_routes (catch-all with broken boundaries); moved 5 retrieval files to feat_hybrid_search_retrieval_engine and backend/server.py to feat_typescript_terminal_chat_ui; added feat_agent_audit_harness for the read-only multi-agent audit toolchain.",
+      "actor": "manual_curation"
+    }
+  ]
 }

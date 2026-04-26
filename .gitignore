@@ -16,9 +16,13 @@ recordings/
 *.cast
 *.script
 
-# DevSession files (may contain sensitive code/conversations)
+# DevSession session memory & artifacts (never commit — may contain
+# sensitive code, conversation content, edited file snapshots, embeddings).
+# The /devsession/ directory is the runtime memory store for RecCli on this repo.
 *.devsession
-!devsession/examples/*.devsession
+/devsession/
+!/devsession/examples/
+!/devsession/examples/**
 
 # DevProject file (project overview - gitignored by default for privacy)
 # Remove this line to track .devproject for team-wide context sharing
@@ -96,3 +100,4 @@ apps/web/build/
 apps/web/.vercel/
 packages/reccli-core/ui/node_modules/
 packages/reccli-core/ui/package-lock.json
+
