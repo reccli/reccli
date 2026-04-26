@@ -9,7 +9,7 @@ RecCli is a temporal memory engine for AI coding agents. It implements a tri-lay
 PYTHONPATH=packages python3 -m unittest discover -s packages/reccli/tests -p 'test_*.py'
 ```
 
-The current project structure, MCP tool surface, and per-file responsibilities are loaded automatically (via `load_project_context` and the MCP tool listing) — they are not duplicated here, since the source of truth is the codebase itself.
+The current project structure (via `load_project_context`) and the MCP tool surface (via the MCP client's tool listing) are loaded automatically. Per-file responsibilities live in the module docstrings — read the file to see them. None of this is duplicated here, since the source of truth is the codebase itself.
 
 ## Hooks (Claude Code integration)
 
