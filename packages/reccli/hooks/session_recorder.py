@@ -173,11 +173,15 @@ def cleanup_bg_tasks(project_root: Path, stale_hours: int = 24) -> int:
 # Session-signal extraction (forward pointers)
 # ---------------------------------------------------------------------------
 
+# Lookahead-anchored captures so values containing `|` (e.g. shell pipelines,
+# X|Y phrasing) don't truncate the goal/resolved fields. Without lookaheads,
+# `[^|]*` would stop at the first pipe inside a value and the rest of the
+# pattern would fail to match.
 _SESSION_SIGNAL_RE = re.compile(
     r'<!--session-signal:\s*'
-    r'(?:goal=([^|]*)\|\s*)?'        # optional goal field
-    r'resolved=([^|]*)\|\s*'
-    r'open=(.*?)-->',                 # non-greedy: handles > in values
+    r'(?:goal=(.*?)\s*\|\s*(?=resolved=))?'   # optional goal, anchored on `| resolved=`
+    r'resolved=(.*?)\s*\|\s*(?=open=)'        # resolved, anchored on `| open=`
+    r'open=(.*?)\s*-->',                       # open, anchored on closing `-->`
     re.IGNORECASE,
 )
 
@@ -188,10 +192,15 @@ def _extract_session_signal(message: str) -> Optional[Dict[str, Any]]:
     Supports both formats:
       <!--session-signal: goal=X | resolved=Y | open=Z-->
       <!--session-signal: resolved=Y | open=Z-->
+
+    When a message contains multiple tags (e.g. an example earlier in the
+    body and the real trailing tag), the trailing tag wins. This mirrors
+    the strip behaviour, which removes every match.
     """
-    match = _SESSION_SIGNAL_RE.search(message)
-    if not match:
+    matches = list(_SESSION_SIGNAL_RE.finditer(message))
+    if not matches:
         return None
+    match = matches[-1]
     goal_raw = (match.group(1) or "").strip()
     resolved_raw = match.group(2).strip()
     open_raw = match.group(3).strip()
@@ -299,10 +308,15 @@ def _append_to_wal(wal_file: Path, record: Dict[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
-# Approximate tokens per byte in conversational text (conservative estimate)
+# Approximate tokens per byte in conversational text (conservative estimate).
+# Calibrated for Opus 4.7's 1M-context window: 800K is ~80% of capacity, the
+# standard "yellow zone" that leaves headroom for save_session_notes plus a
+# few follow-ups before compaction actually triggers. The previous 400K value
+# was right for 200K-context models but fired at 40% on 1M-context, which
+# trained users to ignore the reminder.
 _BYTES_PER_TOKEN = 4
-_PRECOMPACT_TOKEN_THRESHOLD = 400_000
-_PRECOMPACT_BYTE_THRESHOLD = _PRECOMPACT_TOKEN_THRESHOLD * _BYTES_PER_TOKEN  # ~1.6MB WAL
+_PRECOMPACT_TOKEN_THRESHOLD = 800_000
+_PRECOMPACT_BYTE_THRESHOLD = _PRECOMPACT_TOKEN_THRESHOLD * _BYTES_PER_TOKEN  # ~3.2MB WAL
 _REMINDER_SENT_SUFFIX = ".precompact_reminded"
 
 
@@ -357,8 +371,10 @@ def _recover_orphan_wals(project_root: Path, current_session_id: str) -> None:
     """
     sessions_dir = _devsession_dir(project_root)
     for wal_file in sessions_dir.glob(".hooks_wal_*.jsonl"):
-        # Skip the current session's WAL
-        wal_sid = wal_file.stem.replace(".hooks_wal_", "")
+        # Skip the current session's WAL.
+        # removeprefix is exact (str.replace strips every occurrence and would
+        # corrupt a session_id that happened to contain '.hooks_wal_').
+        wal_sid = wal_file.stem.removeprefix(".hooks_wal_")
         if wal_sid == current_session_id:
             continue
 
@@ -976,6 +992,10 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     live_snapshot.unlink(missing_ok=True)
     reminder_flag = wal.with_suffix(_REMINDER_SENT_SUFFIX)
     reminder_flag.unlink(missing_ok=True)
+    # Drop the active-session breadcrumb so ~/.reccli/active_sessions doesn't
+    # accumulate one stale file per Claude Code session.
+    breadcrumb = ACTIVE_PROJECT_DIR / f"{session_id}.json"
+    breadcrumb.unlink(missing_ok=True)
 
     # Spawn background: summarize (if no summary yet) + embed + index
     if len(conversation) >= 4:

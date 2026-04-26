@@ -59,9 +59,14 @@ def _session_rules() -> str:
     return rules
 
 
-def get_post_compact_context(cwd: str) -> Optional[str]:
-    """Build context to inject after Claude Code compaction."""
-    project_root = discover_project_root(Path(cwd).resolve())
+def get_post_compact_context(cwd: str, session_id: str = "") -> Optional[str]:
+    """Build context to inject after Claude Code compaction.
+
+    Resolves the project via the session-aware lookup so MCP-activated
+    sessions whose cwd is outside the project still get re-injected.
+    """
+    from .session_recorder import _find_project_root
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return None
     devproject_path = resolve_devproject_path(project_root)
@@ -97,12 +102,15 @@ def register_project(project_root: Path, name: str = "") -> None:
     root_str = str(project_root.resolve())
 
     # Update or add
+    found = False
     for proj in registry:
         if proj.get("path") == root_str:
             if name:
                 proj["name"] = name
-            return
-    registry.append({"path": root_str, "name": name or project_root.name})
+            found = True
+            break
+    if not found:
+        registry.append({"path": root_str, "name": name or project_root.name})
 
     with open(REGISTRY_PATH, "w") as f:
         json.dump({"projects": registry}, f, indent=2)
@@ -148,14 +156,15 @@ def _find_registered_projects() -> List[Path]:
     return sorted(projects)
 
 
-def validate_and_note_staleness(cwd: str) -> Optional[str]:
+def validate_and_note_staleness(cwd: str, session_id: str = "") -> Optional[str]:
     """Run fast file path validation on .devproject post-compaction.
 
     Fixes moved files, flags missing files, and detects new files
     not yet assigned to any feature. Returns a note for Claude if
     the .devproject needs attention.
     """
-    project_root = discover_project_root(Path(cwd).resolve())
+    from .session_recorder import _find_project_root
+    project_root = _find_project_root(cwd, session_id)
     if project_root is None:
         return None
 
@@ -192,16 +201,17 @@ def validate_and_note_staleness(cwd: str) -> Optional[str]:
                  ".rb", ".swift", ".kt", ".c", ".cpp", ".h", ".cs"}
 
     new_files = []
-    for path in project_root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix not in CODE_EXTS:
-            continue
-        if any(part in IGNORED for part in path.relative_to(project_root).parts):
-            continue
-        rel = path.relative_to(project_root).as_posix()
-        if rel not in all_feature_files:
-            new_files.append(rel)
+    # os.walk lets us prune ignored directories in-place, so we never descend
+    # into node_modules / .git / .venv / etc. on a hot PostCompact path.
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED]
+        dir_path = Path(dirpath)
+        for filename in filenames:
+            if not any(filename.endswith(ext) for ext in CODE_EXTS):
+                continue
+            rel = (dir_path / filename).relative_to(project_root).as_posix()
+            if rel not in all_feature_files:
+                new_files.append(rel)
 
     if not fixed and not missing and not new_files:
         return None
