@@ -65,6 +65,51 @@ class TestAutoReasonIntentDetection(unittest.TestCase):
     def test_no_intent_greeting(self):
         self.assertIsNone(self.detect_intent("hey, let's work on reccli"))
 
+    # --- Difficulty axis (auto-surfacing MMC on "more thinking" requests) ---
+
+    def test_difficulty_think_harder(self):
+        # Topic-free phrasing — no debug/planning regex hits — but the user
+        # explicitly asked for more thinking.
+        self.assertEqual(self.detect_intent("think harder about this"), "planning")
+
+    def test_difficulty_more_thinking(self):
+        self.assertEqual(self.detect_intent("give me more thinking on this"), "planning")
+
+    def test_difficulty_im_stuck(self):
+        self.assertEqual(self.detect_intent("I'm stuck on this"), "planning")
+
+    def test_difficulty_ultrathink(self):
+        self.assertEqual(self.detect_intent("ultrathink this for me"), "planning")
+
+    def test_difficulty_explicit_mmc(self):
+        # User literally types the feature name.
+        self.assertEqual(self.detect_intent("use mmc on this one"), "planning")
+
+    def test_difficulty_multiple_angles(self):
+        self.assertEqual(
+            self.detect_intent("look at it from multiple angles"),
+            "planning",
+        )
+
+    def test_difficulty_complex_problem(self):
+        self.assertEqual(
+            self.detect_intent("this is a really complex problem"),
+            "planning",
+        )
+
+    def test_difficulty_does_not_overshadow_debug_topic(self):
+        # When BOTH a topic match AND difficulty signals fire, the topic
+        # wins (existing behavior preserved). "complex bug" has a difficulty
+        # match, but "bug", "crashes", "failing" pull it firmly to debug.
+        self.assertEqual(
+            self.detect_intent("This complex bug crashes the app — failing on every request"),
+            "debug",
+        )
+
+    def test_difficulty_alone_does_not_fire_on_routine_prompt(self):
+        # Sanity: no difficulty signals, no topic — still None.
+        self.assertIsNone(self.detect_intent("rename the file foo.py to bar.py"))
+
     # --- Scaffold output ---
 
     def test_scaffold_returns_text_for_debug(self):

@@ -49,6 +49,43 @@ _MODE_PATTERNS = [
     ('planning', _PLANNING_PATTERNS),
 ]
 
+# Difficulty / "more thinking" indicators. These don't classify the prompt
+# topically — they're meta-signals that the user wants deeper reasoning,
+# regardless of whether the prompt looks like a debug or planning request.
+# Match any of these and we'll fall back to planning-mode MMC (the broader
+# exploration scaffold) so users who say "think harder" / "I'm stuck" /
+# "ultrathink" / "use mmc" actually get parallel reasoning instead of
+# silently falling through detect_intent because their phrasing didn't match
+# a topic regex.
+_DIFFICULTY_PATTERNS = [
+    # Explicit "more thinking" requests
+    r'\bthink\s+(harder|deeper|more|carefully|thoroughly)\b',
+    r'\b(more|deeper|harder)\s+(thinking|thought|reasoning|analysis)\b',
+    r'\bgive\s+(it|me)\s+(more|deeper)\s+thought\b',
+    r'\blet\'?s\s+(really|truly|actually)\s+think\b',
+    r'\b(ultrathink|reason\s+thoroughly)\b',
+
+    # Stuck / circular signals
+    r'\b(stuck|stumped|going\s+in\s+circles|whack-?a-?mole)\b',
+    r"\b(can'?t|cannot)\s+figure\s+(it|this)?\s*out\b",
+    r'\bbeen\s+(at\s+this|trying\s+for)\b',
+
+    # Difficulty-acknowledging phrasing
+    r'\b(complex|tricky|nuanced|subtle|delicate|hard|difficult)\s+'
+    r'(problem|issue|case|question|topic|design|bug|task)\b',
+    r'\b(thorny|gnarly|nasty)\s+(problem|bug|issue|case)\b',
+
+    # Multi-perspective / consensus requests
+    r'\b(multiple|several|different)\s+(approaches|angles|perspectives|lenses|framings)\b',
+    r'\bfrom\s+different\s+angles\b',
+    r'\b(consider\s+all|all\s+the\s+(ways|angles|approaches))\b',
+
+    # Explicit MMC mentions — user-side and agent-side
+    r'\bmmc\b',
+    r'\b(multi-?agent|parallel\s+agents?|multiple\s+models?)\b',
+    r'\b(self-?consistency|consensus\s+sampling)\b',
+]
+
 # ---------------------------------------------------------------------------
 # Auto-Reason scaffolds (used standalone or injected into each MMC agent)
 # ---------------------------------------------------------------------------
@@ -123,11 +160,18 @@ _FRAMINGS = {
 def detect_intent(prompt: str) -> Optional[str]:
     """Detect user intent from prompt text.
 
-    Returns 'debug', 'planning', or None.
-    Uses pattern match count as a score — highest wins.
-    Ties are broken by preferring 'planning' (safer default — the
-    planning scaffold asks for broader exploration, while the debug
-    scaffold assumes something is actually broken).
+    Returns 'debug', 'planning', or None. Two axes are considered:
+
+    1. **Topic axis** (debug / planning) — pattern match count is the score;
+       highest wins. Ties are broken by preferring 'planning' (the broader
+       exploration scaffold; the debug scaffold assumes something is broken).
+
+    2. **Difficulty axis** (``_DIFFICULTY_PATTERNS``) — meta-signals that the
+       user wants more thinking, regardless of topic. When the topic axis
+       finds nothing but difficulty signals are present, fall back to
+       'planning' so prompts like "think harder", "I'm stuck", "ultrathink",
+       or literal "use mmc" actually trigger the MMC scaffold instead of
+       silently falling through.
     """
     text = prompt.lower()
 
@@ -137,15 +181,18 @@ def detect_intent(prompt: str) -> Optional[str]:
         if score > 0:
             scores[mode] = score
 
-    if not scores:
-        return None
+    if scores:
+        # Topic detected — existing tie-broken-by-planning ranking applies.
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        if len(ranked) >= 2 and ranked[0][1] == ranked[1][1]:
+            return 'planning'
+        return ranked[0][0]
 
-    # Sort by score descending; on a tie, require a margin of at least 1
-    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-    if len(ranked) >= 2 and ranked[0][1] == ranked[1][1]:
+    # No topic match — but difficulty signals are present? Default to planning.
+    if any(re.search(p, text) for p in _DIFFICULTY_PATTERNS):
         return 'planning'
 
-    return ranked[0][0]
+    return None
 
 
 def get_reasoning_scaffold(prompt: str) -> Optional[str]:
