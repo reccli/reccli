@@ -70,6 +70,12 @@ Dates below are **first seen in git**, not guaranteed filesystem creation dates.
 | `docs/reference/SETTINGS_AND_AUTH.md` | 2025-10-28 | Current configuration and auth reference | reference | keep | Good operational reference with future notes clearly marked. |
 | `docs/reference/API_KEY_SECURITY.md` | 2025-11-09 | Current API-key storage/security note | reference | keep | Important operational note; keep aligned with code. |
 
+## Integrations
+
+| Path | First seen | Purpose | Bucket | Action | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `docs/integrations/playwright.md` | 2026-04-26 (working tree) | Playwright screenshot/UX-test integration patterns | reference | keep current | Two flavors: Bash + CLI for single-shot iteration, `@playwright/mcp` for persistent context. RecCli does not bundle Playwright; agent installs on demand. |
+
 ## Implementation
 
 | Path | First seen | Purpose | Bucket | Action | Notes |

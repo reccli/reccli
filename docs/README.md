@@ -57,6 +57,13 @@ These are operational or usage-oriented docs.
 - [SETTINGS_AND_AUTH.md](./reference/SETTINGS_AND_AUTH.md)
 - [API_KEY_SECURITY.md](./reference/API_KEY_SECURITY.md)
 
+## Integrations
+
+External tools that pair well with RecCli. These docs anchor the recommended
+pattern so future agents reach for the right thing.
+
+- [playwright.md](./integrations/playwright.md) — screenshot iteration and UX testing on web UIs
+
 ## Implementation
 
 These are subsystem deep dives, optimization notes, and supporting technical material.
