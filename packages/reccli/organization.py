@@ -92,6 +92,7 @@ BLIND_REVIEW_SCHEMA: Dict[str, Any] = {
 }
 
 DEFAULT_CLAUDE_ALLOWED_TOOLS = [
+    "Read", "Glob", "Grep",
     "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
     "Bash(git show*)", "Bash(git rev-parse*)", "Bash(git branch*)",
     "Bash(git ls-files*)", "Bash(git ls-tree*)", "Bash(git grep*)",
@@ -104,6 +105,9 @@ DEFAULT_CLAUDE_ALLOWED_TOOLS = [
     "Bash(pnpm run *)", "Bash(yarn test*)", "Bash(yarn run *)",
     "Bash(bun test*)", "Bash(bun run *)", "Bash(cargo test*)",
     "Bash(go test*)", "Bash(pytest*)", "Bash(python -m pytest*)",
+    "Bash(python3 -m pytest*)", "Bash(.venv/bin/python -m pytest*)",
+    "Bash(.venv/bin/python scripts/* --check*)",
+    "Bash(python scripts/* --check*)", "Bash(python3 scripts/* --check*)",
     "Bash(make test*)",
 ]
 
@@ -718,7 +722,7 @@ class SubscriptionSession:
         args = [
             "claude", "-p", "--output-format", "stream-json", "--verbose",
             "--json-schema", json.dumps(schema),
-            "--permission-mode", "acceptEdits" if self.writable else "plan",
+            "--permission-mode", "acceptEdits" if self.writable else "dontAsk",
         ]
         if self.session_id:
             args += ["--resume", self.session_id]
@@ -729,9 +733,8 @@ class SubscriptionSession:
         args += ["--effort", "low" if self.reasoning == "minimal" else self.reasoning]
         for directory in self.workspace.additional_directories:
             args += ["--add-dir", str(directory)]
-        if self.writable:
-            args += ["--allowedTools", *DEFAULT_CLAUDE_ALLOWED_TOOLS]
-        else:
+        args += ["--allowedTools", *DEFAULT_CLAUDE_ALLOWED_TOOLS]
+        if not self.writable:
             args += ["--disallowedTools", "Edit", "Write", "NotebookEdit"]
         if self.fresh:
             args += ["--setting-sources", "project", "--no-session-persistence", "--disable-slash-commands"]
@@ -2094,6 +2097,7 @@ class OrganizationRunner:
         self.control_protocol = "reccli.organization-control.v1"
         self.paused = False
         self.integrated_candidates: Dict[str, str] = {}
+        self.candidate_kinds: Dict[str, Dict[str, Any]] = {}
 
     def run(self) -> Dict[str, Any]:
         if not self.mission:
@@ -3000,6 +3004,73 @@ class OrganizationRunner:
             )
         return proc
 
+    def _stage_literal_paths(
+        self,
+        workspace: Workspace,
+        paths: Set[str],
+        *,
+        force: bool = False,
+    ) -> None:
+        """Stage only paths already observed by the host.
+
+        Worktrees may contain ignored runtime bridges such as `.venv`.  A broad
+        `git add -A .` asks Git to reconsider those paths even when exclusion
+        pathspecs are present.  Literal, host-enumerated pathspecs keep runtime
+        plumbing outside candidate identity and also avoid provider-controlled
+        pathspec magic.
+        """
+        ordered = sorted(paths)
+        for start in range(0, len(ordered), 128):
+            args = ["add", "-A"]
+            if force:
+                args.append("-f")
+            args.extend([
+                "--",
+                *(f":(literal){path}" for path in ordered[start:start + 128]),
+            ])
+            self._host_git(workspace, args)
+
+    def _candidate_record(
+        self,
+        workspace: Workspace,
+        candidate: str,
+    ) -> Dict[str, Any]:
+        cached = self.candidate_kinds.get(candidate)
+        if cached is not None:
+            return cached
+        base = (
+            workspace.base_commit
+            or self.caller_head
+            or _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
+        )
+        exists = self._host_git(
+            workspace,
+            ["cat-file", "-e", f"{candidate}^{{commit}}"],
+            check=False,
+        )
+        if exists.returncode != 0:
+            record = {"candidate": candidate, "kind": "unknown", "paths": []}
+            self.candidate_kinds[candidate] = record
+            return record
+        paths = sorted(self._git_paths(
+            workspace,
+            ["diff", "--name-only", "-z", f"{base}..{candidate}"],
+        ))
+        if any(not self._artifact_path(path) for path in paths):
+            kind = "implementation"
+        elif paths:
+            kind = "artifact-only"
+        else:
+            kind = "identity-only"
+        record = {
+            "candidate": candidate,
+            "kind": kind,
+            "paths": paths,
+            "base": base,
+        }
+        self.candidate_kinds[candidate] = record
+        return record
+
     @staticmethod
     def _reply_uses_host_candidate(reply: Dict[str, Any]) -> bool:
         return (
@@ -3013,7 +3084,7 @@ class OrganizationRunner:
     @staticmethod
     def _resolve_reply_candidate(
         reply: Dict[str, Any],
-        candidate: str,
+        candidate: Optional[str],
         *,
         previous_heads: Optional[Set[str]] = None,
         rewrite_previous_candidates: bool = False,
@@ -3050,12 +3121,7 @@ class OrganizationRunner:
         uses_marker = self._reply_uses_host_candidate(reply)
         provider_head = _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
         if agent.write_scope == "workspace":
-            pathspecs = ["."]
-            for runtime in sorted(workspace.runtime_paths):
-                pathspecs.extend([
-                    f":(exclude){runtime}",
-                    f":(exclude){runtime}/**",
-                ])
+            excluded_roots: Set[str] = {self.artifact_staging_prefix}
             for raw in reply.get("artifacts", []):
                 supplied = Path(raw).expanduser()
                 source = supplied if supplied.is_absolute() else workspace.cwd / supplied
@@ -3065,11 +3131,15 @@ class OrganizationRunner:
                     ).as_posix()
                 except ValueError:
                     continue
-                pathspecs.extend([
-                    f":(exclude){relative}",
-                    f":(exclude){relative}/**",
-                ])
-            self._host_git(workspace, ["add", "-A", "--", *pathspecs])
+                excluded_roots.add(relative)
+            normal_paths = {
+                path for path in self._uncommitted_paths(workspace)
+                if not any(
+                    path == root or path.startswith(root + "/")
+                    for root in excluded_roots
+                )
+            }
+            self._stage_literal_paths(workspace, normal_paths)
         elif agent.write_scope in {"artifacts", "integration"}:
             artifact_root = workspace.cwd / self.artifact_staging_prefix
             tracked_artifacts = _git(
@@ -3118,11 +3188,15 @@ class OrganizationRunner:
         else:
             head = _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
 
+        candidate_record = self._candidate_record(workspace, head)
+        is_implementation = candidate_record["kind"] == "implementation"
         self._resolve_reply_candidate(
             reply,
-            head,
+            head if is_implementation else None,
             previous_heads={previous_head, provider_head},
             rewrite_previous_candidates=(
+                is_implementation
+                and
                 agent.agent_id in (
                     set(self.topology.worker_ids)
                     | {self.topology.finalizer_id}
@@ -3138,7 +3212,17 @@ class OrganizationRunner:
                 agent_id=agent.agent_id,
                 candidate=head,
                 empty=create_empty_identity,
+                candidate_kind=candidate_record["kind"],
+                changed_paths=candidate_record["paths"],
             )
+            self._append_jsonl("candidates.jsonl", {
+                "runId": self.run_id,
+                "round": round_number,
+                "agentId": agent.agent_id,
+                **candidate_record,
+                "empty": create_empty_identity,
+                "ts": _utc_now(),
+            })
         return head
 
     def _sync_reviewed_candidates(
@@ -3823,6 +3907,30 @@ Return only the schema-constrained reply. Every message must include candidate, 
     def _deliver_message(self, sender: str, message: Dict[str, Any], round_number: int) -> None:
         recipient = message.get("to", "")
         tag = message.get("tag", "")
+        candidate = message.get("candidate")
+        if (
+            candidate
+            and tag in {"handoff", "review", "decision"}
+            and sender in self.workspaces
+        ):
+            candidate_record = self._candidate_record(
+                self.workspaces[sender], str(candidate),
+            )
+            if candidate_record["kind"] in {"artifact-only", "identity-only"}:
+                self.dropped_messages += 1
+                self._append_jsonl("messages.jsonl", {
+                    "round": round_number,
+                    "from": sender,
+                    **message,
+                    "status": "dropped",
+                    "reason": (
+                        f"{candidate_record['kind']} commit {candidate} is a "
+                        "durable report identity, not an implementation "
+                        "candidate eligible for review or integration"
+                    ),
+                    "ts": _utc_now(),
+                })
+                return
         allowed, reason = self.topology.can_route(sender, recipient, tag)
         if not allowed:
             self.dropped_messages += 1

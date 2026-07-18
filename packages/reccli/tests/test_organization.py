@@ -349,6 +349,45 @@ print(json.dumps({{'type': 'result', 'is_error': False, 'session_id': sid, 'stru
             self.assertNotIn("tool_use", persisted_stdout)
             self.assertNotIn("thinking", persisted_stdout)
 
+    def test_claude_read_only_reviewer_can_run_verification_without_edit_tools(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            log_path = root / "claude_args.json"
+            executable = bin_dir / "claude"
+            executable.write_text(f"""#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+sid = args[args.index('--session-id') + 1]
+Path({str(log_path)!r}).write_text(json.dumps(args))
+print(json.dumps({{'type': 'result', 'is_error': False, 'session_id': sid, 'structured_output': {_reply()!r}, 'usage': {{}}}}))
+""", encoding="utf-8")
+            executable.chmod(0o755)
+            env_path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            session = SubscriptionSession(
+                "claude", self._workspace(root), False, "auditor", root,
+            )
+            with patch.dict(os.environ, {"PATH": env_path}):
+                session.run("verify", AGENT_REPLY_SCHEMA, 10)
+            invocation = json.loads(log_path.read_text(encoding="utf-8"))
+            mode_index = invocation.index("--permission-mode")
+            self.assertEqual(invocation[mode_index + 1], "dontAsk")
+            self.assertIn("--allowedTools", invocation)
+            self.assertIn("Read", invocation)
+            self.assertIn("Glob", invocation)
+            self.assertIn("Grep", invocation)
+            self.assertIn("Bash(.venv/bin/python -m pytest*)", invocation)
+            self.assertIn(
+                "Bash(.venv/bin/python scripts/* --check*)", invocation,
+            )
+            disallowed_index = invocation.index("--disallowedTools")
+            self.assertEqual(
+                invocation[disallowed_index + 1:disallowed_index + 4],
+                ["Edit", "Write", "NotebookEdit"],
+            )
+
     def test_codex_session_resumes_with_output_schema(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -785,6 +824,66 @@ class OrganizationProjectTests(unittest.TestCase):
                 "print('host materialized')\n",
             )
 
+    def test_host_materialization_ignores_runtime_bridge_and_stages_explicit_paths(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            (root / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".gitignore"], cwd=root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "ignore runtime"],
+                cwd=root, check=True,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            bridge = root / ".venv" / "bin"
+            bridge.mkdir(parents=True)
+            (bridge / "python").symlink_to(Path(sys.executable))
+            runner = OrganizationRunner(
+                root, "Create a reversible candidate.", "codex",
+                "scientific", "runtime-safe-candidate", Path(td) / "run",
+            )
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [], base, {".venv"},
+            )
+            session = Mock()
+
+            def edit_without_git(*_args, **_kwargs):
+                (root / "app.py").write_text(
+                    "print('runtime-safe')\n", encoding="utf-8",
+                )
+                reply = _reply("candidate ready")
+                reply["messages"] = [{
+                    "to": "manager-a", "tag": "handoff",
+                    "content": "Review the runtime-safe candidate.",
+                    "candidate": HOST_CANDIDATE,
+                    "workItem": "runtime-safe", "risk": "high",
+                }]
+                return {
+                    "value": reply, "session_id": "codex-worker",
+                    "usage": {},
+                }
+
+            session.run.side_effect = edit_without_git
+            session.provider = "codex"
+            runner.sessions["worker-a"] = session
+            result = runner._run_turn(
+                runner.topology.agent("worker-a"), 3,
+            )
+            candidate = result["reply"]["messages"][0]["candidate"]
+            changed = subprocess.run(
+                ["git", "diff-tree", "--no-commit-id", "--name-only", "-r",
+                 candidate],
+                cwd=root, check=True, capture_output=True, text=True,
+            ).stdout.splitlines()
+            self.assertEqual(changed, ["app.py"])
+            self.assertNotIn(".venv", "\n".join(changed))
+
     def test_host_integrates_reviewed_candidate_without_provider_git(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "project"
@@ -970,6 +1069,37 @@ class OrganizationProjectTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "may write only"):
                 runner._run_turn(artifact_agent, 1)
 
+    def test_read_only_reviewer_execution_still_rejects_source_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner = OrganizationRunner(
+                root, "Audit without mutation.", "claude",
+                "scientific", "read-only-audit", Path(td) / "run",
+            )
+            runner.workspaces["manager-c"] = Workspace(
+                root, "manager-c", "main", root, [], base,
+            )
+            session = Mock()
+
+            def mutate_source(*_args, **_kwargs):
+                (root / "app.py").write_text(
+                    "print('forbidden reviewer edit')\n", encoding="utf-8",
+                )
+                return {"value": _reply(), "session_id": "audit", "usage": {}}
+
+            session.run.side_effect = mutate_source
+            session.provider = "claude"
+            runner.sessions["manager-c"] = session
+            with self.assertRaisesRegex(RuntimeError, "read-only but changed"):
+                runner._run_turn(
+                    runner.topology.agent("manager-c"), 3,
+                )
+
     def test_artifact_only_scope_accepts_run_artifact(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1003,6 +1133,74 @@ class OrganizationProjectTests(unittest.TestCase):
             runner.sessions["manager-d"] = session
             result = runner._run_turn(artifact_agent, 1)
             self.assertEqual(result["reply"]["summary"], "ok")
+
+    def test_artifact_only_commit_is_not_rewritten_or_routed_as_code_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            run_dir = root / "devsession" / "agent-organizations" / "scope-run"
+            runner = OrganizationRunner(
+                root, "Publish a sandbox report.", "claude",
+                "scientific", "scope-run", run_dir,
+            )
+            artifact_agent = AgentSpec(
+                "manager-d", "artifact-only test role", "Write only the report.",
+                True, "medium", "artifacts",
+            )
+            runner.workspaces["manager-d"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [], base,
+            )
+            session = Mock()
+
+            def write_artifact(*_args, **_kwargs):
+                report = root / runner.artifact_staging_prefix / "takeover.md"
+                report.parent.mkdir(parents=True)
+                report.write_text("# Takeover\n", encoding="utf-8")
+                reply = _reply("report ready")
+                reply["messages"] = [{
+                    "to": "manager-c", "tag": "review",
+                    "content": "Review this durable report identity.",
+                    "candidate": HOST_CANDIDATE,
+                    "workItem": "report-only", "risk": "high",
+                }]
+                return {"value": reply, "session_id": "scope", "usage": {}}
+
+            session.run.side_effect = write_artifact
+            session.provider = "claude"
+            runner.sessions["manager-d"] = session
+            result = runner._run_turn(artifact_agent, 1)
+            self.assertIsNone(
+                result["reply"]["messages"][0]["candidate"],
+            )
+            artifact_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            self.assertEqual(
+                runner.candidate_kinds[artifact_head]["kind"],
+                "artifact-only",
+            )
+
+            runner._deliver_message("worker-a", {
+                "to": "manager-a", "tag": "handoff",
+                "content": "Do not route a report commit as implementation.",
+                "candidate": artifact_head,
+                "workItem": "report-only", "risk": "high",
+            }, 1)
+            self.assertNotIn(artifact_head, runner.governance.assignments)
+            dropped = [
+                json.loads(line)
+                for line in (run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(dropped[-1]["status"], "dropped")
+            self.assertIn("not an implementation candidate", dropped[-1]["reason"])
 
     def test_integration_scope_accepts_only_a_reviewed_non_vetoed_patch_identity(self):
         with tempfile.TemporaryDirectory() as td:
