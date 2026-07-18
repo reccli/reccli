@@ -83,6 +83,7 @@ writes to, or operates on the file formats those specs describe.
 | `steer_organization` | Queues an idempotent human message for an exact agent or role group. The worker applies it at the next safe round boundary and records a separate acknowledgement. |
 | `pause_organization` / `resume_organization` | Request a pause after the active synchronized round or resume from that boundary. Request and acknowledgement remain distinct. |
 | `open_organization_console` | Starts the token-protected, localhost-only Next.js organization console. Initial dependency install/build is automatic. |
+| `approve_organization` | Approves one exact hash-bound terminal packet. Checkpoint approvals start a fresh successor with the signed decision as evidence; verified promotions fast-forward the clean local branch. No remote push occurs. |
 | `cancel_organization` | Writes a durable cancellation marker and reconciles it with process-group liveness, signalling a still-live detached supervisor and native CLI children even when status already says `cancelled`. |
 
 ### Reasoning scaffolds
@@ -175,7 +176,10 @@ worktree:
   proposal, import canonical attempts, change authority, or declare visual
   acceptance. A separately reviewed artifact dossier may end the run with
   `completed_no_promotion`; it creates no promotion candidate or canonical
-  effect.
+  effect. When human authority is the sole remaining dependency, a reviewed
+  dossier may end as `completed_pending_human`. The console stages its evidence
+  and exact action; approval starts a fresh successor rather than resuming the
+  terminal supervisor.
 
   Event-driven topologies enforce lead reconnaissance followed by a manager
   delegation barrier. A worker's first turn requires a primary-manager

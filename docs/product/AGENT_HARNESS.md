@@ -238,11 +238,15 @@ finish existing review, manager routing, host integration, release review, and
 finalization. Increase `max_rounds` explicitly for unusually large missions
 rather than treating eight as a total-agent-call budget.
 
-The release manager has two reviewed terminal dispositions. `promote` produces
-the normal reversible promotion package. `no_promotion` binds an exact durable
+The release manager has three reviewed terminal dispositions. `promote`
+produces the normal reversible promotion package. `no_promotion` binds an exact durable
 run-artifact dossier, requires the same lead and rotating-review approvals, and
 ends the run as `completed_no_promotion` without exporting or promoting code.
-This lets a conclusive negative result stop before exhausting closeout rounds;
+`pending_human` binds an exact reviewed approval dossier and ends as
+`completed_pending_human` when reversible work is complete but sponsor
+authority is still required. Approval records the exact request and starts a
+fresh successor rather than reviving a terminal process. These dispositions
+stop conclusive or authority-blocked work before exhausting closeout rounds;
 ordinary unfinished work still ends `round_limit` or `stalled`.
 
 ### Native provider assignment

@@ -51,6 +51,7 @@ Claude Code setup configures both the MCP server and lifecycle hooks for session
 | `steer_organization` | Queue a human message for an agent or role group at the next safe boundary |
 | `pause_organization` / `resume_organization` | Stop or continue between synchronized rounds |
 | `open_organization_console` | Launch the localhost Next.js viewer and steering console |
+| `approve_organization` | Approve one exact staged decision packet; starts a fresh successor or applies a verified candidate locally without remote push |
 | `cancel_organization` | Cancel the supervisor and its active native-agent subprocesses |
 
 ### Multi-agent organization runs
@@ -102,6 +103,16 @@ Git and bound to exact candidates;
 completion emits a human-authorized promotion request rather than changing the
 caller's canonical branch or archive.
 
+When human authority is the only remaining dependency, the release manager can
+finish with `pending_human`. RecCli terminates the run as
+`completed_pending_human` and stages a hash-bound approval packet instead of
+burning rounds while waiting. The console shows the dossier, exact Git
+identity, evidence, limits, and button effect on one page. Approval never wakes
+the terminal supervisor: a checkpoint decision starts a fresh successor with
+the signed decision in its immutable evidence, while an approved verified
+promotion fast-forwards only the clean local branch. Neither action pushes a
+remote.
+
 Run-scoped reports and generated deliverables use a temporary tracked staging
 prefix for immutable review, then RecCli exports the verified blobs to the
 ignored run directory's `deliverables/` folder with a hash manifest. Completed
@@ -115,6 +126,8 @@ Run `reccli organization console --project-root /path/to/project` for the local
 two-pane console: select a team member in the top rail, steer them from the left
 operator chat, and watch all eight team work streams on the right. See
 [`docs/integrations/organization-console.md`](docs/integrations/organization-console.md).
+The approval staging area can enable browser notifications so a completed run
+can call attention to a waiting decision while the console is open.
 
 The runner calls the installed `claude` or `codex` executable and reuses that
 CLI's subscription authentication. It does not require Anthropic/OpenAI API

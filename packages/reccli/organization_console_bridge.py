@@ -12,6 +12,7 @@ import sys
 from typing import Any, Dict
 
 from .organization_control import (
+    approve_organization_request,
     cancel_organization_run,
     list_organization_runs,
     organization_snapshot,
@@ -56,6 +57,14 @@ def dispatch(payload: Dict[str, Any]) -> Dict[str, Any]:
             tag=str(payload.get("tag") or "plan"),
             idempotency_key=payload.get("idempotency_key"),
             requested_by="organization-console",
+        )
+    if command == "approve":
+        return approve_organization_request(
+            working_directory,
+            run_id,
+            request_sha256=payload.get("request_sha256"),
+            idempotency_key=payload.get("idempotency_key"),
+            requested_by="organization-console-human",
         )
     raise ValueError(f"unknown bridge command: {command}")
 

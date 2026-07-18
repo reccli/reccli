@@ -4,6 +4,7 @@ const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 export async function callBridge(
   payload: Record<string, unknown>,
+  timeoutMs = 15_000,
 ): Promise<Record<string, unknown>> {
   const python = process.env.RECCLI_PYTHON || "python3";
   const projectRoot = process.env.RECCLI_PROJECT_ROOT;
@@ -21,6 +22,11 @@ export async function callBridge(
     "PATH",
     "PYTHONPATH",
     "PYTHONHOME",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "RECCLI_HOST",
     "LANG",
     "LC_ALL",
     "SYSTEMROOT",
@@ -43,7 +49,7 @@ export async function callBridge(
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new Error("RecCli bridge timed out"));
-    }, 15_000);
+    }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_OUTPUT_BYTES) {

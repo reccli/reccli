@@ -1151,44 +1151,14 @@ def start_organization(
             context_manifest=context_manifest,
             max_experiments=max_experiments,
         )
-        run_dir = Path(request["run_dir"])
-        stdout_handle = (run_dir / "worker_stdout.txt").open("a", encoding="utf-8")
-        stderr_handle = (run_dir / "worker_stderr.txt").open("a", encoding="utf-8")
-        try:
-            import subprocess
+        from .organization_launch import launch_organization_worker
 
-            process = subprocess.Popen(
-                [sys.executable, "-m", "reccli.organization_worker", str(run_dir / "request.json")],
-                cwd=request["project_root"],
-                env=os.environ.copy(),
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_handle,
-                stderr=stderr_handle,
-                start_new_session=True,
-            )
-        finally:
-            stdout_handle.close()
-            stderr_handle.close()
-
-        # Publish supervisor identity separately. The worker owns status.json;
-        # avoiding two writers prevents a fast worker from having a terminal
-        # status overwritten by the MCP parent after Popen returns.
-        (run_dir / "supervisor.json").write_text(json.dumps({
-            "pid": process.pid,
-            "run_id": request["run_id"],
-            "started_at": request["created_at"],
-        }, indent=2) + "\n", encoding="utf-8")
-        from .hooks.session_recorder import register_bg_task
-        register_bg_task(
-            Path(request["project_root"]),
-            process.pid,
-            f"organization:{request['run_id']}",
-        )
+        launched = launch_organization_worker(request)
         return json.dumps({
             "status": "starting",
             "run_id": request["run_id"],
             "run_dir": request["run_dir"],
-            "pid": process.pid,
+            "pid": launched["pid"],
             "provider": request["provider"],
             "provider_requested": request["provider_requested"],
             "host_provider": request["host_provider"],
@@ -1245,6 +1215,46 @@ def organization_status(
         return json.dumps(payload, indent=2, ensure_ascii=False)
     except Exception as exc:
         return json.dumps({"status": "status_error", "run_id": run_id, "error": str(exc)}, indent=2)
+
+
+@mcp.tool()
+def approve_organization(
+    working_directory: str,
+    run_id: str,
+    request_sha256: str,
+    idempotency_key: str,
+) -> str:
+    """Approve one exact organization packet and execute its declared action.
+
+    The approval request must already be staged by a terminal organization.
+    RecCli revalidates the request hash, exact Git checkpoint, and clean
+    repository before acting. Checkpoint approvals start a fresh successor run;
+    verified code promotions fast-forward only the clean local branch. This
+    tool never revives a terminal supervisor and never pushes a remote.
+
+    Args:
+        working_directory: Project root or any path inside the project.
+        run_id: Terminal run containing the staged approval request.
+        request_sha256: Exact hash shown by organization_status or the console.
+        idempotency_key: Caller-stable key preventing duplicate execution.
+    """
+    try:
+        from .organization_control import approve_organization_request
+
+        result = approve_organization_request(
+            working_directory,
+            run_id,
+            request_sha256=request_sha256,
+            idempotency_key=idempotency_key,
+            requested_by="mcp-human-operator",
+        )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({
+            "status": "approval_error",
+            "run_id": run_id,
+            "error": str(exc),
+        }, indent=2)
 
 
 @mcp.tool()
@@ -1407,6 +1417,9 @@ def open_organization_console(
             )
         finally:
             log_handle.close()
+        from .organization_launch import reap_detached_process
+
+        reap_detached_process(process, label="org-console")
         from .hooks.session_recorder import register_bg_task
 
         register_bg_task(root, process.pid, f"organization-console:{int(port)}")

@@ -30,6 +30,28 @@ Claude Code and Codex can also call `open_organization_console`.
 - Hidden model reasoning is never exposed. Only durable operational records are
   displayed.
 
+## Approval staging
+
+When the only remaining dependency is human authority, the release manager
+writes a reviewed dossier and closes the run as `completed_pending_human`.
+The console renders a single approval page containing:
+
+- the exact request hash, Git checkpoint, and report or promotion candidate;
+- the lead conclusion, evidence and tests, blockers, and authorization limits;
+- text previews plus immutable Git blob identities for staged dossiers; and
+- the exact local effect of the approval button, including whether remote push
+  is disabled.
+
+`Approve & start successor` records an immutable human decision and launches a
+fresh organization with that decision in its read-only evidence. It never
+revives the stopped supervisor. `Approve & apply locally` revalidates a fully
+verified promotion request and fast-forwards only a clean local branch. RecCli
+does not push a remote from either action.
+
+The panel can enable browser notifications. Once permission is granted, the
+console sends one local notification per request hash so a waiting decision is
+visible without constant polling of the page.
+
 ## Terminal lead conclusion
 
 Every run that reaches a terminal state publishes:
@@ -39,8 +61,9 @@ devsession/agent-organizations/<run-id>/run-conclusion.json
 devsession/agent-organizations/<run-id>/run-conclusion.md
 ```
 
-For normal completion, reviewed `completed_no_promotion`, round-limit, and
-stalled outcomes, RecCli gives the organization lead one final read-only
+For normal completion, reviewed `completed_no_promotion`,
+`completed_pending_human`, round-limit, and stalled outcomes, RecCli gives the
+organization lead one final read-only
 synthesis pass outside the configured working-round and closeout budgets. The
 report separates accomplishments, conclusive findings, evidence, scientific or
 product blockers, infrastructure failures, unresolved work, exact candidates,

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from reccli.organization import OrganizationRunner, get_topology
 from reccli.organization_console_bridge import dispatch
 from reccli.organization_control import (
     acknowledge_control_request,
+    approve_organization_request,
     list_organization_runs,
     organization_snapshot,
     pending_control_requests,
@@ -155,6 +157,244 @@ class OrganizationCliBootstrapTests(unittest.TestCase):
 
 
 class OrganizationControlTests(unittest.TestCase):
+    def test_verified_promotion_approval_fast_forwards_only_local_branch(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            run_dir = _make_run(root, run_id="promotion-approval")
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            candidate_worktree = Path(td) / "candidate"
+            subprocess.run(
+                [
+                    "git", "worktree", "add", "-q", "-b",
+                    "reccli-test-proposal", str(candidate_worktree), base,
+                ],
+                cwd=root,
+                check=True,
+            )
+            (candidate_worktree / "app.py").write_text(
+                "print('approved')\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", "app.py"],
+                cwd=candidate_worktree,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-c", "user.name=Test",
+                    "-c", "user.email=test@example.com",
+                    "commit", "-qm", "verified candidate",
+                ],
+                cwd=candidate_worktree,
+                check=True,
+            )
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=candidate_worktree,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            status_path = run_dir / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["status"] = "completed"
+            status_path.write_text(
+                json.dumps(status, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            request = {
+                "schema": "reccli.organization-approval-request.v1",
+                "version": 1,
+                "created_at": "2026-07-18T00:00:00Z",
+                "run_id": "promotion-approval",
+                "request_kind": "candidate_promotion",
+                "title": "Verified candidate",
+                "question": "Apply it locally?",
+                "status": "awaiting_human_authorization",
+                "canonical_effects_applied": False,
+                "base_commit": base,
+                "verified_candidate": candidate,
+                "proposed_promotion_candidate": candidate,
+                "proposed_promotion_branch": "reccli-test-proposal",
+                "changed_paths": ["app.py"],
+                "action": {
+                    "type": "fast_forward_local",
+                    "remote_push": False,
+                },
+                "authorization_required_for": ["local fast-forward"],
+            }
+            canonical = json.dumps(
+                request,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
+            (run_dir / "promotion-request.json").write_text(
+                json.dumps(request, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            approved = approve_organization_request(
+                str(root),
+                "promotion-approval",
+                request_sha256=request["request_sha256"],
+                idempotency_key="promotion-click-1",
+                requested_by="test-human",
+            )
+
+            self.assertEqual(approved["status"], "applied")
+            self.assertEqual(approved["action"], "fast_forward_local")
+            self.assertFalse(approved["remote_push"])
+            self.assertEqual(approved["applied_commit"], candidate)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip(),
+                candidate,
+            )
+
+    def test_terminal_approval_starts_fresh_successor_from_exact_packet(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root, run_id="approval-run")
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            status_path = run_dir / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["status"] = "completed_pending_human"
+            status_path.write_text(
+                json.dumps(status, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            request = {
+                "schema": "reccli.organization-approval-request.v1",
+                "version": 1,
+                "created_at": "2026-07-18T00:00:00Z",
+                "run_id": "approval-run",
+                "request_kind": "checkpoint_continuation",
+                "title": "Checkpoint approval",
+                "question": "Approve this exact checkpoint?",
+                "status": "awaiting_human_authorization",
+                "canonical_effects_applied": False,
+                "base_commit": head,
+                "report_candidate": head,
+                "action": {
+                    "type": "start_successor",
+                    "remote_push": False,
+                },
+                "continuation": {
+                    "provider": "claude",
+                    "topology": "scientific",
+                    "max_rounds": 8,
+                    "max_concurrency": 5,
+                    "turn_timeout_seconds": 1200,
+                    "model": "auto",
+                    "evidence_paths": [],
+                    "protected_paths": [],
+                    "context_manifest": None,
+                    "max_experiments": 3,
+                },
+                "original_mission": "Qualify the system.",
+                "authorization_limits": ["Exact request only."],
+            }
+            canonical = json.dumps(
+                request,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
+            (run_dir / "approval-request.json").write_text(
+                json.dumps(request, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            staged = organization_snapshot(str(root), "approval-run")
+            self.assertTrue(staged["approval_capabilities"]["approve"])
+            self.assertEqual(
+                staged["approval_request"]["request_sha256"],
+                request["request_sha256"],
+            )
+            successor_dir = (
+                root / "devsession" / "agent-organizations" / "successor"
+            )
+            captured = {}
+
+            def fake_create_run_request(**kwargs):
+                captured.update(kwargs)
+                successor_dir.mkdir(parents=True)
+                result = {
+                    "run_id": "successor",
+                    "run_dir": str(successor_dir),
+                    "project_root": str(root),
+                    "created_at": "2026-07-18T00:01:00Z",
+                }
+                (successor_dir / "status.json").write_text(
+                    json.dumps({"status": "starting"}) + "\n",
+                    encoding="utf-8",
+                )
+                return result
+
+            with (
+                patch(
+                    "reccli.organization.create_run_request",
+                    side_effect=fake_create_run_request,
+                ),
+                patch(
+                    "reccli.organization_launch.launch_organization_worker",
+                    return_value={"pid": 4321},
+                ),
+            ):
+                approved = approve_organization_request(
+                    str(root),
+                    "approval-run",
+                    request_sha256=request["request_sha256"],
+                    idempotency_key="approval-click-1",
+                    requested_by="test-human",
+                )
+
+            self.assertEqual(approved["status"], "applied")
+            self.assertEqual(approved["action"], "start_successor")
+            self.assertEqual(approved["successor_run_id"], "successor")
+            self.assertIn(
+                str((run_dir / "approval" / "decision.json").resolve()),
+                captured["evidence_paths"],
+            )
+            self.assertIn("Human-approved continuation", captured["mission"])
+            decision = json.loads(
+                (run_dir / "approval" / "decision.json").read_text(
+                    encoding="utf-8",
+                ),
+            )
+            self.assertEqual(decision["decision"], "approved")
+            self.assertEqual(
+                decision["request_sha256"],
+                request["request_sha256"],
+            )
+            successor_request = json.loads(
+                (successor_dir / "request.json").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(successor_request["parent_run_id"], "approval-run")
+
     def test_process_activity_tracks_actual_native_agent_not_logical_state(self):
         run_dir = Path("/tmp/control-run")
         process_listing = subprocess.CompletedProcess(

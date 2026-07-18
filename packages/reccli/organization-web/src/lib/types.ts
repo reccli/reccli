@@ -16,6 +16,7 @@ export interface RunSummary {
   human_promotion_required?: boolean;
   process_live?: boolean | null;
   control_protocol?: string | null;
+  approval_pending?: boolean;
 }
 
 export interface AgentRecord {
@@ -122,6 +123,58 @@ export interface RunConclusion {
   };
 }
 
+export interface ApprovalRequest {
+  schema?: string;
+  version?: number;
+  run_id?: string;
+  request_kind?: "checkpoint_continuation" | "candidate_promotion" | string;
+  title?: string;
+  question?: string;
+  status?: string;
+  created_at?: string;
+  request_sha256: string;
+  base_commit?: string;
+  report_candidate?: string;
+  report_kind?: string;
+  report_paths?: string[];
+  report_files?: Array<{
+    path: string;
+    git_blob?: string;
+    content?: string;
+    truncated?: boolean;
+  }>;
+  proposed_promotion_candidate?: string;
+  proposed_promotion_branch?: string;
+  changed_paths?: string[];
+  action?: {
+    type?: "start_successor" | "fast_forward_local" | string;
+    effect?: string;
+    remote_push?: boolean;
+  };
+  conclusion?: Partial<RunConclusion>;
+  authorization_limits?: string[];
+  authorization_required_for?: string[];
+}
+
+export interface ApprovalDecision {
+  decision?: string;
+  decided_by?: string;
+  decided_at?: string;
+  decision_sha256?: string;
+  request_sha256?: string;
+}
+
+export interface ApprovalExecution {
+  status?: "processing" | "applied" | "failed" | string;
+  action?: string;
+  error?: string;
+  successor_run_id?: string;
+  successor_run_dir?: string;
+  applied_commit?: string;
+  completed_at?: string;
+  remote_push?: boolean;
+}
+
 export interface RunSnapshot {
   run_id: string;
   run_dir: string;
@@ -179,6 +232,13 @@ export interface RunSnapshot {
   dropped_messages?: number;
   human_promotion_required?: boolean;
   promotion_request?: Record<string, unknown> | null;
+  approval_request?: ApprovalRequest | null;
+  approval_decision?: ApprovalDecision | null;
+  approval_execution?: ApprovalExecution | null;
+  approval_capabilities?: {
+    approve: boolean;
+    action?: string | null;
+  };
   artifact_manifest?: Record<string, unknown> | null;
   conclusion?: RunConclusion | null;
 }

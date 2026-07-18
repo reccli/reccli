@@ -36,7 +36,7 @@ MESSAGE_TAGS = {
 DELEGATION_TAGS = {"plan", "handoff", "review"}
 RISKS = {"routine", "high", "release"}
 STATES = {"working", "idle", "blocked", "done"}
-DISPOSITIONS = {"continue", "promote", "no_promotion"}
+DISPOSITIONS = {"continue", "promote", "no_promotion", "pending_human"}
 ARTIFACT_STAGING_ROOT = ".reccli-org-artifacts"
 CONTEXT_PACK_SCHEMA = "reccli.organization-context-packs.v1"
 HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
@@ -122,6 +122,7 @@ RUN_CONCLUSION_SCHEMA: Dict[str, Any] = {
             "type": "string",
             "enum": [
                 "ready_for_human_review",
+                "awaiting_human_approval",
                 "verified",
                 "not_ready",
                 "no_candidate",
@@ -1313,7 +1314,10 @@ def validate_agent_reply(value: Any) -> Dict[str, Any]:
     if value["disposition"] not in DISPOSITIONS:
         raise ValueError("invalid terminal disposition")
     if value["final"] and value["disposition"] == "continue":
-        raise ValueError("a final reply requires promote or no_promotion disposition")
+        raise ValueError(
+            "a final reply requires promote, no_promotion, or pending_human "
+            "disposition"
+        )
     for message in value["messages"]:
         if not isinstance(message, dict):
             raise ValueError("message must be an object")
@@ -2397,6 +2401,7 @@ class OrganizationRunner:
         artifact_manifest: Optional[Dict[str, Any]] = None
         promotion_request: Optional[Dict[str, Any]] = None
         no_promotion_report: Optional[str] = None
+        pending_human_report: Optional[str] = None
         status = "round_limit"
         rounds = 0
 
@@ -2557,7 +2562,7 @@ class OrganizationRunner:
                     self.states[agent.agent_id] = "working"
                     self._event("finalization.rejected", round_number, agent_id=agent.agent_id, candidate=candidate, missing_approvers=missing, reason="candidate lacks required approvals")
                     continue
-                if disposition == "no_promotion":
+                if disposition in {"no_promotion", "pending_human"}:
                     report_record = self._candidate_record(
                         self.workspaces[agent.agent_id], candidate,
                     )
@@ -2571,20 +2576,28 @@ class OrganizationRunner:
                             agent_id=agent.agent_id,
                             candidate=candidate,
                             reason=(
-                                "no-promotion disposition requires a durable "
+                                f"{disposition} disposition requires a durable "
                                 "run-artifact dossier"
                             ),
                         )
                         continue
-                    status = "completed_no_promotion"
-                    no_promotion_report = candidate
+                    if disposition == "pending_human":
+                        status = "completed_pending_human"
+                        pending_human_report = candidate
+                        event_type = "finalization.pending_human"
+                        event_field = "approval_report_candidate"
+                    else:
+                        status = "completed_no_promotion"
+                        no_promotion_report = candidate
+                        event_type = "finalization.no_promotion"
+                        event_field = "report_candidate"
                     finalized_by = agent.agent_id
                     final_summary = reply["summary"]
                     self._event(
-                        "finalization.no_promotion",
+                        event_type,
                         round_number,
                         agent_id=agent.agent_id,
-                        report_candidate=candidate,
+                        **{event_field: candidate},
                     )
                     break
                 if disposition != "promote":
@@ -2592,7 +2605,10 @@ class OrganizationRunner:
                     self._event(
                         "finalization.rejected", round_number,
                         agent_id=agent.agent_id,
-                        reason="final disposition must be promote or no_promotion",
+                        reason=(
+                            "final disposition must be promote, no_promotion, "
+                            "or pending_human"
+                        ),
                     )
                     continue
                 if self.topology.blind_final_review:
@@ -2660,7 +2676,11 @@ class OrganizationRunner:
                 finalized_by = agent.agent_id
                 final_summary = reply["summary"]
                 break
-            if status in {"completed", "completed_no_promotion"}:
+            if status in {
+                "completed",
+                "completed_no_promotion",
+                "completed_pending_human",
+            }:
                 break
 
         self._reject_pending_control_requests(status, rounds)
@@ -2682,7 +2702,14 @@ class OrganizationRunner:
             promotion_candidate=promotion_candidate,
             promotion_request=promotion_request,
             no_promotion_report=no_promotion_report,
+            pending_human_report=pending_human_report,
         )
+        approval_request: Optional[Dict[str, Any]] = None
+        if status == "completed_pending_human" and pending_human_report:
+            approval_request = self._write_pending_human_approval_request(
+                pending_human_report,
+                conclusion,
+            )
         result = {
             "run_id": self.run_id, "status": status, "rounds": rounds,
             "working_rounds": min(rounds, self.max_rounds),
@@ -2698,6 +2725,11 @@ class OrganizationRunner:
             "promotion_branch": promotion_branch,
             "promotion_request": str(self.run_dir / "promotion-request.json") if promotion_request else None,
             "no_promotion_report": no_promotion_report,
+            "pending_human_report": pending_human_report,
+            "approval_request": (
+                str(self.run_dir / "approval-request.json")
+                if approval_request else None
+            ),
             "human_promotion_required": self.topology.human_promotion_required,
             "canonical_effects_applied": False,
             "artifact_manifest": artifact_manifest,
@@ -3081,14 +3113,31 @@ class OrganizationRunner:
             workspace, ["diff", "--name-only", "-z", f"{base}..{promotion_candidate}"],
         ))
         request: Dict[str, Any] = {
+            "schema": "reccli.organization-approval-request.v1",
             "version": 1,
             "created_at": _utc_now(),
             "run_id": self.run_id,
+            "request_kind": "candidate_promotion",
+            "title": "Verified candidate ready for human promotion",
+            "question": (
+                "Approve the exact verified candidate and fast-forward the "
+                "current clean local branch?"
+            ),
             "status": "awaiting_human_authorization",
             "canonical_effects_applied": False,
+            "base_commit": base,
             "verified_candidate": verified_candidate,
             "proposed_promotion_candidate": promotion_candidate,
             "proposed_promotion_branch": promotion_branch,
+            "action": {
+                "type": "fast_forward_local",
+                "remote_push": False,
+                "effect": (
+                    "Revalidate the request and repository, then fast-forward "
+                    "the clean local branch to the proposed promotion candidate. "
+                    "No remote push is performed."
+                ),
+            },
             "changed_paths": changed_paths,
             "protected_paths": list(self.protected_paths),
             "experiment_budget": {
@@ -3135,6 +3184,136 @@ class OrganizationRunner:
         ).encode("utf-8")
         request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
         self._write_json("promotion-request.json", request)
+        return request
+
+    def _write_pending_human_approval_request(
+        self,
+        report_candidate: str,
+        conclusion: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Stage an exact human-decision packet for a fresh continuation."""
+        workspace = self.workspaces[self.topology.finalizer_id]
+        report_record = self._candidate_record(workspace, report_candidate)
+        report_files: List[Dict[str, Any]] = []
+        remaining = 240_000
+        for path in report_record.get("paths", []):
+            if not self._artifact_path(path):
+                continue
+            blob_sha = _git(
+                workspace.cwd,
+                ["rev-parse", f"{report_candidate}:{path}"],
+            ).strip()
+            content = ""
+            truncated = False
+            if remaining > 0:
+                proc = subprocess.run(
+                    ["git", "show", f"{report_candidate}:{path}"],
+                    cwd=workspace.cwd,
+                    capture_output=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    decoded = proc.stdout.decode("utf-8", errors="replace")
+                    content = decoded[:remaining]
+                    truncated = len(decoded) > len(content)
+                    remaining -= len(content)
+            report_files.append({
+                "path": path,
+                "git_blob": blob_sha,
+                "content": content,
+                "truncated": truncated,
+            })
+
+        source_request = json.loads(
+            (self.run_dir / "request.json").read_text(encoding="utf-8"),
+        )
+        continuation = {
+            "provider": source_request.get("provider_requested", self.provider),
+            "topology": source_request.get(
+                "topology", self.topology.topology_id,
+            ),
+            "max_rounds": int(source_request.get("max_rounds", self.max_rounds)),
+            "max_concurrency": int(
+                source_request.get("max_concurrency", self.max_concurrency),
+            ),
+            "turn_timeout_seconds": int(source_request.get(
+                "turn_timeout_seconds", self.turn_timeout_seconds,
+            )),
+            "model": source_request.get("model") or "auto",
+            "evidence_paths": list(source_request.get("evidence_paths") or []),
+            "protected_paths": list(
+                source_request.get("protected_paths") or [],
+            ),
+            "context_manifest": source_request.get("context_manifest"),
+            "max_experiments": max(
+                0,
+                self.max_experiments - len(self.candidate_artifact_manifests),
+            ),
+        }
+        request: Dict[str, Any] = {
+            "schema": "reccli.organization-approval-request.v1",
+            "version": 1,
+            "created_at": _utc_now(),
+            "run_id": self.run_id,
+            "request_kind": "checkpoint_continuation",
+            "title": "Organization checkpoint awaiting your decision",
+            "question": (
+                "Approve the exact authority request documented by the "
+                "reviewed dossier and continue the mission in a fresh run?"
+            ),
+            "status": "awaiting_human_authorization",
+            "canonical_effects_applied": False,
+            "base_commit": self.caller_head,
+            "report_candidate": report_candidate,
+            "report_kind": report_record.get("kind"),
+            "report_paths": list(report_record.get("paths") or []),
+            "report_files": report_files,
+            "conclusion": {
+                key: conclusion.get(key)
+                for key in (
+                    "summary",
+                    "accomplishments",
+                    "conclusive_findings",
+                    "evidence_and_tests",
+                    "scientific_or_product_blockers",
+                    "infrastructure_failures",
+                    "unresolved",
+                    "next_action",
+                    "limitations",
+                )
+            },
+            "review_record": self.governance.snapshot(),
+            "action": {
+                "type": "start_successor",
+                "remote_push": False,
+                "effect": (
+                    "Record an immutable human approval decision and launch a "
+                    "fresh successor organization from the same clean Git HEAD. "
+                    "The signed decision is added to its read-only evidence. "
+                    "The terminal supervisor is never resumed."
+                ),
+            },
+            "continuation": continuation,
+            "original_mission": self.mission,
+            "authorization_limits": [
+                (
+                    "Approval applies only to the exact report candidate and "
+                    "question in this request."
+                ),
+                (
+                    "Approval does not authorize remote push, unsupported "
+                    "scientific claims, or mutation of protected evidence."
+                ),
+            ],
+        }
+        canonical = json.dumps(
+            request,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
+        self._write_json("approval-request.json", request)
         return request
 
     def _git_paths(self, workspace: Workspace, args: List[str]) -> Set[str]:
@@ -3458,10 +3637,13 @@ class OrganizationRunner:
 
         candidate_record = self._candidate_record(workspace, head)
         is_implementation = candidate_record["kind"] == "implementation"
-        is_no_promotion_report = reply.get("disposition") == "no_promotion"
+        is_terminal_report = reply.get("disposition") in {
+            "no_promotion",
+            "pending_human",
+        }
         self._resolve_reply_candidate(
             reply,
-            head if is_implementation or is_no_promotion_report else None,
+            head if is_implementation or is_terminal_report else None,
             previous_heads={previous_head, provider_head},
             rewrite_previous_candidates=(
                 is_implementation
@@ -3896,13 +4078,24 @@ promotion dossier are complete.
 
 For a conclusive negative result, write the no-promotion dossier under the
 artifact prefix, set disposition=no_promotion, and request exact-report review
-from every required reviewer using workItem=final-no-promotion, risk=release,
+from every required reviewer using a stable final-report workItem,
+risk=release,
 and candidate=`{HOST_CANDIDATE}`. After their exact-report approvals arrive,
 set final=true with the same no_promotion disposition, candidate, and risk.
 This ends the run as completed_no_promotion without exporting or promoting
 implementation code.
 
-Neither disposition declares canonical scientific acceptance or applies
+When the organization has completed every reversible action and the only
+remaining blocker is a specific human authority decision, write an approval
+dossier under the artifact prefix. Set disposition=pending_human and request
+exact-report review from every required reviewer with a stable final-report
+workItem, risk=release, and candidate=`{HOST_CANDIDATE}`. After those reviewers
+approve the dossier's accuracy, set final=true with the same pending_human
+disposition, candidate, and risk. RecCli will end as completed_pending_human
+and stage the exact dossier in the console; it will not pretend sponsor silence
+means either promotion or rejection.
+
+No terminal disposition declares canonical scientific acceptance or applies
 effects. Required reviewers: {', '.join(sorted(self.governance.required_final_approvers())) or 'none'}."""
             if agent.agent_id == self.topology.finalizer_id
             else "You are not the finalizer. Set final=false, disposition=continue, and top-level candidate/risk to null."
@@ -3935,7 +4128,10 @@ Standing instructions: {agent.instructions}
 
 {routes}
 
-Messages outside these routes are dropped and recorded.
+Messages outside these routes are dropped and recorded. `to="organization"`
+is an adjacency-safe broadcast shorthand: RecCli expands it only to your
+listed outbound neighbors that accept the selected tag; it never bypasses the
+topology.
 
 ## Workspace
 
@@ -4206,6 +4402,33 @@ APPROVED or BLOCKED.
     def _deliver_message(self, sender: str, message: Dict[str, Any], round_number: int) -> None:
         recipient = message.get("to", "")
         tag = message.get("tag", "")
+        if recipient == "organization":
+            targets = [
+                neighbor
+                for neighbor in self.topology.neighbors(sender)
+                if self.topology.can_route(sender, neighbor, tag)[0]
+            ]
+            if not targets:
+                self.dropped_messages += 1
+                self._append_jsonl("messages.jsonl", {
+                    "round": round_number,
+                    "from": sender,
+                    **message,
+                    "status": "dropped",
+                    "reason": (
+                        "organization broadcast had no directly connected "
+                        f"recipient accepting tag {tag}"
+                    ),
+                    "ts": _utc_now(),
+                })
+                return
+            for target in targets:
+                self._deliver_message(
+                    sender,
+                    {**message, "to": target},
+                    round_number,
+                )
+            return
         candidate = message.get("candidate")
         if (
             candidate
@@ -4215,13 +4438,14 @@ APPROVED or BLOCKED.
             candidate_record = self._candidate_record(
                 self.workspaces[sender], str(candidate),
             )
-            no_promotion_review = (
-                message.get("workItem") == "final-no-promotion"
+            artifact_report_review = (
+                tag in {"review", "decision"}
+                and bool(message.get("workItem"))
                 and message.get("risk") == "release"
             )
             if (
                 candidate_record["kind"] in {"artifact-only", "identity-only"}
-                and not no_promotion_review
+                and not artifact_report_review
             ):
                 self.dropped_messages += 1
                 self._append_jsonl("messages.jsonl", {
@@ -4232,7 +4456,9 @@ APPROVED or BLOCKED.
                     "reason": (
                         f"{candidate_record['kind']} commit {candidate} is a "
                         "durable report identity, not an implementation "
-                        "candidate eligible for review or integration"
+                        "candidate. Artifact reports may receive "
+                        "release-risk review/decision traffic, but they cannot "
+                        "be handed off as implementation candidates"
                     ),
                     "ts": _utc_now(),
                 })
@@ -4321,6 +4547,7 @@ APPROVED or BLOCKED.
         promotion_candidate: Optional[str],
         promotion_request: Optional[Dict[str, Any]],
         no_promotion_report: Optional[str] = None,
+        pending_human_report: Optional[str] = None,
     ) -> Dict[str, Any]:
         agent_summaries: List[Dict[str, Any]] = []
         failures: List[str] = []
@@ -4444,6 +4671,7 @@ APPROVED or BLOCKED.
                 if promotion_request else None
             ),
             "no_promotion_report": no_promotion_report,
+            "pending_human_report": pending_human_report,
             "artifacts": sorted(artifacts),
             "experiment_budget": {
                 "maximum": self.max_experiments,
@@ -4465,6 +4693,8 @@ APPROVED or BLOCKED.
             return "cancelled"
         if status == "completed_no_promotion":
             return "no_candidate"
+        if status == "completed_pending_human":
+            return "awaiting_human_approval"
         if digest.get("verified_candidate"):
             return (
                 "ready_for_human_review"
@@ -4521,6 +4751,12 @@ APPROVED or BLOCKED.
                 "Review the exact promotion request and candidate artifacts; "
                 "RecCli applied no canonical effects."
             )
+        elif readiness == "awaiting_human_approval":
+            next_action = (
+                "Review the exact approval dossier in the console. Approval "
+                "will bind the request and start a fresh successor; the "
+                "terminal supervisor will not be resumed."
+            )
         elif readiness == "verified":
             next_action = "Review and apply the exact verified candidate."
         elif status == "cancelled":
@@ -4568,6 +4804,7 @@ APPROVED or BLOCKED.
         promotion_candidate: Optional[str],
         promotion_request: Optional[Dict[str, Any]],
         no_promotion_report: Optional[str] = None,
+        pending_human_report: Optional[str] = None,
     ) -> Dict[str, Any]:
         digest = self._terminal_conclusion_digest(
             status,
@@ -4576,6 +4813,7 @@ APPROVED or BLOCKED.
             promotion_candidate=promotion_candidate,
             promotion_request=promotion_request,
             no_promotion_report=no_promotion_report,
+            pending_human_report=pending_human_report,
         )
         lead_id = self.topology.leader_id
         generated_by = "lead"
@@ -4699,6 +4937,7 @@ smallest next action.
             "promotion_candidate": promotion_candidate,
             "promotion_request": digest["promotion_request"],
             "no_promotion_report": no_promotion_report,
+            "pending_human_report": pending_human_report,
             "artifacts": digest["artifacts"],
             "turn_counts": {
                 "attempted": self.attempted_turns,

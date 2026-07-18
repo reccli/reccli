@@ -168,6 +168,17 @@ class OrganizationTopologyTests(unittest.TestCase):
 
     def test_reply_validation_rejects_protocol_drift(self):
         self.assertEqual(validate_agent_reply(_reply())["summary"], "ok")
+        pending = _reply()
+        pending.update({
+            "disposition": "pending_human",
+            "final": True,
+            "candidate": "abc123",
+            "risk": "release",
+        })
+        self.assertEqual(
+            validate_agent_reply(pending)["disposition"],
+            "pending_human",
+        )
         invalid = _reply()
         invalid["extra"] = True
         with self.assertRaisesRegex(ValueError, "fields must be exactly"):
@@ -1307,6 +1318,37 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(dropped[-1]["status"], "dropped")
             self.assertIn("not an implementation candidate", dropped[-1]["reason"])
 
+            runner._deliver_message("worker-a", {
+                "to": "manager-a", "tag": "review",
+                "content": "Review this exact terminal evidence report.",
+                "candidate": artifact_head,
+                "workItem": "L8-EXACT-BLOCKED-CLOSEOUT",
+                "risk": "release",
+            }, 2)
+            routed = [
+                json.loads(line)
+                for line in (run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(routed[-1]["status"], "delivered")
+            self.assertEqual(
+                routed[-1]["workItem"],
+                "L8-EXACT-BLOCKED-CLOSEOUT",
+            )
+
+            runner._deliver_message("lead", {
+                "to": "organization", "tag": "status",
+                "content": "Macro checkpoint for every connected manager.",
+                "candidate": None, "workItem": None, "risk": None,
+            }, 3)
+            self.assertTrue(all(
+                any(
+                    item.get("content")
+                    == "Macro checkpoint for every connected manager."
+                    for item in runner.inboxes[manager_id]
+                )
+                for manager_id in runner.topology.manager_ids
+            ))
+
     def test_terminal_lead_conclusion_is_durable_and_outside_work_rounds(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "project"
@@ -1585,6 +1627,102 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertFalse(request["canonical_effects_applied"])
             self.assertEqual(request["protected_paths"], ["app.py"])
             self.assertTrue((run_dir / "promotion-request.json").is_file())
+
+    def test_pending_human_request_embeds_exact_reviewed_dossier(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            run_dir = (
+                root / "devsession" / "agent-organizations" / "human-gate"
+            )
+            run_dir.mkdir(parents=True)
+            runner = OrganizationRunner(
+                root,
+                "Require an exact sponsor decision.",
+                "claude",
+                "scientific",
+                "human-gate",
+                run_dir,
+            )
+            runner.caller_head = base
+            runner.workspaces["manager-d"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            dossier_path = (
+                root / runner.artifact_staging_prefix / "approval-dossier.md"
+            )
+            dossier_path.parent.mkdir(parents=True)
+            dossier_path.write_text(
+                "# Approval request\n\nApprove checkpoint X only.\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", "-f", runner.artifact_staging_prefix],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "approval dossier"],
+                cwd=root,
+                check=True,
+            )
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            (run_dir / "request.json").write_text(
+                json.dumps({
+                    "provider_requested": "claude",
+                    "topology": "scientific",
+                    "max_rounds": 8,
+                    "max_concurrency": 5,
+                    "turn_timeout_seconds": 1200,
+                    "model": None,
+                    "evidence_paths": [],
+                    "protected_paths": [],
+                    "context_manifest": None,
+                    "max_experiments": 3,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            request = runner._write_pending_human_approval_request(
+                candidate,
+                {
+                    "summary": "Sponsor authority is the only blocker.",
+                    "accomplishments": ["Bounded the request."],
+                    "conclusive_findings": [],
+                    "evidence_and_tests": ["Exact dossier reviewed."],
+                    "scientific_or_product_blockers": [],
+                    "infrastructure_failures": [],
+                    "unresolved": ["Sponsor decision."],
+                    "next_action": "Approve or reject.",
+                    "limitations": [],
+                },
+            )
+            self.assertEqual(
+                request["request_kind"],
+                "checkpoint_continuation",
+            )
+            self.assertEqual(request["report_candidate"], candidate)
+            self.assertEqual(
+                request["action"]["type"],
+                "start_successor",
+            )
+            self.assertIn(
+                "Approve checkpoint X only.",
+                request["report_files"][0]["content"],
+            )
+            self.assertTrue((run_dir / "approval-request.json").is_file())
 
     def test_promotion_candidate_removes_staging_inherited_from_prior_run(self):
         with tempfile.TemporaryDirectory() as td:

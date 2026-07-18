@@ -406,6 +406,229 @@ function ConclusionPanel({ conclusion }: { conclusion: RunConclusion }) {
   );
 }
 
+function ApprovalPanel({
+  snapshot,
+  token,
+  onRefresh,
+  onSuccessor,
+}: {
+  snapshot: RunSnapshot;
+  token: string;
+  onRefresh: () => Promise<void>;
+  onSuccessor: (runId: string) => void;
+}) {
+  const request = snapshot.approval_request;
+  const execution = snapshot.approval_execution;
+  const [approving, setApproving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(
+    typeof window !== "undefined" && "Notification" in window
+      ? Notification.permission
+      : "unsupported",
+  );
+  useEffect(() => {
+    if (!request || notificationPermission !== "granted") return;
+    const key = `reccli-approval-notified-${request.request_sha256}`;
+    if (window.localStorage.getItem(key)) return;
+    const notification = new Notification(
+      request.title || "RecCli approval required",
+      {
+        body:
+          request.question ||
+          "An organization has staged an exact decision packet.",
+        tag: request.request_sha256,
+      },
+    );
+    notification.onclick = () => window.focus();
+    window.localStorage.setItem(key, "1");
+  }, [
+    notificationPermission,
+    request?.question,
+    request?.request_sha256,
+    request?.title,
+  ]);
+
+  if (!request) return null;
+
+  const action = request.action?.type;
+  const actionLabel =
+    action === "start_successor"
+      ? "Approve & start successor"
+      : "Approve & apply locally";
+  const exactCandidate =
+    request.report_candidate || request.proposed_promotion_candidate;
+  const evidence = request.conclusion?.evidence_and_tests || [];
+  const blockers = [
+    ...(request.conclusion?.scientific_or_product_blockers || []),
+    ...(request.conclusion?.infrastructure_failures || []),
+  ];
+  const limits =
+    request.authorization_limits ||
+    request.authorization_required_for ||
+    [];
+
+  const enableNotifications = async () => {
+    if (!("Notification" in window)) return;
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+  };
+
+  const approve = async () => {
+    const effect =
+      request.action?.effect ||
+      "Execute the exact local action described by this approval packet.";
+    if (
+      !window.confirm(
+        `${request.question || "Approve this exact request?"}\n\n${effect}\n\nRequest: ${request.request_sha256}\n\nNo remote push will occur.`,
+      )
+    ) {
+      return;
+    }
+    setApproving(true);
+    setNotice(null);
+    try {
+      const result = await apiRequest<{
+        status?: string;
+        error?: string;
+        successor_run_id?: string;
+        applied_commit?: string;
+      }>(
+        `/api/runs/${encodeURIComponent(snapshot.run_id)}/approve`,
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            request_sha256: request.request_sha256,
+            idempotency_key: crypto.randomUUID(),
+          }),
+        },
+      );
+      if (result.successor_run_id) {
+        setNotice(`Approved. Successor ${result.successor_run_id} is starting.`);
+        onSuccessor(result.successor_run_id);
+      } else if (result.applied_commit) {
+        setNotice(`Approved and applied locally at ${result.applied_commit}.`);
+      } else {
+        setNotice(titleCase(result.status));
+      }
+      await onRefresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  return (
+    <section className="approval-panel">
+      <div className="approval-hero">
+        <div>
+          <span className="eyebrow">Approval staging</span>
+          <h2>{request.title || "Human decision required"}</h2>
+          <p>
+            {request.question ||
+              "Review the exact evidence packet before authorizing its action."}
+          </p>
+        </div>
+        <div className="approval-actions">
+          {notificationPermission === "default" && (
+            <button
+              type="button"
+              className="approval-alert-button"
+              onClick={() => void enableNotifications()}
+            >
+              Enable alerts
+            </button>
+          )}
+          <span className={`approval-state state-${execution?.status || "pending"}`}>
+            {titleCase(execution?.status || "awaiting approval")}
+          </span>
+          <button
+            type="button"
+            className="approval-button"
+            disabled={
+              approving ||
+              !snapshot.approval_capabilities?.approve ||
+              execution?.status === "applied"
+            }
+            onClick={() => void approve()}
+          >
+            {approving ? "Revalidating…" : actionLabel}
+          </button>
+        </div>
+      </div>
+      {notice && <div className="approval-notice">{notice}</div>}
+      {execution?.error && (
+        <div className="approval-error">{execution.error}</div>
+      )}
+      <div className="approval-grid">
+        <div className="approval-card">
+          <h3>Exact identity</h3>
+          <dl>
+            <div>
+              <dt>Request</dt>
+              <dd>{request.request_sha256}</dd>
+            </div>
+            <div>
+              <dt>Git checkpoint</dt>
+              <dd>{request.base_commit || "Not recorded"}</dd>
+            </div>
+            <div>
+              <dt>Candidate / report</dt>
+              <dd>{exactCandidate || "Not recorded"}</dd>
+            </div>
+          </dl>
+        </div>
+        <div className="approval-card">
+          <h3>Evidence and tests</h3>
+          <ul>
+            {evidence.map((item, index) => (
+              <li key={`approval-evidence-${index}`}>{item}</li>
+            ))}
+            {!evidence.length && <li>See the reviewed dossier below.</li>}
+          </ul>
+        </div>
+        <div className="approval-card">
+          <h3>Known blockers and limits</h3>
+          <ul>
+            {[...blockers, ...limits].map((item, index) => (
+              <li key={`approval-limit-${index}`}>{item}</li>
+            ))}
+            {!blockers.length && !limits.length && (
+              <li>No additional limitation was recorded.</li>
+            )}
+          </ul>
+        </div>
+      </div>
+      {!!request.action?.effect && (
+        <div className="approval-effect">
+          <strong>What the button does</strong>
+          <p>{request.action.effect}</p>
+          <span>Remote push: {request.action.remote_push ? "yes" : "no"}</span>
+        </div>
+      )}
+      {!!request.report_files?.length && (
+        <div className="approval-dossiers">
+          {request.report_files.map((file) => (
+            <details key={file.path}>
+              <summary>
+                <span>{file.path}</span>
+                <span>{file.git_blob?.slice(0, 12)}</span>
+              </summary>
+              <pre>{file.content || "No text preview available."}</pre>
+              {file.truncated && (
+                <p>Preview truncated; the Git blob above remains authoritative.</p>
+              )}
+            </details>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function OperatorChat({
   snapshot,
   selectedAgent,
@@ -805,6 +1028,14 @@ export default function OrganizationConsole() {
           </div>
         </section>
 
+        {snapshot?.approval_request && (
+          <ApprovalPanel
+            snapshot={snapshot}
+            token={token}
+            onRefresh={loadSnapshot}
+            onSuccessor={setSelectedRun}
+          />
+        )}
         {snapshot?.conclusion && (
           <ConclusionPanel conclusion={snapshot.conclusion} />
         )}

@@ -30,12 +30,15 @@ CONTROL_ACTIONS = {"message", "pause", "resume", "cancel"}
 TERMINAL_STATUSES = {
     "completed",
     "completed_no_promotion",
+    "completed_pending_human",
     "failed",
     "cancelled",
     "round_limit",
     "stalled",
 }
 MAX_OPERATOR_MESSAGE_CHARS = 12_000
+APPROVAL_REQUEST_SCHEMA = "reccli.organization-approval-request.v1"
+APPROVAL_DECISION_SCHEMA = "reccli.organization-approval-decision.v1"
 
 
 def _utc_now() -> str:
@@ -310,6 +313,12 @@ def organization_snapshot(
     ))
 
     promotion = _read_json(run_dir / "promotion-request.json", None)
+    approval_request = _approval_request(run_dir)
+    approval_decision = _read_json(run_dir / "approval" / "decision.json", None)
+    approval_execution = _read_json(
+        run_dir / "approval" / "execution.json",
+        None,
+    )
     artifact_manifest = _read_json(run_dir / "deliverables" / "manifest.json", None)
     conclusion = _read_json(run_dir / "run-conclusion.json", None)
     topology = _topology_snapshot(run, status)
@@ -435,6 +444,26 @@ def organization_snapshot(
             "cancel": status.get("status") not in TERMINAL_STATUSES or live is True,
         },
         "promotion_request": promotion,
+        "approval_request": approval_request,
+        "approval_decision": approval_decision,
+        "approval_execution": approval_execution,
+        "approval_capabilities": {
+            "approve": (
+                isinstance(approval_request, dict)
+                and approval_request.get("schema") == APPROVAL_REQUEST_SCHEMA
+                and approval_request.get("status")
+                == "awaiting_human_authorization"
+                and not (
+                    isinstance(approval_execution, dict)
+                    and approval_execution.get("status") == "applied"
+                )
+            ),
+            "action": (
+                (approval_request.get("action") or {}).get("type")
+                if isinstance(approval_request, dict)
+                else None
+            ),
+        },
         "artifact_manifest": artifact_manifest,
         "conclusion": conclusion,
     }
@@ -463,6 +492,11 @@ def list_organization_runs(
             run = _read_json(run_dir / "run.json", {}) or _read_json(
                 run_dir / "request.json", {},
             ) or {}
+            approval_request = _approval_request(run_dir)
+            approval_execution = _read_json(
+                run_dir / "approval" / "execution.json",
+                None,
+            )
             pid = _supervisor_pid(run_dir, status)
             runs.append({
                 "run_id": status.get("run_id") or run.get("run_id") or run_dir.name,
@@ -490,6 +524,17 @@ def list_organization_runs(
                 "control_protocol": (
                     run.get("control_protocol")
                     or status.get("control_protocol")
+                ),
+                "approval_pending": bool(
+                    isinstance(approval_request, dict)
+                    and approval_request.get("schema")
+                    == APPROVAL_REQUEST_SCHEMA
+                    and approval_request.get("status")
+                    == "awaiting_human_authorization"
+                    and not (
+                        isinstance(approval_execution, dict)
+                        and approval_execution.get("status") == "applied"
+                    )
                 ),
             })
     return {
@@ -668,6 +713,368 @@ def acknowledge_control_request(
         acknowledgement,
     )
     return acknowledgement
+
+
+def _approval_request(run_dir: Path) -> Optional[Dict[str, Any]]:
+    request = _read_json(run_dir / "approval-request.json", None)
+    if isinstance(request, dict):
+        return request
+    request = _read_json(run_dir / "promotion-request.json", None)
+    return request if isinstance(request, dict) else None
+
+
+def _verify_approval_request(request: Dict[str, Any]) -> str:
+    if request.get("schema") != APPROVAL_REQUEST_SCHEMA:
+        raise RuntimeError("unsupported or legacy approval request schema")
+    expected = str(request.get("request_sha256") or "")
+    if not expected:
+        raise RuntimeError("approval request has no request_sha256")
+    canonical_value = {
+        key: value
+        for key, value in request.items()
+        if key != "request_sha256"
+    }
+    canonical = json.dumps(
+        canonical_value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    actual = hashlib.sha256(canonical).hexdigest()
+    if actual != expected:
+        raise RuntimeError(
+            "approval request hash mismatch; the staged packet changed after "
+            "the organization bound it"
+        )
+    return actual
+
+
+def _git_text(project_root: Path, args: List[str]) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed: "
+            f"{(proc.stderr or proc.stdout).strip()}"
+        )
+    return proc.stdout.strip()
+
+
+def _require_approval_checkpoint(
+    project_root: Path,
+    request: Dict[str, Any],
+) -> str:
+    base_commit = str(request.get("base_commit") or "")
+    if not base_commit:
+        raise RuntimeError("approval request does not bind a base commit")
+    head = _git_text(project_root, ["rev-parse", "HEAD"])
+    if head != base_commit:
+        raise RuntimeError(
+            "project HEAD changed after approval staging; expected "
+            f"{base_commit}, found {head}. Start a new review packet."
+        )
+    tracked = _git_text(
+        project_root,
+        ["status", "--porcelain", "--untracked-files=no"],
+    )
+    if tracked:
+        raise RuntimeError(
+            "project has tracked uncommitted changes; approval execution "
+            "requires a clean checkpoint"
+        )
+    exact_candidate = str(
+        request.get("report_candidate")
+        or request.get("proposed_promotion_candidate")
+        or ""
+    )
+    if not exact_candidate:
+        raise RuntimeError("approval request does not bind an exact candidate")
+    _git_text(
+        project_root,
+        ["cat-file", "-e", f"{exact_candidate}^{{commit}}"],
+    )
+    return head
+
+
+def _approval_decision(
+    request: Dict[str, Any],
+    *,
+    requested_by: str,
+    idempotency_key: Optional[str],
+) -> Dict[str, Any]:
+    decision: Dict[str, Any] = {
+        "schema": APPROVAL_DECISION_SCHEMA,
+        "version": 1,
+        "run_id": request.get("run_id"),
+        "request_sha256": request.get("request_sha256"),
+        "request_kind": request.get("request_kind"),
+        "report_candidate": request.get("report_candidate"),
+        "promotion_candidate": request.get("proposed_promotion_candidate"),
+        "decision": "approved",
+        "decided_by": str(requested_by or "human-operator"),
+        "decided_at": _utc_now(),
+        "idempotency_key": idempotency_key,
+        "authorization_limits": list(
+            request.get("authorization_limits")
+            or request.get("authorization_required_for")
+            or []
+        ),
+    }
+    canonical = json.dumps(
+        decision,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    decision["decision_sha256"] = hashlib.sha256(canonical).hexdigest()
+    return decision
+
+
+def _start_approved_successor(
+    project_root: Path,
+    request: Dict[str, Any],
+    decision_path: Path,
+) -> Dict[str, Any]:
+    from .organization import create_run_request
+    from .organization_launch import launch_organization_worker
+
+    continuation = request.get("continuation") or {}
+    original_mission = str(request.get("original_mission") or "").strip()
+    if not original_mission:
+        raise RuntimeError("approval request has no original mission")
+    decision_sha = str(
+        (_read_json(decision_path, {}) or {}).get("decision_sha256") or "",
+    )
+    mission = f"""# Human-approved continuation
+
+The operator approved the exact checkpoint request from predecessor run
+`{request.get('run_id')}`.
+
+- Approval request SHA-256: `{request.get('request_sha256')}`
+- Approval decision SHA-256: `{decision_sha}`
+- Reviewed report candidate: `{request.get('report_candidate')}`
+- Durable decision source: `{decision_path}`
+
+Treat only that exact decision as approved. It does not authorize remote push,
+mutation of protected evidence, or scientific claims beyond the reviewed
+dossier. This is a fresh organization; do not attempt to resume the predecessor
+supervisor.
+
+# Original mission
+
+{original_mission}
+"""
+    evidence_paths = list(continuation.get("evidence_paths") or [])
+    evidence_paths.append(str(decision_path))
+    successor = create_run_request(
+        working_directory=str(project_root),
+        mission=mission,
+        provider=str(continuation.get("provider") or "auto"),
+        topology=str(continuation.get("topology") or "google-rotating"),
+        max_rounds=int(continuation.get("max_rounds") or 8),
+        max_concurrency=int(continuation.get("max_concurrency") or 5),
+        turn_timeout_seconds=int(
+            continuation.get("turn_timeout_seconds") or 1200,
+        ),
+        model=str(continuation.get("model") or "auto"),
+        evidence_paths=evidence_paths,
+        protected_paths=list(continuation.get("protected_paths") or []),
+        context_manifest=continuation.get("context_manifest"),
+        max_experiments=int(continuation.get("max_experiments") or 0),
+    )
+    successor.update({
+        "parent_run_id": request.get("run_id"),
+        "approval_request_sha256": request.get("request_sha256"),
+        "approval_decision": str(decision_path),
+        "approval_decision_sha256": decision_sha,
+    })
+    _atomic_write_json(Path(successor["run_dir"]) / "request.json", successor)
+    successor_status_path = Path(successor["run_dir"]) / "status.json"
+    successor_status = _read_json(successor_status_path, {}) or {}
+    successor_status.update({
+        "parent_run_id": request.get("run_id"),
+        "approval_request_sha256": request.get("request_sha256"),
+        "approval_decision_sha256": decision_sha,
+    })
+    _atomic_write_json(successor_status_path, successor_status)
+    launched = launch_organization_worker(successor)
+    return {
+        "action": "start_successor",
+        "successor_run_id": successor["run_id"],
+        "successor_run_dir": successor["run_dir"],
+        "successor_pid": launched["pid"],
+    }
+
+
+def _apply_approved_promotion(
+    project_root: Path,
+    request: Dict[str, Any],
+) -> Dict[str, Any]:
+    candidate = str(request.get("proposed_promotion_candidate") or "")
+    if not candidate:
+        raise RuntimeError("promotion request has no proposed candidate")
+    _git_text(project_root, ["cat-file", "-e", f"{candidate}^{{commit}}"])
+    base_commit = str(request["base_commit"])
+    expected_paths = sorted(
+        str(path) for path in request.get("changed_paths", [])
+    )
+    actual_paths = sorted(filter(
+        None,
+        _git_text(
+            project_root,
+            ["diff", "--name-only", f"{base_commit}..{candidate}"],
+        ).splitlines(),
+    ))
+    if actual_paths != expected_paths:
+        raise RuntimeError(
+            "promotion candidate paths no longer match the approval packet"
+        )
+    _git_text(project_root, ["merge", "--ff-only", candidate])
+    return {
+        "action": "fast_forward_local",
+        "applied_commit": _git_text(project_root, ["rev-parse", "HEAD"]),
+        "remote_push": False,
+    }
+
+
+def approve_organization_request(
+    working_directory: str,
+    run_id: str,
+    *,
+    request_sha256: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    requested_by: str = "human-operator",
+) -> Dict[str, Any]:
+    """Approve one exact staged packet and execute its declared local action."""
+    run_dir = _resolve_run(working_directory, run_id)
+    if run_dir is None:
+        return {"status": "not_found", "run_id": run_id}
+    request = _approval_request(run_dir)
+    if request is None:
+        return {
+            "status": "not_available",
+            "run_id": run_id,
+            "detail": "run has no staged approval request",
+        }
+    actual_request_sha = _verify_approval_request(request)
+    if request_sha256 and request_sha256 != actual_request_sha:
+        raise RuntimeError(
+            "approval button referenced a stale request hash; refresh the run"
+        )
+    status = _read_json(run_dir / "status.json", {}) or {}
+    if status.get("status") not in TERMINAL_STATUSES:
+        raise RuntimeError("approval is available only after the run is terminal")
+
+    source_request = _read_json(run_dir / "request.json", {}) or {}
+    resolved_run_id = str(
+        source_request.get("run_id")
+        or status.get("run_id")
+        or run_id
+    )
+    if request.get("run_id") != resolved_run_id:
+        raise RuntimeError(
+            "approval request run identity does not match the durable run"
+        )
+    project_root = Path(
+        source_request.get("project_root") or working_directory,
+    ).expanduser().resolve()
+    _require_approval_checkpoint(project_root, request)
+
+    approval_dir = run_dir / "approval"
+    approval_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = approval_dir / "execution.lock"
+    try:
+        lock_fd = os.open(
+            lock_path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError:
+        return {
+            "status": "processing",
+            "run_id": run_id,
+            "detail": "another approval execution is already in progress",
+        }
+    os.close(lock_fd)
+    decision_path = approval_dir / "decision.json"
+    execution_path = approval_dir / "execution.json"
+    try:
+        existing_decision = _read_json(decision_path, None)
+        if isinstance(existing_decision, dict):
+            if existing_decision.get("request_sha256") != actual_request_sha:
+                raise RuntimeError(
+                    "existing approval decision belongs to another request"
+                )
+            decision = existing_decision
+        else:
+            decision = _approval_decision(
+                request,
+                requested_by=requested_by,
+                idempotency_key=idempotency_key,
+            )
+            _atomic_write_json(decision_path, decision)
+
+        existing_execution = _read_json(execution_path, None)
+        if (
+            isinstance(existing_execution, dict)
+            and existing_execution.get("status") == "applied"
+        ):
+            return {
+                **existing_execution,
+                "idempotent_replay": True,
+                "approval_decision": decision,
+            }
+
+        execution: Dict[str, Any] = {
+            "schema": "reccli.organization-approval-execution.v1",
+            "run_id": request.get("run_id") or run_id,
+            "request_sha256": actual_request_sha,
+            "decision_sha256": decision.get("decision_sha256"),
+            "status": "processing",
+            "started_at": _utc_now(),
+        }
+        _atomic_write_json(execution_path, execution)
+        action = str((request.get("action") or {}).get("type") or "")
+        if action == "start_successor":
+            effect = _start_approved_successor(
+                project_root,
+                request,
+                decision_path,
+            )
+        elif action == "fast_forward_local":
+            effect = _apply_approved_promotion(project_root, request)
+        else:
+            raise RuntimeError(f"unsupported approval action: {action or 'missing'}")
+        execution.update({
+            **effect,
+            "status": "applied",
+            "completed_at": _utc_now(),
+        })
+        _atomic_write_json(execution_path, execution)
+        return {
+            **execution,
+            "approval_decision": decision,
+            "run_dir": str(run_dir),
+        }
+    except Exception as exc:
+        execution = _read_json(execution_path, {}) or {}
+        execution.update({
+            "schema": "reccli.organization-approval-execution.v1",
+            "run_id": request.get("run_id") or run_id,
+            "request_sha256": actual_request_sha,
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "completed_at": _utc_now(),
+        })
+        _atomic_write_json(execution_path, execution)
+        raise
+    finally:
+        lock_path.unlink(missing_ok=True)
 
 
 def cancel_organization_run(
