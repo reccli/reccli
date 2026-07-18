@@ -1135,53 +1135,59 @@ def start_organization(
         max_experiments: Hard cap on sealed generated-output bundles (default 3).
     """
     try:
-        from .organization import create_run_request
+        from .organization_launch import start_organization_from_arguments
 
-        request = create_run_request(
-            working_directory=working_directory,
-            mission=mission,
-            provider=provider,
-            topology=topology,
-            max_rounds=max_rounds,
-            max_concurrency=max_concurrency,
-            turn_timeout_seconds=turn_timeout_seconds,
-            model=model,
-            evidence_paths=evidence_paths,
-            protected_paths=protected_paths,
-            context_manifest=context_manifest,
-            max_experiments=max_experiments,
-        )
-        from .organization_launch import launch_organization_worker
-
-        launched = launch_organization_worker(request)
-        return json.dumps({
-            "status": "starting",
-            "run_id": request["run_id"],
-            "run_dir": request["run_dir"],
-            "pid": launched["pid"],
-            "provider": request["provider"],
-            "provider_requested": request["provider_requested"],
-            "host_provider": request["host_provider"],
-            "provider_assignments": request["provider_assignments"],
-            "blind_verifier_provider": request["blind_verifier_provider"],
-            "topology": request["topology"],
-            "human_promotion_required": request["human_promotion_required"],
-            "evidence_paths": request["evidence_paths"],
-            "protected_paths": request["protected_paths"],
-            "context_manifest": request["context_manifest"],
-            "max_experiments": request["max_experiments"],
-            "next": (
-                "Poll organization_status with this run_id until terminal, "
-                "then report its conclusion verbatim before adding your own "
-                "interpretation."
-            ),
-            "terminal_output": (
-                "run-conclusion.json and run-conclusion.md; returned as "
-                "organization_status.conclusion"
-            ),
-        }, indent=2)
+        return json.dumps(start_organization_from_arguments({
+            "working_directory": working_directory,
+            "mission": mission,
+            "provider": provider,
+            "topology": topology,
+            "max_rounds": max_rounds,
+            "max_concurrency": max_concurrency,
+            "turn_timeout_seconds": turn_timeout_seconds,
+            "model": model,
+            "evidence_paths": evidence_paths,
+            "protected_paths": protected_paths,
+            "context_manifest": context_manifest,
+            "max_experiments": max_experiments,
+        }), indent=2)
     except Exception as exc:
         return json.dumps({"status": "failed_to_start", "error": str(exc)}, indent=2)
+
+
+@mcp.tool()
+def start_project_organization(
+    working_directory: str,
+    open_console: bool = True,
+    console_port: int = 8777,
+) -> str:
+    """Atomically launch the project's tracked default organization.
+
+    This is the one-line launch surface for projects that own their mission and
+    readiness policy. RecCli discovers a tracked
+    ``reccli.organization-launch.json`` contract (or the conventional tracked
+    ``scripts/validate_organization_readiness.py --emit-launch`` compatibility
+    emitter), runs every declared preflight without a shell, validates the
+    exact emitted ``start_organization`` arguments, and starts a detached run.
+
+    A dynamic contract must bind its selected tracked mission, current Git
+    HEAD, mission SHA-256, and state fingerprint. RecCli refuses stale or
+    fabricated selections. It also refuses duplicate live runs and unresolved
+    human-approval checkpoints; in those cases it returns the existing run and
+    opens its console instead of launching another organization.
+
+    Args:
+        working_directory: Project root or any path inside the project.
+        open_console: Open/reuse the authenticated localhost console.
+        console_port: Console port, default 8777.
+    """
+    from .organization_project_launch import start_project_organization_result
+
+    return json.dumps(start_project_organization_result(
+        working_directory,
+        open_console=open_console,
+        console_port=console_port,
+    ), indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -1379,61 +1385,19 @@ def open_organization_console(
     per-launch token for its data and control routes.
     """
     try:
-        import secrets
-        import subprocess
-
         root = _resolve_root(working_directory)
         if root is None:
             return json.dumps({
                 "status": "not_found",
                 "working_directory": working_directory,
             }, indent=2)
-        token = secrets.token_urlsafe(24)
-        log_dir = root / "devsession" / "organization-console"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / f"console-{int(port)}.log"
-        log_handle = log_path.open("a", encoding="utf-8")
-        args = [
-            sys.executable,
-            "-m",
-            "reccli.organization_console",
-            str(root),
-            "--port",
-            str(int(port)),
-            "--token",
-            token,
-        ]
-        if not open_browser:
-            args.append("--no-open")
-        try:
-            process = subprocess.Popen(
-                args,
-                cwd=root,
-                env=os.environ.copy(),
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=log_handle,
-                start_new_session=True,
-            )
-        finally:
-            log_handle.close()
-        from .organization_launch import reap_detached_process
+        from .organization_launch import launch_organization_console
 
-        reap_detached_process(process, label="org-console")
-        from .hooks.session_recorder import register_bg_task
-
-        register_bg_task(root, process.pid, f"organization-console:{int(port)}")
-        return json.dumps({
-            "status": "starting",
-            "pid": process.pid,
-            "url": f"http://127.0.0.1:{int(port)}/?token={token}",
-            "project_root": str(root),
-            "log": str(log_path),
-            "detail": (
-                "The first launch may install and build frontend dependencies "
-                "before opening the browser."
-            ),
-        }, indent=2)
+        return json.dumps(launch_organization_console(
+            root,
+            port=int(port),
+            open_browser=open_browser,
+        ), indent=2)
     except Exception as exc:
         return json.dumps({
             "status": "console_error",

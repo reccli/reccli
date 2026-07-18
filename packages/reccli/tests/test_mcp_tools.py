@@ -106,6 +106,7 @@ from reccli.mcp_server import (  # noqa: E402
     replay_audit_agent,
     run_mmc,
     start_organization,
+    start_project_organization,
     organization_status,
     list_organizations,
     steer_organization,
@@ -1730,6 +1731,30 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
             available_providers=[provider], provider_assignments=assignments,
             blind_verifier_provider=provider,
             authentication={provider: "authenticated"},
+        )
+
+    def test_project_organization_tool_returns_atomic_launcher_result(self):
+        from unittest import mock
+
+        expected = {
+            "status": "already_running",
+            "run_id": "existing-run",
+            "blocker": "organization_already_active",
+        }
+        with mock.patch(
+            "reccli.organization_project_launch.start_project_organization_result",
+            return_value=expected,
+        ) as launch:
+            result = json.loads(start_project_organization(
+                "/tmp/project",
+                open_console=True,
+                console_port=9001,
+            ))
+        self.assertEqual(result, expected)
+        launch.assert_called_once_with(
+            "/tmp/project",
+            open_console=True,
+            console_port=9001,
         )
 
     def test_start_registers_detached_worker_and_status_is_durable(self):

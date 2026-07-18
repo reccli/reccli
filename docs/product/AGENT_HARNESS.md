@@ -202,6 +202,19 @@ are not an always-on daemon and do not poll for work. Start one from any
 MCP-connected Claude Code or Codex session:
 
 ```python
+start_project_organization(
+    working_directory="/path/to/project",
+    open_console=True,
+)
+```
+
+This preferred one-line path requires a tracked project contract. RecCli runs
+its shell-free preflights, verifies the emitter's dynamic tracked mission
+against current HEAD, refuses duplicate or pending-approval runs, and launches
+the emitted payload unchanged. Projects that intentionally supply an ad hoc
+mission can use the lower-level surface:
+
+```python
 start_organization(
     working_directory="/path/to/project",
     mission="Implement the feature and satisfy these acceptance criteria: ...",

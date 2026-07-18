@@ -46,6 +46,7 @@ Claude Code setup configures both the MCP server and lifecycle hooks for session
 | `expand_search_result` | Drill into a search result to see full conversation context |
 | `save_session_notes` | Persist decisions, problems solved, and next steps from current session |
 | `start_organization` | Launch a durable Claude Code/Codex multi-agent delivery run on isolated Git worktrees, with optional immutable evidence snapshots |
+| `start_project_organization` | Atomically run a tracked project launch contract, verify its dynamic mission against HEAD, refuse duplicates/pending approvals, launch the exact emitted organization, and open the console |
 | `organization_status` | Poll an organization run and inspect recent events/messages |
 | `list_organizations` | List durable organization runs for a project |
 | `steer_organization` | Queue a human message for an agent or role group at the next safe boundary |
@@ -56,9 +57,15 @@ Claude Code setup configures both the MCP server and lifecycle hooks for session
 
 ### Multi-agent organization runs
 
-From a Claude Code or Codex session with the RecCli MCP server connected, ask
-the agent to call `start_organization` with a project path and a concrete
-mission. The call returns immediately with a `run_id`; use
+Projects with a tracked `reccli.organization-launch.json` should call
+`start_project_organization` with only their project path. The contract owns
+preflights and the emitter; dynamic selectors bind a reviewed mission file,
+mission SHA-256, state fingerprint, and current Git HEAD. RecCli forwards the
+exact emitted request and refuses duplicate live or pending-approval runs.
+
+Projects without that contract can still call `start_organization` with a
+project path and a concrete mission. The call returns immediately with a
+`run_id`; use
 `organization_status` to follow it and `cancel_organization` to stop it.
 Runs default to eight synchronized work rounds. Each round may schedule several
 agents in parallel, so status distinguishes the round countdown from cumulative

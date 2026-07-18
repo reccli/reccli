@@ -78,11 +78,12 @@ writes to, or operates on the file formats those specs describe.
 | Tool | Purpose |
 |------|---------|
 | `start_organization` | Starts a detached, durable multi-agent delivery run using installed Claude Code/Codex subscription logins. `provider=auto` mixes both when usable. `evidence_paths` seals ignored/external inputs; `protected_paths` deny tracked writes; `context_manifest` creates hash-bound common-plus-lane documentation boxes; `max_experiments` caps sealed outputs. The single `scientific` topology permits autonomous reversible experiments, uses a fully-sighted veto-only auditor, and emits a human-authorized promotion request. |
+| `start_project_organization` | One-line, fail-closed project launch. Reads tracked `reccli.organization-launch.json` (or a conventional readiness emitter), runs argv-only preflights without a shell, requires and verifies HEAD-bound dynamic mission identity when configured, rejects duplicate/pending runs, forwards the exact emitted `start_organization` arguments, and opens/reuses the authenticated console. |
 | `list_organizations` | Lists durable runs for one project with round, topology, provider, process liveness, and control-protocol support. |
 | `organization_status` | Reads a dashboard-ready durable snapshot: status, topology graph, agents, last turns, messages, events, controls, artifacts, promotion state, and process liveness. It works after an MCP restart. |
 | `steer_organization` | Queues an idempotent human message for an exact agent or role group. The worker applies it at the next safe round boundary and records a separate acknowledgement. |
 | `pause_organization` / `resume_organization` | Request a pause after the active synchronized round or resume from that boundary. Request and acknowledgement remain distinct. |
-| `open_organization_console` | Starts the token-protected, localhost-only Next.js organization console. Initial dependency install/build is automatic. |
+| `open_organization_console` | Starts or reuses the token-protected, localhost-only Next.js organization console. Reuse preserves the valid token and avoids port-collision launches. Initial dependency install/build is automatic. |
 | `approve_organization` | Approves one exact hash-bound terminal packet. Checkpoint approvals start a fresh successor with the signed decision as evidence; verified promotions fast-forward the clean local branch. No remote push occurs. |
 | `cancel_organization` | Writes a durable cancellation marker and reconciles it with process-group liveness, signalling a still-live detached supervisor and native CLI children even when status already says `cancelled`. |
 

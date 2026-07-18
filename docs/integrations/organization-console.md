@@ -14,7 +14,13 @@ The first launch installs and builds the bundled web package automatically.
 The server binds to `127.0.0.1`, generates a per-launch access token, opens the
 browser, and does not expose the project over the network.
 
-Claude Code and Codex can also call `open_organization_console`.
+Claude Code and Codex can also call `open_organization_console`. The launcher
+reuses a matching running console and its valid token instead of starting a
+second server on the same port.
+
+For projects with a tracked launch contract, `start_project_organization`
+performs preflight, dynamic mission selection, organization launch, and console
+open/reuse in one MCP call.
 
 ## Layout
 
