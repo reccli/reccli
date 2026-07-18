@@ -1232,6 +1232,18 @@ class OrganizationProjectTests(unittest.TestCase):
                 lead_prompt,
             )
             self.assertIn("conflicting manager evidence", lead_prompt)
+            self.assertIn(
+                "require the responsible manager to complete one bounded",
+                lead_prompt,
+            )
+            self.assertIn(
+                "remaining gap is exclusively project authority",
+                lead_prompt,
+            )
+            self.assertIn("unavailable acquisition evidence", lead_prompt)
+            self.assertIn(
+                "Do not duplicate a completed manager search", lead_prompt,
+            )
 
             manager_prompt = runner._build_prompt(
                 runner.topology.agent("manager-b"), [], 1, True,
@@ -1245,6 +1257,30 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertIn("never send private repository", manager_prompt)
             self.assertIn("source title, URL, access date", manager_prompt)
             self.assertIn("does not override project authority", manager_prompt)
+            self.assertIn(
+                "Before declaring or forwarding a terminal", manager_prompt,
+            )
+            self.assertIn(
+                "perform one bounded primary-source", manager_prompt,
+            )
+            self.assertIn(
+                "materially distinct blocker", manager_prompt,
+            )
+            self.assertIn(
+                "what remains a human or project-policy choice",
+                manager_prompt,
+            )
+            resumed_manager_prompt = runner._build_prompt(
+                runner.topology.agent("manager-b"), [], 2, False,
+            )
+            self.assertIn(
+                "Before declaring or forwarding a terminal",
+                resumed_manager_prompt,
+            )
+            self.assertIn(
+                "Retain the bootstrap research rules",
+                resumed_manager_prompt,
+            )
 
             worker_prompt = runner._build_prompt(
                 runner.topology.agent("worker-b"), [], 1, True,

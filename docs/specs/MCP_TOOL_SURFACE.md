@@ -212,6 +212,15 @@ worktree:
   Codex resumed-thread counters are cumulative and are therefore converted to
   deltas before aggregate and per-provider run totals are updated.
 
+  Leads and managers receive native external-research capability with a bounded
+  escalation contract. Before treating a missing technical model, algorithm,
+  standard, numerical method, or scientific formulation as a terminal blocker,
+  the responsible manager must complete one primary-source research pass or
+  state why the remaining uncertainty is exclusively project authority or
+  unavailable acquisition evidence. The lead verifies that step and avoids
+  duplicating it. Sourced alternatives remain advisory and cannot replace
+  project authority or immutable evidence.
+
 **Destructive (with safety nets)** — reversible in most cases:
 
 - `delete_session` (archive by default, `hard=True` required for deletion).

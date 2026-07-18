@@ -319,6 +319,20 @@ either is unavailable. Mixed runs currently require `model="auto"`, allowing
 each native CLI to use its own configured model rather than passing one
 provider-specific model name to both.
 
+Leads and managers have native external research available. Managers own the
+first bounded research pass for technical blockers in their lanes. Before a
+manager declares a blocker terminal because a model, algorithm, standard,
+numerical method, or scientific formulation is missing, it must consult primary
+sources once or explicitly record that research cannot reduce the uncertainty
+because only project authority or unavailable acquisition evidence remains.
+The report separates literature findings, required assumptions, project-held
+evidence, and human policy choices. The lead enforces that trigger and searches
+directly only for macro reconnaissance, conflicting sourced conclusions,
+scope-changing standards, or terminal adjudication; it does not repeat a
+manager's completed search. External literature informs alternatives but never
+overrides project authority, immutable evidence, reproduced tests, or human
+acceptance.
+
 The default topology is deliberately close to Org-Bench's successful Google
 shape while adding two bounded controls:
 
