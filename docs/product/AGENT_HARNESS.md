@@ -266,8 +266,12 @@ turns separately. If an immutable candidate is still traversing review when the
 work cap arrives, RecCli permits at most four additional closeout boundaries.
 Closeout never wakes workers or starts implementation/experiments; it can only
 finish existing review, manager routing, host integration, release review, and
-finalization. Increase `max_rounds` explicitly for unusually large missions
-rather than treating eight as a total-agent-call budget.
+finalization. Routine candidate-less chatter does not schedule closeout. RecCli
+also fingerprints release-relevant governance, candidate, integration,
+artifact, and inbox state; an unchanged fingerprint ends closeout instead of
+buying another round of reworded review. Increase `max_rounds` explicitly for
+unusually large missions rather than treating eight as a total-agent-call
+budget.
 
 The release manager has three reviewed terminal dispositions. `promote`
 produces the normal reversible promotion package. `no_promotion` binds an exact durable
@@ -304,7 +308,10 @@ the other provider, adding independent model-family judgment at the review
 seam. Provider assignments are fixed for the run, recorded in `request.json`,
 `run.json`, status, per-turn traces, and `result.json`; agents do not switch
 provider between rounds. Token usage is reported both in aggregate and by
-provider.
+provider. Claude invocation usage is incremental. Codex resumed-thread usage is
+cumulative, so RecCli stores the raw provider record but adds only the
+session-to-session delta to run totals. Per-turn traces expose both `usage` and
+`accounted_usage`.
 
 Pass `provider="claude"` or `provider="codex"` to force a homogeneous run.
 Pass `provider="mixed"` to require both authenticated CLIs and fail early if
@@ -339,6 +346,13 @@ deliberation or unrelated inbox traffic. The scientific adversarial auditor is
 the deliberate exception: it receives the full relevant durable decision
 record, candidate bundle references, prior-attempt evidence, and primary
 evidence so independence does not come from context starvation.
+
+Static mission, charter, context-pack inventory, protected-path inventory,
+artifact protocol, and research rules are fully hydrated only on an agent's
+bootstrap turn. Resumed turns receive an incremental prompt containing current
+inbox, governance, budget, workspace, and release state plus durable pointers
+to the retained bootstrap material. Each trace records `prompt_mode` and
+`prompt_chars`, making prompt amplification measurable.
 
 Projects may additionally pass a tracked `context_manifest` using schema
 `reccli.organization-context-packs.v1`. It declares ordered `common.paths`,
@@ -391,6 +405,14 @@ only patch-identical candidates whose adversarial review completed without a
 veto. No agent can apply the resulting proposal to the canonical branch or
 archive.
 
+Lead and manager roles are inbox-driven after delegation. A prior
+`state=working` response does not wake them by itself. Manager C receives
+`review`/`decision` traffic only when it names an exact candidate or
+release-dossier identity; candidate-less coordination uses `plan`, `question`,
+`answer`, or `blocker`. Manager D wakes for an exact candidate or an explicit
+release-risk dossier instruction. Workers remain able to continue a bounded
+assigned implementation lane.
+
 ```python
 start_organization(
     working_directory="/path/to/scientific-project",
@@ -419,6 +441,7 @@ devsession/agent-organizations/<run-id>/
   request.json
   status.json
   run.json
+  host-state.json              # host-owned Git/candidate/governance brief
   result.json                 # terminal runs
   promotion-request.json      # scientific proposal awaiting human authorization
   evidence-manifest.json      # selected ignored/external sources + hashes

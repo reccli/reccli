@@ -113,6 +113,13 @@ searching files or symbols, running tests, inspecting Git history, editing
 workspace files, using another tool, or waiting for a routed response before
 the final turn reply exists.
 
+The runner also publishes `host-state.json`, a host-owned mechanical brief for
+launch HEAD, mission-mentioned commit existence and ancestry, candidate kinds,
+integration identity, governance state, workspace heads, and experiment
+budget. Agents are instructed to trust these mechanical facts and report a
+concrete contradiction instead of repeatedly rebuilding the same Git census.
+The brief does not decide scientific meaning.
+
 Telemetry is deliberately operational rather than cognitive:
 
 - model thinking and chain-of-thought are never copied;
@@ -124,6 +131,12 @@ Telemetry is deliberately operational rather than cognitive:
 A `read` event proves that a provider invoked an observed read operation. It
 does not prove scientific comprehension. Decisions, citations, tests, and
 review evidence remain responsible for establishing comprehension.
+
+Turn records distinguish bootstrap from incremental prompts and include prompt
+character counts. They also preserve raw provider token usage alongside
+`accounted_usage`; Codex cumulative resumed-thread counters are converted to
+per-turn deltas before the run and provider totals shown by the console are
+updated.
 
 ## Delegation and execution
 
@@ -143,6 +156,12 @@ complete manager-to-worker map after round two. A lane with no implementation
 work still receives an explicit research, review, or standby work item. Missing
 delegations fail the run before parallel execution instead of leaving agents to
 invent overlapping scopes.
+
+After that gate, lead and manager roles are event-driven: saying
+`state=working` does not schedule another turn without a new inbox event.
+Workers may continue their bounded assigned lane. Veto auditors wake only for
+an exact candidate or release dossier, and release closeout stops early when
+its structural progress fingerprint is unchanged.
 
 Advisory traffic from alternate managers remains visible to workers, but it
 cannot activate an unassigned worker.

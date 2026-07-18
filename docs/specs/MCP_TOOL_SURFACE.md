@@ -77,7 +77,7 @@ writes to, or operates on the file formats those specs describe.
 
 | Tool | Purpose |
 |------|---------|
-| `start_organization` | Starts a detached, durable multi-agent delivery run using installed Claude Code/Codex subscription logins. `provider=auto` mixes both when usable. `evidence_paths` seals ignored/external inputs; `protected_paths` deny tracked writes; `context_manifest` creates hash-bound common-plus-lane documentation boxes; `max_experiments` caps sealed outputs. The single `scientific` topology permits autonomous reversible experiments, uses a fully-sighted veto-only auditor, and emits a human-authorized promotion request. |
+| `start_organization` | Starts a detached, durable multi-agent delivery run using installed Claude Code/Codex subscription logins. `provider=auto` mixes both when usable. `evidence_paths` seals ignored/external inputs; `protected_paths` deny tracked writes; `context_manifest` creates hash-bound common-plus-lane documentation boxes; `max_experiments` caps sealed outputs. The single `scientific` topology permits autonomous reversible experiments, uses an exact-candidate, fully-sighted veto-only auditor, publishes a host-owned mechanical state brief, and emits a human-authorized promotion request. Resumed turns use incremental prompts and managers are event-driven after delegation. |
 | `start_project_organization` | One-line, fail-closed project launch. Reads tracked `reccli.organization-launch.json` (or a conventional readiness emitter), runs argv-only preflights without a shell, requires and verifies HEAD-bound dynamic mission identity when configured, rejects duplicate/pending runs, and opens/reuses the authenticated console. By explicit project opt-in, an eligible lead-authored terminal conclusion becomes the hash-bound successor mission so completed work is not replayed; host-fallback, promotion-ready, and approval-pending outcomes fail closed. |
 | `list_organizations` | Lists durable runs for one project with round, topology, provider, process liveness, and control-protocol support. |
 | `organization_status` | Reads a dashboard-ready durable snapshot: status, topology graph, agents, last turns, messages, events, controls, artifacts, promotion state, and process liveness. It works after an MCP restart. |
@@ -190,6 +190,19 @@ worktree:
   receive an explicit primary-manager work item after round two. Operator
   steering, pause, and resume are written as
   immutable control requests and applied only at synchronized boundaries.
+  After the barrier, lead and managers require new inbox traffic rather than
+  self-waking from `state=working`; workers may continue their assigned lane.
+  Veto-review `review`/`decision` messages require an exact candidate or
+  release-dossier identity. `host-state.json` owns mechanical Git identity,
+  ancestry, candidate-kind, integration, governance, and budget facts so
+  agents do not repeat repository censuses. Closeout ignores routine
+  candidate-less chatter and stops when its release-state fingerprint does not
+  change.
+
+  Organization turn traces retain raw native-provider usage and
+  host-accounted usage. Claude invocation counters are already incremental;
+  Codex resumed-thread counters are cumulative and are therefore converted to
+  deltas before aggregate and per-provider run totals are updated.
 
 **Destructive (with safety nets)** — reversible in most cases:
 

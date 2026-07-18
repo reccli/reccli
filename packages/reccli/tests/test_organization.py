@@ -2040,6 +2040,227 @@ class OrganizationProjectTests(unittest.TestCase):
                 set(runner.topology.worker_ids),
             )
 
+    def test_event_scheduler_keeps_managers_inbox_driven(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Do bounded work.", "claude",
+                "scientific", "event-run", root / "run",
+            )
+            runner.states["manager-a"] = "working"
+            runner.states["worker-a"] = "working"
+            runner.turned.update({"manager-a", "worker-a"})
+            runner.inboxes["worker-a"] = [{
+                "from": "manager-a", "to": "worker-a", "tag": "plan",
+                "content": "Continue the bounded implementation.",
+                "candidate": None, "workItem": "work-a", "risk": "routine",
+            }]
+            selected = {
+                agent.agent_id for agent in runner._select_agents(3)
+            }
+            self.assertNotIn("manager-a", selected)
+            self.assertIn("worker-a", selected)
+
+    def test_veto_auditor_requires_exact_candidate_for_review_traffic(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Review only exact candidates.", "claude",
+                "scientific", "review-run", run_dir,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-a"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            candidate_less = {
+                "to": "manager-c", "tag": "review",
+                "content": "Please re-check repository state.",
+                "candidate": None, "workItem": "census", "risk": "routine",
+            }
+            runner._deliver_message("manager-a", candidate_less, 3)
+            self.assertEqual(runner.inboxes["manager-c"], [])
+            self.assertEqual(runner.dropped_messages, 1)
+
+            exact = {
+                **candidate_less,
+                "content": "Review this exact release dossier.",
+                "candidate": base,
+                "workItem": "final-report",
+                "risk": "release",
+            }
+            runner._deliver_message("manager-a", exact, 4)
+            self.assertEqual(
+                runner.inboxes["manager-c"][0]["candidate"], base,
+            )
+
+    def test_closeout_ignores_routine_chatter_and_detects_no_progress(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Close out efficiently.", "claude",
+                "scientific", "closeout-run", root / "run",
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-d"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            runner.inboxes["manager-a"] = [{
+                "from": "lead", "tag": "status", "content": "Still waiting.",
+                "candidate": None, "workItem": "status", "risk": "routine",
+            }]
+            self.assertEqual(runner._select_closeout_agents(), [])
+            runner.inboxes["manager-d"] = [{
+                "from": "lead", "tag": "plan",
+                "content": "Assemble the terminal dossier.",
+                "candidate": None, "workItem": "final-report",
+                "risk": "release",
+            }]
+            self.assertEqual(
+                [agent.agent_id for agent in runner._select_closeout_agents()],
+                ["manager-d"],
+            )
+            first = runner._closeout_progress_signature()
+            second = runner._closeout_progress_signature()
+            self.assertEqual(first, second)
+
+    def test_codex_usage_is_accounted_as_session_delta(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Count tokens.", "mixed",
+                "scientific", "usage-run", root / "run",
+                provider_assignments={
+                    agent.agent_id: (
+                        "codex" if agent.agent_id == "lead" else "claude"
+                    )
+                    for agent in get_topology("scientific").agents
+                },
+            )
+            first = runner._add_usage({
+                "input_tokens": 100,
+                "cached_input_tokens": 80,
+                "output_tokens": 10,
+            }, "codex", "thread-1")
+            second = runner._add_usage({
+                "input_tokens": 135,
+                "cached_input_tokens": 110,
+                "output_tokens": 14,
+            }, "codex", "thread-1")
+            claude = runner._add_usage({
+                "input_tokens": 7,
+                "cached_input_tokens": 5,
+                "output_tokens": 2,
+            }, "claude", "session-1")
+            self.assertEqual(first["input_tokens"], 100)
+            self.assertEqual(second, {
+                "input_tokens": 35,
+                "cached_input_tokens": 30,
+                "output_tokens": 4,
+            })
+            self.assertEqual(claude["input_tokens"], 7)
+            self.assertEqual(runner.usage, {
+                "input_tokens": 142,
+                "cached_input_tokens": 115,
+                "output_tokens": 16,
+            })
+
+    def test_resumed_prompt_uses_host_state_and_compacts_static_policy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Inspect " + ("the declared acceptance contract. " * 80),
+                "claude", "scientific", "prompt-run", root / "run",
+                protected_paths=[f"docs/protected-{index}" for index in range(20)],
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            workspace = Workspace(
+                root, "worker-a", "integration", root, [], base,
+            )
+            runner.workspaces["worker-a"] = workspace
+            runner.host_state_brief = {
+                "content_sha256": "state-sha",
+                "round": 2,
+                "mechanical_authority": "Host facts are mechanical.",
+                "repository": {"launch_head": base},
+                "mission_commit_inventory": {
+                    "launch_head": base, "mentioned_commits": [],
+                },
+                "known_candidates": [],
+                "integrated_candidates": {},
+                "governance": {},
+                "workspaces": {
+                    "worker-a": {
+                        "base_commit": base, "head": base,
+                        "changed_from_base": False,
+                    },
+                },
+                "experiment_budget": {
+                    "maximum": 3, "used": 0, "remaining": 3,
+                },
+            }
+            bootstrap = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 3, True,
+            )
+            incremental = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 4, False,
+            )
+            self.assertIn("Host-owned repository and candidate state", incremental)
+            self.assertIn("state-sha", incremental)
+            self.assertNotIn("## Mission", incremental)
+            self.assertIn("20 protected path declarations", incremental)
+            self.assertLess(len(incremental), len(bootstrap))
+
+    def test_host_state_resolves_mission_commit_identity_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            launch = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            ancestor = subprocess.run(
+                ["git", "rev-list", "--max-parents=0", "HEAD"],
+                cwd=root, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            run_dir = root / "run"
+            run_dir.mkdir()
+            runner = OrganizationRunner(
+                root, f"Compare exact candidate {ancestor}.", "claude",
+                "scientific", "host-state-run", run_dir,
+            )
+            runner.caller_head = launch
+            runner.workspaces["manager-a"] = Workspace(
+                root, "main", "main", root, [], launch,
+            )
+            state = runner._write_host_state_brief(0)
+            record = state["mission_commit_inventory"]["mentioned_commits"][0]
+            self.assertTrue(record["exists_as_commit"])
+            self.assertEqual(record["commit"], ancestor)
+            self.assertEqual(
+                record["relation_to_launch_head"], "ancestor_of_launch_head",
+            )
+            self.assertEqual(
+                json.loads((run_dir / "host-state.json").read_text())[
+                    "content_sha256"
+                ],
+                state["content_sha256"],
+            )
+
 
 class OrganizationRunnerTests(unittest.TestCase):
     def test_scientific_run_explores_then_emits_human_promotion_request(self):
@@ -2512,7 +2733,11 @@ class OrganizationRunnerTests(unittest.TestCase):
                     reply = response([
                         message(
                             manager, "plan", f"Map bounded lane {manager}.",
-                            work_item=f"map-{manager}", risk="routine",
+                            work_item=f"map-{manager}",
+                            risk=(
+                                "release"
+                                if manager == "manager-d" else "routine"
+                            ),
                         )
                         for manager in ("manager-a", "manager-b", "manager-c", "manager-d")
                     ], state="idle")
@@ -2532,7 +2757,7 @@ class OrganizationRunnerTests(unittest.TestCase):
                         )
                         for worker in ("worker-b", "worker-d")
                     ], state="idle")
-                elif agent_id == "manager-d" and session.turn == 2:
+                elif agent_id == "manager-d" and session.turn == 1:
                     dossier = (
                         session.workspace.cwd
                         / runner.artifact_staging_prefix
@@ -2569,7 +2794,11 @@ class OrganizationRunnerTests(unittest.TestCase):
                             report["candidate"], "final-no-promotion", "release",
                         ),
                     ])
-                elif agent_id == "manager-d" and session.turn >= 4:
+                elif (
+                    agent_id == "manager-d"
+                    and session.turn >= 2
+                    and report["candidate"]
+                ):
                     reply = response(
                         state="done", candidate=report["candidate"],
                         risk="release", disposition="no_promotion", final=True,
