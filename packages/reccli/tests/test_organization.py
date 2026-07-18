@@ -1255,7 +1255,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 runner.inboxes[manager_id] = [{
                     "from": "lead",
                     "to": manager_id,
-                    "tag": "plan",
+                    "tag": "review" if manager_id == "manager-c" else "plan",
                     "content": "Refine the assigned lane.",
                     "candidate": None,
                     "workItem": f"map-{manager_id}",
@@ -1275,7 +1275,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 runner.inboxes[worker_id] = [{
                     "from": manager_id,
                     "to": worker_id,
-                    "tag": "handoff",
+                    "tag": "review" if worker_id == "worker-d" else "handoff",
                     "content": "Execute or explicitly investigate this bounded lane.",
                     "candidate": None,
                     "workItem": f"execute-{worker_id}",

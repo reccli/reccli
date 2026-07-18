@@ -32,6 +32,7 @@ MESSAGE_TAGS = {
     "plan", "question", "answer", "handoff", "review",
     "decision", "status", "blocker",
 }
+DELEGATION_TAGS = {"plan", "handoff", "review"}
 RISKS = {"routine", "high", "release"}
 STATES = {"working", "idle", "blocked", "done"}
 ARTIFACT_STAGING_ROOT = ".reccli-org-artifacts"
@@ -3375,7 +3376,7 @@ Return only the schema-constrained reply. Every message must include candidate, 
         if (
             recipient in self.topology.worker_ids
             and sender in self.topology.manager_ids
-            and tag in {"plan", "handoff"}
+            and tag in DELEGATION_TAGS
         ):
             if not message.get("workItem") or message.get("risk") not in RISKS:
                 self.dropped_messages += 1
@@ -3394,7 +3395,7 @@ Return only the schema-constrained reply. Every message must include candidate, 
             self.topology.delegation_gate
             and recipient in self.topology.manager_ids
             and sender == self.topology.leader_id
-            and tag in {"plan", "handoff"}
+            and tag in DELEGATION_TAGS
             and (not message.get("workItem") or message.get("risk") not in RISKS)
         ):
             self.dropped_messages += 1
@@ -3524,7 +3525,7 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         return any(
             message.get("from") == sender
             and message.get("to", recipient) == recipient
-            and message.get("tag") in {"plan", "handoff"}
+            and message.get("tag") in DELEGATION_TAGS
             and bool(message.get("workItem"))
             and message.get("risk") in RISKS
             for message in messages

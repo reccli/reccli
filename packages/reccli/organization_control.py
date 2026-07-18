@@ -296,7 +296,7 @@ def organization_snapshot(
                 if message.get("status", "delivered") == "delivered"
                 and message.get("from") == primary
                 and message.get("to") == agent["id"]
-                and message.get("tag") in {"plan", "handoff"}
+                and message.get("tag") in {"plan", "handoff", "review"}
                 and message.get("workItem")
                 and message.get("risk") in {"routine", "high", "release"}
             ]
@@ -305,10 +305,34 @@ def organization_snapshot(
                 agent["state"] = "awaiting_assignment"
 
     controls = _control_records(run_dir)
+    completed_turns = status.get("completed_turns")
+    if completed_turns is None:
+        completed_turns = sum(
+            1
+            for activity in activities
+            if activity.get("activity_type") == "turn"
+            and activity.get("status") == "completed"
+        )
     return {
         **status,
         "run_id": status.get("run_id") or run.get("run_id") or run_id,
         "run_dir": str(run_dir),
+        "max_rounds": status.get("max_rounds") or run.get("max_rounds"),
+        "max_closeout_rounds": (
+            status.get("max_closeout_rounds")
+            or run.get("max_closeout_rounds")
+        ),
+        "completed_turns": completed_turns,
+        "attempted_turns": status.get("attempted_turns", len(last_turns)),
+        "failed_turns": status.get(
+            "failed_turns",
+            sum(
+                1
+                for activity in activities
+                if activity.get("activity_type") == "turn"
+                and activity.get("status") == "failed"
+            ),
+        ),
         "mission": run.get("mission"),
         "created_at": run.get("created_at"),
         "pid": status.get("pid") or pid,

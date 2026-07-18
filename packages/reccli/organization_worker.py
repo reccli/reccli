@@ -38,6 +38,7 @@ def main() -> int:
         except Exception:
             current = {}
         failure = {
+            **current,
             "run_id": request.get("run_id"), "status": "failed",
             "round": int(current.get("round", 0) or 0),
             "detail": str(exc), "error": str(exc), "pid": os.getpid(),
