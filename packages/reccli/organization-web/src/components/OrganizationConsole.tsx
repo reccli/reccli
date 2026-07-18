@@ -237,6 +237,7 @@ function AgentChip({
 function ActivityCard({ activity }: { activity: ActivityRecord }) {
   const isMessage = activity.activity_type === "message";
   const isTurn = activity.activity_type === "turn";
+  const isTelemetry = activity.activity_type === "telemetry";
   return (
     <article
       className={`activity-card activity-${activity.activity_type} ${
@@ -249,6 +250,8 @@ function ActivityCard({ activity }: { activity: ActivityRecord }) {
             ? `${activity.from || "system"} → ${activity.to || "team"}`
             : isTurn
               ? `Round ${activity.round ?? "?"} turn`
+              : isTelemetry
+                ? `${titleCase(activity.type || "activity")} · T${activity.turn ?? "?"}`
               : titleCase(activity.type || "event")}
         </span>
         <span>
@@ -261,6 +264,9 @@ function ActivityCard({ activity }: { activity: ActivityRecord }) {
         {activity.tag && <span>#{activity.tag}</span>}
         {activity.status && <span>{activity.status}</span>}
         {activity.operator_message && <span>human</span>}
+        {isTelemetry && activity.provider && (
+          <span>{providerLabel(activity.provider)}</span>
+        )}
       </div>
     </article>
   );

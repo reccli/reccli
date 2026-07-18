@@ -196,6 +196,20 @@ class OrganizationControlTests(unittest.TestCase):
                 }) + "\n",
                 encoding="utf-8",
             )
+            (run_dir / "activity.jsonl").write_text(
+                json.dumps({
+                    "schema": "reccli.organization-activity.v1",
+                    "ts": "2026-07-17T00:00:01Z",
+                    "agent_id": "worker-a",
+                    "provider": "claude",
+                    "turn": 1,
+                    "type": "read",
+                    "status": "started",
+                    "content": "Reading docs/Core/Critical/contract.txt",
+                    "paths": ["docs/Core/Critical/contract.txt"],
+                }) + "\n",
+                encoding="utf-8",
+            )
             turns = run_dir / "turns"
             turns.mkdir()
             (turns / "worker-a.jsonl").write_text(
@@ -220,7 +234,9 @@ class OrganizationControlTests(unittest.TestCase):
                 "Reproduced the fixture.",
             )
             self.assertEqual(len(snapshot["messages"]), 1)
-            self.assertEqual(len(snapshot["activities"]), 2)
+            self.assertEqual(len(snapshot["activities"]), 3)
+            self.assertEqual(snapshot["telemetry"][0]["activity_type"], "telemetry")
+            self.assertEqual(snapshot["telemetry"][0]["agent_id"], "worker-a")
 
             listed = list_organization_runs(str(root))
             self.assertEqual(listed["runs"][0]["run_id"], "control-run")

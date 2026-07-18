@@ -1009,6 +1009,11 @@ select:disabled {
   border-left: 2px solid rgba(101, 199, 232, 0.45);
 }
 
+.activity-card.activity-telemetry {
+  border-left: 2px solid rgba(246, 199, 111, 0.45);
+  background: rgba(246, 199, 111, 0.025);
+}
+
 .activity-card.is-error {
   border-color: rgba(255, 126, 134, 0.28);
 }

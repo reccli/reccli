@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
@@ -39,6 +40,13 @@ ARTIFACT_STAGING_ROOT = ".reccli-org-artifacts"
 CONTEXT_PACK_SCHEMA = "reccli.organization-context-packs.v1"
 HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
 DEFAULT_CLOSEOUT_ROUNDS = 4
+ACTIVITY_SCHEMA = "reccli.organization-activity.v1"
+_ACTIVITY_WRITE_LOCK = threading.Lock()
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*)"
+    r"=([^\s;&|]+)",
+)
+_URL_TOKEN_RE = re.compile(r"(?i)([?&](?:token|key|secret|password)=)[^&\s]+")
 
 AGENT_REPLY_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -613,11 +621,65 @@ class SubscriptionSession:
 
     def run(self, prompt: str, schema: Dict[str, Any], timeout_seconds: int) -> Dict[str, Any]:
         self.turn += 1
-        if self.provider == "claude":
-            return self._run_claude(prompt, schema, timeout_seconds)
-        if self.provider == "codex":
-            return self._run_codex(prompt, schema, timeout_seconds)
-        raise ValueError(f"Unsupported subscription provider: {self.provider}")
+        self._record_activity(
+            "turn",
+            f"Starting {self.provider.title()} turn {self.turn}",
+            status="started",
+        )
+        try:
+            if self.provider == "claude":
+                result = self._run_claude(prompt, schema, timeout_seconds)
+            elif self.provider == "codex":
+                result = self._run_codex(prompt, schema, timeout_seconds)
+            else:
+                raise ValueError(
+                    f"Unsupported subscription provider: {self.provider}",
+                )
+        except Exception as exc:
+            self._record_activity(
+                "turn",
+                f"{self.provider.title()} turn {self.turn} failed: "
+                f"{type(exc).__name__}",
+                status="failed",
+            )
+            raise
+        self._record_activity(
+            "turn",
+            f"Completed {self.provider.title()} turn {self.turn}",
+            status="completed",
+        )
+        return result
+
+    def record_reply_disposition(self, reply: Dict[str, Any]) -> None:
+        """Record a safe operator-facing disposition from the validated reply."""
+        state = str(reply.get("state") or "")
+        messages = reply.get("messages") or []
+        waiting_on = sorted({
+            str(message.get("to"))
+            for message in messages
+            if isinstance(message, dict)
+            and message.get("to")
+            and message.get("tag") in {"question", "review", "handoff", "blocker"}
+        })
+        if state == "blocked":
+            suffix = f" on {', '.join(waiting_on)}" if waiting_on else ""
+            self._record_activity(
+                "waiting",
+                f"Blocked; waiting{suffix}",
+                status="waiting",
+            )
+        elif state == "idle" and waiting_on:
+            self._record_activity(
+                "waiting",
+                f"Waiting on {', '.join(waiting_on)}",
+                status="waiting",
+            )
+        elif state == "done":
+            self._record_activity(
+                "waiting",
+                "Work item complete; standing by",
+                status="completed",
+            )
 
     def _process_environment(self) -> Dict[str, str]:
         """Bind subprocesses to the isolated worktree's source and runtime.
@@ -654,7 +716,8 @@ class SubscriptionSession:
             raise RuntimeError("claude CLI not found on PATH")
         requested_id = self.session_id or str(uuid.uuid4())
         args = [
-            "claude", "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+            "claude", "-p", "--output-format", "stream-json", "--verbose",
+            "--json-schema", json.dumps(schema),
             "--permission-mode", "acceptEdits" if self.writable else "plan",
         ]
         if self.session_id:
@@ -672,18 +735,28 @@ class SubscriptionSession:
             args += ["--disallowedTools", "Edit", "Write", "NotebookEdit"]
         if self.fresh:
             args += ["--setting-sources", "project", "--no-session-persistence", "--disable-slash-commands"]
-        proc = subprocess.run(
-            args, input=prompt, text=True, cwd=self.workspace.cwd,
-            env=self._process_environment(), capture_output=True,
-            timeout=timeout_seconds, check=False,
+        proc, events = self._run_streaming_process(
+            args,
+            prompt,
+            timeout_seconds,
         )
-        self._persist_process_output(proc)
         if proc.returncode != 0:
             raise RuntimeError(f"Claude Code exited {proc.returncode}: {(proc.stderr or '').strip()}")
-        try:
-            envelope = json.loads((proc.stdout or "").strip())
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("Claude Code returned invalid JSON") from exc
+        envelope = next(
+            (
+                event for event in reversed(events)
+                if (
+                    event.get("type") == "result"
+                    or (
+                        "structured_output" in event
+                        and "is_error" in event
+                    )
+                )
+            ),
+            None,
+        )
+        if envelope is None:
+            raise RuntimeError("Claude Code returned no result event")
         if envelope.get("is_error"):
             raise RuntimeError(f"Claude Code error: {envelope.get('result', 'unknown error')}")
         self.session_id = envelope.get("session_id") or requested_id
@@ -719,7 +792,8 @@ class SubscriptionSession:
             ]
             if self.model:
                 args += ["--model", self.model]
-            args += ["-c", f'model_reasoning_effort="{self.reasoning}"', self.session_id, "-"]
+            effort = "low" if self.reasoning == "minimal" else self.reasoning
+            args += ["-c", f'model_reasoning_effort="{effort}"', self.session_id, "-"]
         else:
             args = [
                 "codex", "exec", "--cd", str(self.workspace.cwd),
@@ -731,27 +805,34 @@ class SubscriptionSession:
                 args += ["--ephemeral"]
             if self.model:
                 args += ["--model", self.model]
-            args += ["-c", f'model_reasoning_effort="{self.reasoning}"']
+            effort = "low" if self.reasoning == "minimal" else self.reasoning
+            args += ["-c", f'model_reasoning_effort="{effort}"']
             for directory in self.workspace.additional_directories:
                 args += ["--add-dir", str(directory)]
             args += ["-"]
-        proc = subprocess.run(
-            args, input=prompt, text=True, cwd=self.workspace.cwd,
-            env=self._process_environment(), capture_output=True,
-            timeout=timeout_seconds, check=False,
+        proc, events = self._run_streaming_process(
+            args,
+            prompt,
+            timeout_seconds,
         )
-        self._persist_process_output(proc)
-        events = []
-        for line in (proc.stdout or "").splitlines():
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
         for event in events:
             if event.get("type") == "thread.started":
                 self.session_id = event.get("thread_id") or event.get("threadId") or self.session_id
         if proc.returncode != 0:
-            raise RuntimeError(f"Codex exited {proc.returncode}: {(proc.stderr or '').strip()}")
+            error_event = next(
+                (
+                    event for event in reversed(events)
+                    if event.get("type") in {"error", "turn.failed"}
+                ),
+                {},
+            )
+            error_value = error_event.get("error") or error_event.get("message")
+            if isinstance(error_value, dict):
+                error_value = error_value.get("message") or json.dumps(error_value)
+            detail = self._sanitize_text(
+                error_value or proc.stderr or "no diagnostic",
+            )
+            raise RuntimeError(f"Codex exited {proc.returncode}: {detail}")
         if not output_path.exists():
             raise RuntimeError("Codex returned no final structured output")
         try:
@@ -769,9 +850,382 @@ class SubscriptionSession:
                 }
         return {"value": value, "session_id": self.session_id, "usage": usage}
 
+    def _run_streaming_process(
+        self,
+        args: List[str],
+        prompt: str,
+        timeout_seconds: int,
+    ) -> Tuple[subprocess.CompletedProcess, List[Dict[str, Any]]]:
+        """Run a native CLI while consuming JSONL events as they arrive."""
+        process = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self.workspace.cwd,
+            env=self._process_environment(),
+            bufsize=1,
+        )
+        stdout_queue: queue.Queue[Optional[str]] = queue.Queue()
+        stderr_chunks: List[str] = []
+
+        def read_stdout() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                stdout_queue.put(line)
+            stdout_queue.put(None)
+
+        def read_stderr() -> None:
+            assert process.stderr is not None
+            stderr_chunks.extend(process.stderr.readlines())
+
+        stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        assert process.stdin is not None
+        try:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+
+        stdout_chunks: List[str] = []
+        events: List[Dict[str, Any]] = []
+        deadline = time.monotonic() + timeout_seconds
+        stdout_done = False
+        timed_out = False
+        while not stdout_done or process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                break
+            try:
+                line = stdout_queue.get(timeout=min(0.2, remaining))
+            except queue.Empty:
+                continue
+            if line is None:
+                stdout_done = True
+                continue
+            stdout_chunks.append(line)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+                self._observe_native_event(event)
+
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
+        returncode = process.poll()
+        if returncode is None:
+            process.kill()
+            returncode = process.wait(timeout=5)
+        completed = subprocess.CompletedProcess(
+            args=args,
+            returncode=returncode,
+            stdout="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
+        )
+        self._persist_process_output(completed)
+        if timed_out:
+            raise subprocess.TimeoutExpired(
+                args,
+                timeout_seconds,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
+        return completed, events
+
+    def _observe_native_event(self, event: Dict[str, Any]) -> None:
+        """Translate provider events into safe, provider-neutral telemetry."""
+        if self.provider == "codex":
+            self._observe_codex_event(event)
+        elif self.provider == "claude":
+            self._observe_claude_event(event)
+
+    def _observe_codex_event(self, event: Dict[str, Any]) -> None:
+        event_type = str(event.get("type") or "")
+        if event_type == "turn.failed":
+            error_value = event.get("error") or {}
+            if isinstance(error_value, dict):
+                error_value = error_value.get("message") or "provider error"
+            self._record_activity(
+                "provider",
+                "Codex provider error: "
+                f"{self._sanitize_text(error_value or 'unknown error')}",
+                status="failed",
+            )
+            return
+        item = event.get("item")
+        if not isinstance(item, dict):
+            return
+        item_type = str(item.get("type") or "")
+        status = (
+            "started" if event_type == "item.started"
+            else "failed" if item.get("status") == "failed"
+            else "completed"
+        )
+        native_id = str(item.get("id") or "") or None
+        if item_type == "command_execution":
+            self._record_command_activity(
+                str(item.get("command") or ""),
+                status=status,
+                native_id=native_id,
+                exit_code=item.get("exit_code"),
+            )
+        elif item_type == "file_change":
+            changes = item.get("changes") or []
+            paths = [
+                self._display_path(change.get("path"))
+                for change in changes
+                if isinstance(change, dict) and change.get("path")
+            ]
+            paths = [path for path in paths if path]
+            self._record_activity(
+                "edit",
+                "Editing " + (", ".join(paths[:4]) or "workspace files"),
+                status=status,
+                paths=paths,
+                native_id=native_id,
+            )
+        elif item_type in {"mcp_tool_call", "tool_call"}:
+            tool_name = str(item.get("name") or item.get("tool") or "tool")
+            self._record_activity(
+                "tool",
+                f"Using {self._sanitize_text(tool_name)}",
+                status=status,
+                native_id=native_id,
+            )
+
+    def _observe_claude_event(self, event: Dict[str, Any]) -> None:
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            self.session_id = event.get("session_id") or self.session_id
+            return
+        if event.get("type") != "assistant":
+            return
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return
+        content = message.get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = str(block.get("name") or "")
+            if not name or name == "StructuredOutput":
+                continue
+            inputs = block.get("input") if isinstance(block.get("input"), dict) else {}
+            native_id = str(block.get("id") or "") or None
+            if name == "Bash":
+                self._record_command_activity(
+                    str(inputs.get("command") or ""),
+                    status="started",
+                    native_id=native_id,
+                )
+            elif name == "Read":
+                path = self._display_path(inputs.get("file_path"))
+                self._record_activity(
+                    "read",
+                    f"Reading {path or 'a project file'}",
+                    status="started",
+                    paths=[path] if path else [],
+                    native_id=native_id,
+                )
+            elif name in {"Grep", "Glob", "WebSearch"}:
+                query = (
+                    inputs.get("pattern")
+                    or inputs.get("query")
+                    or inputs.get("path")
+                    or ""
+                )
+                self._record_activity(
+                    "search",
+                    f"Searching files/symbols: {self._sanitize_text(query)}",
+                    status="started",
+                    native_id=native_id,
+                )
+            elif name in {"Edit", "Write", "NotebookEdit"}:
+                path = self._display_path(
+                    inputs.get("file_path") or inputs.get("notebook_path"),
+                )
+                self._record_activity(
+                    "edit",
+                    f"Editing {path or 'a workspace file'}",
+                    status="started",
+                    paths=[path] if path else [],
+                    native_id=native_id,
+                )
+            else:
+                self._record_activity(
+                    "tool",
+                    f"Using {self._sanitize_text(name)}",
+                    status="started",
+                    native_id=native_id,
+                )
+
+    def _record_command_activity(
+        self,
+        command: str,
+        *,
+        status: str,
+        native_id: Optional[str],
+        exit_code: Any = None,
+    ) -> None:
+        sanitized = self._sanitize_command(command)
+        lowered = sanitized.lower()
+        critical_paths = sorted(set(re.findall(
+            r"docs/Core/Critical/[A-Za-z0-9._+/-]+",
+            sanitized,
+        )))
+        if re.search(r"(?:^|\s)(?:pytest|py\.test)(?:\s|$)", lowered):
+            kind = "test"
+            prefix = "Running tests" if status == "started" else "Tests finished"
+        elif re.search(r"(?:^|\s)git(?:\s|$)", lowered):
+            kind = "git"
+            prefix = "Inspecting Git history/state"
+        elif re.search(r"(?:^|\s)(?:rg|grep|find|fd)(?:\s|$)", lowered):
+            kind = "search"
+            prefix = "Searching files/symbols"
+        elif critical_paths or re.search(
+            r"(?:^|\s)(?:cat|sed|head|tail|less|wc)(?:\s|$)",
+            lowered,
+        ):
+            kind = "read"
+            prefix = (
+                f"Reading {', '.join(critical_paths[:3])}"
+                if critical_paths else "Reading project files"
+            )
+        else:
+            kind = "command"
+            prefix = "Running command" if status == "started" else "Command finished"
+        if exit_code not in (None, 0):
+            status = "failed"
+        detail = sanitized if sanitized else "project command"
+        content = prefix if critical_paths and kind == "read" else f"{prefix}: {detail}"
+        self._record_activity(
+            kind,
+            content,
+            status=status,
+            paths=critical_paths,
+            native_id=native_id,
+            extra={"exit_code": exit_code} if exit_code is not None else None,
+        )
+
+    def _display_path(self, value: Any) -> str:
+        if not value:
+            return ""
+        raw = str(value)
+        path = Path(raw).expanduser()
+        roots = [self.workspace.cwd, *self.workspace.additional_directories]
+        if path.is_absolute():
+            for root in roots:
+                try:
+                    relative = path.resolve().relative_to(root.resolve())
+                except (OSError, ValueError):
+                    continue
+                parts = list(relative.parts)
+                if parts and parts[0] == "canonical":
+                    parts = parts[1:]
+                return PurePosixPath(*parts).as_posix()
+            try:
+                relative = path.resolve().relative_to(self.run_dir.resolve())
+                return f"<run>/{relative.as_posix()}"
+            except (OSError, ValueError):
+                return path.name
+        normalized = PurePosixPath(raw).as_posix()
+        return normalized.removeprefix("./")
+
+    def _sanitize_command(self, command: str) -> str:
+        text = str(command or "").replace("\n", " ").strip()
+        replacements = [(self.workspace.cwd, ".")]
+        replacements.extend(
+            (directory / "canonical", "")
+            for directory in self.workspace.additional_directories
+        )
+        replacements.extend(
+            (directory, "<context>")
+            for directory in self.workspace.additional_directories
+        )
+        replacements.append((self.run_dir, "<run>"))
+        for root, replacement in replacements:
+            text = text.replace(str(root), replacement)
+        text = re.sub(r"^/bin/(?:zsh|bash)\s+-lc\s+", "", text)
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+            text = text[1:-1]
+        return self._sanitize_text(text)
+
+    @staticmethod
+    def _sanitize_text(value: Any, max_chars: int = 360) -> str:
+        text = " ".join(str(value or "").split())
+        text = _SECRET_ASSIGNMENT_RE.sub(r"\1=<redacted>", text)
+        text = _URL_TOKEN_RE.sub(r"\1<redacted>", text)
+        if len(text) > max_chars:
+            text = text[: max_chars - 1].rstrip() + "…"
+        return text
+
+    def _record_activity(
+        self,
+        kind: str,
+        content: str,
+        *,
+        status: str,
+        paths: Optional[List[str]] = None,
+        native_id: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        record = {
+            "schema": ACTIVITY_SCHEMA,
+            "ts": _utc_now(),
+            "runId": self.run_dir.name,
+            "agent_id": self.session_key,
+            "provider": self.provider,
+            "turn": self.turn,
+            "type": kind,
+            "status": status,
+            "content": self._sanitize_text(content, max_chars=520),
+            "paths": [path for path in (paths or []) if path][:8],
+            "native_id": native_id,
+        }
+        if extra:
+            record.update(extra)
+        line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+        with _ACTIVITY_WRITE_LOCK:
+            with (self.run_dir / "activity.jsonl").open(
+                "a",
+                encoding="utf-8",
+            ) as handle:
+                handle.write(line)
+
     def _persist_process_output(self, proc: subprocess.CompletedProcess) -> None:
         stem = self.run_dir / f"{_safe_name(self.session_key)}_turn_{self.turn:03d}"
-        stem.with_name(stem.name + "_stdout.txt").write_text(proc.stdout or "", encoding="utf-8")
+        stdout = proc.stdout or ""
+        if self.provider == "claude":
+            # Switching Claude to stream-json must not create a new durable
+            # chain-of-thought/tool-result archive. The sanitized activity log
+            # owns operational telemetry; retain only the final result envelope
+            # needed for diagnostics and usage reconciliation.
+            safe_lines: List[str] = []
+            for line in stdout.splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "result":
+                    safe_lines.append(json.dumps(event, ensure_ascii=False))
+            stdout = "\n".join(safe_lines) + ("\n" if safe_lines else "")
+        stem.with_name(stem.name + "_stdout.txt").write_text(
+            stdout,
+            encoding="utf-8",
+        )
         stem.with_name(stem.name + "_stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
 
 
@@ -2884,6 +3338,7 @@ class OrganizationRunner:
             self.sessions[agent.agent_id] = session
         result = session.run(prompt, AGENT_REPLY_SCHEMA, self.turn_timeout_seconds)
         reply = validate_agent_reply(result["value"])
+        session.record_reply_disposition(reply)
         self._materialize_agent_candidate(
             agent, reply, previous_head, round_number,
         )

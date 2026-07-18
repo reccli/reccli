@@ -270,6 +270,7 @@ def organization_snapshot(
     all_messages = _tail_jsonl(run_dir / "messages.jsonl", max(count, 5_000))
     messages = all_messages[-count:] if count else []
     events = _tail_jsonl(run_dir / "events.jsonl", count)
+    telemetry = _tail_jsonl(run_dir / "activity.jsonl", count)
     activities: List[Dict[str, Any]] = []
     last_turns: Dict[str, Dict[str, Any]] = {}
     turns_dir = run_dir / "turns"
@@ -290,6 +291,10 @@ def organization_snapshot(
         event["source"] = "events.jsonl"
         event["activity_type"] = "event"
         activities.append(event)
+    for activity in telemetry:
+        activity["source"] = "activity.jsonl"
+        activity["activity_type"] = "telemetry"
+        activities.append(activity)
     activities.sort(key=lambda item: str(
         item.get("ts")
         or item.get("deliveredAt")
@@ -399,6 +404,7 @@ def organization_snapshot(
         "topology_graph": topology,
         "messages": messages,
         "events": events,
+        "telemetry": telemetry,
         "activities": activities[-count:] if count else [],
         "controls": controls,
         "control_capabilities": {

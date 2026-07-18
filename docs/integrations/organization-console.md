@@ -24,10 +24,37 @@ Claude Code and Codex can also call `open_organization_console`.
   acknowledgements, and public organization traffic involving the selected
   agent.
 - The right pane contains eight independently scrolling work streams. Each
-  stream shows the primary-manager assignment, durable turn summaries, routed
-  messages, provider, state, errors, and artifacts.
+  stream shows the primary-manager assignment, live operational activity,
+  durable turn summaries, routed messages, provider, state, errors, and
+  artifacts.
 - Hidden model reasoning is never exposed. Only durable operational records are
   displayed.
+
+## Live activity telemetry
+
+Native Claude Code and Codex JSON events are consumed while a turn is running.
+RecCli classifies and appends a provider-neutral record to the run-local:
+
+```text
+devsession/agent-organizations/<run-id>/activity.jsonl
+```
+
+The console can therefore show an agent reading project documentation,
+searching files or symbols, running tests, inspecting Git history, editing
+workspace files, using another tool, or waiting for a routed response before
+the final turn reply exists.
+
+Telemetry is deliberately operational rather than cognitive:
+
+- model thinking and chain-of-thought are never copied;
+- command output and document contents are not copied;
+- known secret assignments and URL credentials are redacted;
+- paths are reduced to workspace, context-pack, or run-relative display paths;
+- the final schema-constrained reply remains the authoritative turn result.
+
+A `read` event proves that a provider invoked an observed read operation. It
+does not prove scientific comprehension. Decisions, citations, tests, and
+review evidence remain responsible for establishing comprehension.
 
 ## Delegation and execution
 

@@ -45,7 +45,7 @@ export interface AgentRecord {
 }
 
 export interface ActivityRecord {
-  activity_type: "message" | "turn" | "event";
+  activity_type: "message" | "turn" | "event" | "telemetry";
   source?: string;
   round?: number;
   ts?: string;
@@ -55,6 +55,9 @@ export interface ActivityRecord {
   to?: string;
   tag?: string;
   content?: string;
+  paths?: string[];
+  provider?: string;
+  turn?: number;
   status?: string;
   agent_id?: string;
   duration_ms?: number;
@@ -128,6 +131,7 @@ export interface RunSnapshot {
   };
   activities: ActivityRecord[];
   messages: ActivityRecord[];
+  telemetry?: ActivityRecord[];
   controls: ControlRecord[];
   control_capabilities: {
     protocol?: string | null;

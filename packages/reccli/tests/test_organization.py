@@ -314,7 +314,8 @@ from pathlib import Path
 args = sys.argv[1:]
 sid = args[args.index('--resume') + 1] if '--resume' in args else args[args.index('--session-id') + 1]
 Path({str(log_path)!r}).open('a').write(json.dumps(args) + '\\n')
-print(json.dumps({{'is_error': False, 'session_id': sid, 'structured_output': {_reply()!r}, 'usage': {{'input_tokens': 2, 'cache_read_input_tokens': 3, 'output_tokens': 1}}}}))
+print(json.dumps({{'type': 'assistant', 'message': {{'content': [{{'type': 'tool_use', 'id': 'read-1', 'name': 'Read', 'input': {{'file_path': 'docs/Core/Critical/mathematical-foundation-v2.txt'}}}}]}}}}))
+print(json.dumps({{'type': 'result', 'is_error': False, 'session_id': sid, 'structured_output': {_reply()!r}, 'usage': {{'input_tokens': 2, 'cache_read_input_tokens': 3, 'output_tokens': 1}}}}))
 """, encoding="utf-8")
             executable.chmod(0o755)
             env_path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
@@ -330,6 +331,23 @@ print(json.dumps({{'is_error': False, 'session_id': sid, 'structured_output': {_
             self.assertNotIn("Bash(git -C * add*)", invocations[0])
             self.assertNotIn("Bash(git add*)", invocations[0])
             self.assertNotIn("Bash(git commit*)", invocations[0])
+            activity = [
+                json.loads(line)
+                for line in (root / "activity.jsonl").read_text().splitlines()
+            ]
+            reads = [entry for entry in activity if entry["type"] == "read"]
+            self.assertEqual(len(reads), 2)
+            self.assertEqual(
+                reads[0]["paths"],
+                ["docs/Core/Critical/mathematical-foundation-v2.txt"],
+            )
+            self.assertNotIn("structured_output", json.dumps(activity))
+            persisted_stdout = (
+                root / "worker_turn_001_stdout.txt"
+            ).read_text()
+            self.assertIn('"type": "result"', persisted_stdout)
+            self.assertNotIn("tool_use", persisted_stdout)
+            self.assertNotIn("thinking", persisted_stdout)
 
     def test_codex_session_resumes_with_output_schema(self):
         with tempfile.TemporaryDirectory() as td:
@@ -346,6 +364,12 @@ Path({str(log_path)!r}).open('a').write(json.dumps(args) + '\\n')
 out = Path(args[args.index('--output-last-message') + 1])
 out.write_text(json.dumps({_reply()!r}))
 print(json.dumps({{'type': 'thread.started', 'thread_id': 'thread-123'}}))
+print(json.dumps({{'type': 'item.started', 'item': {{'id': 'cmd-1', 'type': 'command_execution', 'command': 'API_KEY=supersecret .venv/bin/python -m pytest -q tests/test_fit.py', 'status': 'in_progress', 'exit_code': None}}}}))
+print(json.dumps({{'type': 'item.completed', 'item': {{'id': 'cmd-1', 'type': 'command_execution', 'command': 'API_KEY=supersecret .venv/bin/python -m pytest -q tests/test_fit.py', 'status': 'completed', 'exit_code': 0}}}}))
+print(json.dumps({{'type': 'item.started', 'item': {{'id': 'read-1', 'type': 'command_execution', 'command': \"/bin/zsh -lc 'sed -n 1,20p docs/Core/Critical/mathematical-foundation-v2.txt'\", 'status': 'in_progress', 'exit_code': None}}}}))
+print(json.dumps({{'type': 'item.started', 'item': {{'id': 'search-1', 'type': 'command_execution', 'command': 'rg -n eigenpair src tests', 'status': 'in_progress', 'exit_code': None}}}}))
+print(json.dumps({{'type': 'item.started', 'item': {{'id': 'git-1', 'type': 'command_execution', 'command': 'git log --oneline -5', 'status': 'in_progress', 'exit_code': None}}}}))
+print(json.dumps({{'type': 'item.started', 'item': {{'id': 'edit-1', 'type': 'file_change', 'changes': [{{'path': str(Path.cwd() / 'src' / 'fit.py'), 'kind': 'update'}}], 'status': 'in_progress'}}}}))
 print(json.dumps({{'type': 'turn.completed', 'usage': {{'input_tokens': 4, 'cached_input_tokens': 1, 'output_tokens': 2}}}}))
 """, encoding="utf-8")
             executable.chmod(0o755)
@@ -360,6 +384,39 @@ print(json.dumps({{'type': 'turn.completed', 'usage': {{'input_tokens': 4, 'cach
             self.assertNotIn("resume", invocations[0])
             self.assertIn("resume", invocations[1])
             self.assertIn("thread-123", invocations[1])
+            activity_text = (root / "activity.jsonl").read_text()
+            activity = [json.loads(line) for line in activity_text.splitlines()]
+            self.assertTrue(any(entry["type"] == "test" for entry in activity))
+            self.assertTrue(any(entry["type"] == "edit" for entry in activity))
+            self.assertTrue(any(entry["type"] == "read" for entry in activity))
+            self.assertTrue(any(entry["type"] == "search" for entry in activity))
+            self.assertTrue(any(entry["type"] == "git" for entry in activity))
+            self.assertTrue(any(
+                "docs/Core/Critical/mathematical-foundation-v2.txt"
+                in entry["content"]
+                for entry in activity
+                if entry["type"] == "read"
+            ))
+            self.assertNotIn("supersecret", activity_text)
+
+    def test_reply_disposition_records_waiting_without_model_prose(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            session = SubscriptionSession(
+                "codex", self._workspace(root), True, "worker-a", root,
+            )
+            session.record_reply_disposition({
+                "state": "blocked",
+                "messages": [{
+                    "to": "manager-a",
+                    "tag": "blocker",
+                    "content": "Long scientific rationale must not be copied.",
+                }],
+            })
+            activity = json.loads((root / "activity.jsonl").read_text())
+            self.assertEqual(activity["type"], "waiting")
+            self.assertEqual(activity["content"], "Blocked; waiting on manager-a")
+            self.assertNotIn("scientific rationale", json.dumps(activity))
 
     def test_fresh_codex_session_is_ephemeral(self):
         with tempfile.TemporaryDirectory() as td:
@@ -380,11 +437,14 @@ print(json.dumps({{'type': 'thread.started', 'thread_id': 'fresh-thread'}}))
             executable.chmod(0o755)
             env_path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
             session = SubscriptionSession(
-                "codex", self._workspace(root), False, "verifier", root, fresh=True,
+                "codex", self._workspace(root), False, "verifier", root,
+                reasoning="minimal", fresh=True,
             )
             with patch.dict(os.environ, {"PATH": env_path}):
                 session.run("verify", AGENT_REPLY_SCHEMA, 10)
-            self.assertIn("--ephemeral", json.loads(log_path.read_text()))
+            invocation = json.loads(log_path.read_text())
+            self.assertIn("--ephemeral", invocation)
+            self.assertIn('model_reasoning_effort="low"', invocation)
 
 
 class OrganizationProjectTests(unittest.TestCase):
