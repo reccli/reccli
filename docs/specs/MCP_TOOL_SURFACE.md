@@ -67,6 +67,24 @@ writes to, or operates on the file formats those specs describe.
 |------|---------|
 | `evaluate_continuation` | Filters `session_signal.open` against `session_signal.goal` (expanded via the synonym map + substring containment) and returns `continue` / `wait` / `done`. Enables multi-step self-direction without user prompting. |
 
+### Agent collaboration
+
+| Tool | Purpose |
+|------|---------|
+| `establish_agent_bridge` | Creates or opens a file-backed append-only shared log for two local coding agents. Optionally appends a message, returns the protocol, mirror file paths, and recent log tail. Useful for local Claude/Codex handoffs without routing messages through a remote service. |
+
+### Agent organizations
+
+| Tool | Purpose |
+|------|---------|
+| `start_organization` | Starts a detached, durable multi-agent delivery run using installed Claude Code/Codex subscription logins. `provider=auto` mixes both when usable. `evidence_paths` seals ignored/external inputs; `protected_paths` deny tracked writes; `context_manifest` creates hash-bound common-plus-lane documentation boxes; `max_experiments` caps sealed outputs. The single `scientific` topology permits autonomous reversible experiments, uses a fully-sighted veto-only auditor, and emits a human-authorized promotion request. |
+| `list_organizations` | Lists durable runs for one project with round, topology, provider, process liveness, and control-protocol support. |
+| `organization_status` | Reads a dashboard-ready durable snapshot: status, topology graph, agents, last turns, messages, events, controls, artifacts, promotion state, and process liveness. It works after an MCP restart. |
+| `steer_organization` | Queues an idempotent human message for an exact agent or role group. The worker applies it at the next safe round boundary and records a separate acknowledgement. |
+| `pause_organization` / `resume_organization` | Request a pause after the active synchronized round or resume from that boundary. Request and acknowledgement remain distinct. |
+| `open_organization_console` | Starts the token-protected, localhost-only Next.js organization console. Initial dependency install/build is automatic. |
+| `cancel_organization` | Writes a durable cancellation marker and reconciles it with process-group liveness, signalling a still-live detached supervisor and native CLI children even when status already says `cancelled`. |
+
 ### Reasoning scaffolds
 
 | Tool | Purpose |
@@ -98,6 +116,8 @@ Each tool touches one or both of the canonical formats:
 | Unified index (`index.json`) | `build_unified_index`, `update_index_with_new_session`, `rebuild_index` | `search_*`, `expand_search_result`, `inspect_result_id` |
 | Issue log (`.issues.jsonl`) | `_log_issue` from any component | `list_issues` |
 | Background task registry (`.bg_tasks.jsonl`) | `register_bg_task` | `cleanup_bg_tasks` |
+| Agent bridge log (`<channel>.log`) | `establish_agent_bridge` | `establish_agent_bridge`, external local agents via file tail/poll |
+| Organization run (`agent-organizations/<run-id>/`) | `start_organization`, detached `organization_worker`, acknowledged operator controls | `list_organizations`, `organization_status`, organization console, manual trace inspection |
 | Archive directory (`.archived/`) | `delete_session` with hard=False | (manual inspection only) |
 
 ## Tool lifecycle and safety
@@ -113,6 +133,55 @@ Each tool touches one or both of the canonical formats:
 - `save_session_notes`, `summarize_previous_session`, `edit_summary_item`,
   `pin_memory`, `project_init`, `project_apply_clustering`, `configure` (with value).
 
+**Writes to external bridge files** — persist outside project memory:
+
+- `establish_agent_bridge` writes an append-only shared log and optional mirror
+  files under `base_directory`; it does not mutate `.devsession` or
+  `.devproject`.
+
+**Writes code in isolated Git worktrees** — does not mutate the caller's current
+worktree:
+
+- `start_organization` creates per-agent branches/worktrees and a dedicated
+  integration branch. It requires the caller's tracked worktree to be clean so
+  every candidate has an unambiguous base commit. Organization agents can edit,
+  test, and commit only in those worktrees. It grants local Git operations, not
+  remote push or repository-host credentials. Verified run artifacts are
+  exported beneath the ignored run directory, while `promotion_branch` removes
+  their temporary Git staging paths from the product tree.
+
+  Optional `evidence_paths` are cloned/copied into a read-only per-run snapshot
+  and exposed to every native session. The orchestrator verifies inventory after
+  each round and hashes before release. Explicit untracked/generated outputs
+  reported by an author are sealed after the round under
+  `candidate-artifacts/`, bound to the exact Git candidate, and never copied
+  automatically into the project's ignored archive.
+
+  Optional `context_manifest` must name a tracked project-relative
+  `reccli.organization-context-packs.v1` file. Its ordered common and per-agent
+  required `paths` plus optional indexed `library_paths` are expanded from
+  tracked files into hash-bound, read-only run boxes. Agents named in
+  `full_context_agents` receive the union. RecCli verifies the boxes and
+  canonical source files after rounds and before finalization. Canonical
+  documentation remains readable and authoritative; the boxes route required
+  education and on-demand history rather than enforce a deny-read boundary.
+
+  For `topology="scientific"`, workers may experiment in disposable branches.
+  Deterministic enforcement covers only clean/pinned Git identity, evidence
+  hashes, deny-write paths, candidate identity, and resource limits. Scientific
+  completion writes `promotion-request.json`; RecCli does not merge/push the
+  proposal, import canonical attempts, change authority, or declare visual
+  acceptance.
+
+  Event-driven topologies enforce lead reconnaissance followed by a manager
+  delegation barrier. A worker's first turn requires a primary-manager
+  `plan`/`handoff` with a named `workItem` and risk; assigned workers may then
+  run concurrently. RecCli fails the run before execution if the lead did not
+  explicitly brief every manager after round one or every worker did not
+  receive an explicit primary-manager work item after round two. Operator
+  steering, pause, and resume are written as
+  immutable control requests and applied only at synchronized boundaries.
+
 **Destructive (with safety nets)** — reversible in most cases:
 
 - `delete_session` (archive by default, `hard=True` required for deletion).
@@ -120,7 +189,8 @@ Each tool touches one or both of the canonical formats:
 
 **Spawns background work** — registers via `register_bg_task`:
 
-- `save_session_notes`, `summarize_previous_session`, `retry_summarization`.
+- `save_session_notes`, `summarize_previous_session`, `retry_summarization`,
+  `start_organization`.
 
 **Feature-gated** (toggleable via `configure`):
 

@@ -14,8 +14,21 @@ authors = [
 ]
 
 [project.scripts]
-reccli = "reccli.runtime.cli:main"
+reccli = "reccli.cli_bootstrap:main"
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["packages"]
 include = ["reccli*"]
+
+[tool.setuptools.package-data]
+reccli = [
+  "organization-web/*.json",
+  "organization-web/*.ts",
+  "organization-web/*.d.ts",
+  "organization-web/src/**/*.css",
+  "organization-web/src/**/*.ts",
+  "organization-web/src/**/*.tsx",
+]

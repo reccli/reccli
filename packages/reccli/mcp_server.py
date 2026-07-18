@@ -10,6 +10,7 @@ Transport: stdio (stdout is the MCP channel — never print() to stdout)
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,45 @@ mcp = FastMCP("reccli")
 def _resolve_root(working_directory: str) -> Optional[Path]:
     from .project.devproject import discover_project_root
     return discover_project_root(Path(working_directory).expanduser().resolve())
+
+
+def _organization_process_group_is_live(pid: int, run_dir: Path) -> Optional[bool]:
+    """Reconcile durable organization status with the actual supervisor group.
+
+    ``None`` means liveness could not be determined. A matching non-zombie
+    organization worker or native-agent child means the group is still live.
+    """
+    if pid <= 1:
+        return False
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            ["ps", "-o", "pid=,stat=,command=", "-g", str(pid)],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return False
+    request_path = str(run_dir / "request.json")
+    saw_active_native_child = False
+    for raw_line in (proc.stdout or "").splitlines():
+        pieces = raw_line.strip().split(None, 2)
+        if len(pieces) < 3:
+            continue
+        stat, command = pieces[1], pieces[2]
+        if stat.startswith("Z"):
+            continue
+        if "reccli.organization_worker" in command and request_path in command:
+            return True
+        if (
+            command.startswith("claude ")
+            or " codex exec " in f" {command} "
+            or "reccli.mcp_server" in command
+        ):
+            saw_active_native_child = True
+    return saw_active_native_child
 
 
 def _detect_default_provider() -> str:
@@ -196,6 +236,27 @@ def _format_search_results(results: list) -> str:
     return "\n".join(lines)
 
 
+def _sanitize_agent_bridge_stem(value: str, default: str) -> str:
+    """Return a filesystem-safe stem for agent bridge files."""
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", (value or "").strip())
+    stem = stem.strip("._-")
+    if not stem:
+        stem = default
+    return stem[:80]
+
+
+def _tail_text(path: Path, lines: int) -> str:
+    """Read the last N lines from a small text protocol file."""
+    limit = max(1, min(int(lines or 1), 200))
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except UnicodeDecodeError:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    return "\n".join(content.splitlines()[-limit:])
+
+
 def _build_resume_from(sessions_dir: Path) -> Optional[str]:
     """Build a concise 'Resume From' block from the latest session's open issues and next steps."""
     session_files = sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -211,11 +272,11 @@ def _build_resume_from(sessions_dir: Path) -> Optional[str]:
         lines = []
 
         for issue in summary.get("open_issues", [])[:5]:
-            text = issue.get("issue") or str(issue)
+            text = (issue.get("issue") if isinstance(issue, dict) else None) or str(issue)
             lines.append(f"- **Open:** {text}")
 
         for step in summary.get("next_steps", [])[:5]:
-            text = step.get("action") or str(step)
+            text = (step.get("action") if isinstance(step, dict) else None) or str(step)
             lines.append(f"- **Next:** {text}")
 
         return "\n".join(lines) if lines else None
@@ -247,6 +308,8 @@ def _collect_pinned_items(sessions_dir: Path, limit: int = 10, max_sessions: int
             continue
         for cat in ("decisions", "code_changes", "problems_solved", "open_issues", "next_steps"):
             for item in s.summary.get(cat, []):
+                if not isinstance(item, dict):
+                    continue
                 if item.get("pinned"):
                     text = (item.get("decision") or item.get("action") or
                             item.get("problem") or item.get("issue") or
@@ -348,13 +411,16 @@ def _latest_session_summary(sessions_dir: Path) -> Optional[str]:
             if items:
                 parts.append(f"\n**{label}**:")
                 for item in items[:5]:
-                    text = (
-                        item.get("decision")
-                        or item.get("problem")
-                        or item.get("issue")
-                        or item.get("action")
-                        or str(item)
-                    )
+                    if isinstance(item, dict):
+                        text = (
+                            item.get("decision")
+                            or item.get("problem")
+                            or item.get("issue")
+                            or item.get("action")
+                            or str(item)
+                        )
+                    else:
+                        text = str(item)
                     parts.append(f"- {text}")
         return "\n".join(parts) if parts else None
     except Exception:
@@ -364,6 +430,85 @@ def _latest_session_summary(sessions_dir: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
+
+@mcp.tool()
+def establish_agent_bridge(
+    agent_id: str = "",
+    peer_id: str = "",
+    channel_name: str = "agent_chat",
+    message: str = "",
+    base_directory: str = "/private/tmp",
+    reset: bool = False,
+    tail_lines: int = 40,
+) -> str:
+    """Establish a file-backed bridge for two local coding agents.
+
+    Creates or opens an append-only shared log, optionally appends a message
+    from this agent, and returns the protocol plus recent log tail. Repeated
+    calls are safe: by default the log is never truncated.
+
+    Args:
+        agent_id: Short name for the caller, such as "codex" or "claude".
+        peer_id: Optional peer name. When provided, mirror file paths are returned.
+        channel_name: Safe stem for the shared log file. Defaults to agent_chat.
+        message: Optional message to append to the shared log and outbound mirror.
+        base_directory: Directory for bridge files. Defaults to /private/tmp.
+        reset: If True, truncate the shared log before writing the bridge header.
+        tail_lines: Number of recent log lines to return, capped at 200.
+    """
+    base_dir = Path(base_directory or "/private/tmp").expanduser().resolve()
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return f"Failed to create bridge directory {base_dir}: {e}"
+
+    channel = _sanitize_agent_bridge_stem(channel_name, "agent_chat")
+    agent = _sanitize_agent_bridge_stem(agent_id, "agent")
+    peer = _sanitize_agent_bridge_stem(peer_id, "peer") if peer_id else ""
+
+    log_path = base_dir / f"{channel}.log"
+    outbound_mirror = base_dir / f"{agent}_to_{peer}.txt" if peer else None
+    inbound_mirror = base_dir / f"{peer}_to_{agent}.txt" if peer else None
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    header = (
+        "# RecCli agent bridge\n"
+        f"# channel={channel}\n"
+        "# protocol=append-only shared log; do not truncate except with reset=True\n"
+        "# message_format=[YYYY-MM-DD HH:MM:SS agent_id]: message\n"
+    )
+
+    try:
+        if reset or not log_path.exists() or log_path.stat().st_size == 0:
+            log_path.write_text(header, encoding="utf-8")
+
+        appended_line = ""
+        if message:
+            clean_message = message.replace("\r\n", "\n").replace("\r", "\n").strip()
+            appended_line = f"[{timestamp} {agent}]: {clean_message}"
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write("\n" + appended_line + "\n")
+            if outbound_mirror is not None:
+                outbound_mirror.write_text(appended_line + "\n", encoding="utf-8")
+    except Exception as e:
+        return f"Failed to establish bridge at {log_path}: {e}"
+
+    tail = _tail_text(log_path, tail_lines)
+    parts = [
+        "Agent bridge established.",
+        f"shared_log: {log_path}",
+        "protocol: append messages to shared_log, poll with stat/tail, never truncate unless reset=True.",
+    ]
+    if outbound_mirror is not None:
+        parts.append(f"outbound_mirror: {outbound_mirror}")
+    if inbound_mirror is not None:
+        parts.append(f"inbound_mirror: {inbound_mirror}")
+    if appended_line:
+        parts.append(f"appended: {appended_line}")
+    parts.append(f"\nLast {max(1, min(int(tail_lines or 1), 200))} line(s):")
+    parts.append(tail or "(empty)")
+    return "\n".join(parts)
+
 
 @mcp.tool()
 def load_project_context(working_directory: str) -> str:
@@ -884,6 +1029,413 @@ def search_by_file(
         return f"No messages found referencing '{file_path}'."
 
     return _format_file_search_results(results, file_path)
+
+
+@mcp.tool()
+def start_organization(
+    working_directory: str,
+    mission: str,
+    provider: str = "auto",
+    topology: str = "google-rotating",
+    max_rounds: int = 8,
+    max_concurrency: int = 5,
+    turn_timeout_seconds: int = 1200,
+    model: str = "auto",
+    evidence_paths: Optional[List[str]] = None,
+    protected_paths: Optional[List[str]] = None,
+    context_manifest: Optional[str] = None,
+    max_experiments: int = 3,
+) -> str:
+    """Start a durable, subscription-backed multi-agent organization run.
+
+    Returns immediately after launching a detached supervisor. Each organization
+    member runs as a separate persistent Claude Code or Codex CLI session using
+    the caller's existing subscription authentication; this tool never requires
+    or forwards an Anthropic/OpenAI API key.
+
+    With provider="auto", RecCli uses a mixed organization when both native CLIs
+    are installed and authenticated. Worker/primary-manager lanes share a
+    provider for continuity, alternate-manager review prefers the other
+    provider, the release manager stays on the host provider, and the fresh
+    verifier uses the opposite provider. If only one usable CLI is available,
+    auto falls back to a homogeneous run. Explicit "claude" or "codex" always
+    remains homogeneous; explicit "mixed" requires both subscriptions.
+
+    The default topology is a Google-style selectively escalated hierarchy with
+    four managers, four workers, rotating alternate-manager review, a dedicated
+    release manager, exact-candidate approvals, and a fresh final verifier.
+    Agents receive the mission, RecCli's `.devproject` feature map, code, tests,
+    and task-relevant repository documentation. Raw manager deliberation is not
+    broadcast to workers.
+
+    The target repository must have no tracked uncommitted changes. The worker
+    creates isolated Git worktrees and writes its durable trace under
+    `devsession/agent-organizations/<run-id>/`. Run-scoped artifacts are
+    reviewed through a temporary tracked staging prefix, exported to the run's
+    `deliverables/` directory with a hash manifest, and removed from the clean
+    promotion branch. Native agents edit and test but do not mutate Git
+    administrative state: the RecCli supervisor validates scopes, materializes
+    commits, and applies reviewed candidates. Remote push and hosting
+    credentials are outside this tool. Poll with
+    `organization_status`; stop a live run with `cancel_organization`.
+
+    `evidence_paths` selects ignored or external files/directories that every
+    agent must see (for example sealed experiment receipts or a related
+    reference project). RecCli clones/copies them once into a run-owned,
+    read-only snapshot, records per-file SHA-256 hashes, exposes only the
+    snapshot to native sessions, checks its inventory after each round, and
+    re-hashes it before release. Symlinks are rejected. Relative paths resolve
+    from the project root.
+
+    `topology="scientific"` cuts authority at reversibility rather than at a
+    research/execution phase boundary. Workers may choose and run experiments
+    in disposable branches. `max_experiments` bounds sealed generated-output
+    bundles. `protected_paths` is a deny-write list for tracked immutable
+    evidence, authority records, ledgers, or standards. The adversarial auditor is fully
+    evidence-sighted and veto-only. Completion emits a promotion request; it
+    does not import outputs into the canonical archive, push, or merge the
+    caller's branch.
+
+    `context_manifest` selects one tracked project-local
+    `reccli.organization-context-packs.v1` mapping. RecCli materializes a
+    hash-bound, read-only common-plus-lane context box for each agent. Workers
+    receive their common core and assigned lane; required `paths` are read
+    before work while optional `library_paths` are consulted on demand. Agents
+    explicitly named as full-context receive the union. Canonical repository
+    documentation remains readable and authoritative, so this is educational
+    routing rather than a deny-read sandbox.
+
+    Args:
+        working_directory: Project root or any path inside the project.
+        mission: Concrete product/engineering brief and acceptance criteria.
+        provider: "auto", "mixed", "claude", or "codex". Uses installed native CLIs.
+        topology: "google-rotating" (recommended), "google" (baseline), or
+            "scientific" (autonomous reversible scientific exploration).
+        max_rounds: Maximum synchronized organization work rounds (default 8).
+            One round may run several agent turns in parallel; this is not a
+            total-agent-turn count. RecCli may add up to four review-only
+            closeout boundaries for candidates already produced at the cap;
+            workers and new experiments cannot run during closeout.
+        max_concurrency: Maximum native agent subprocesses running at once.
+        turn_timeout_seconds: Timeout for each individual agent turn.
+        model: Provider model override, or "auto" for the native CLI default.
+        evidence_paths: Explicit ignored/external evidence files or directories
+            to seal into the shared run snapshot.
+        protected_paths: Tracked project-relative files/directories that no
+            organization worktree may change.
+        context_manifest: Tracked project-relative common-plus-agent context
+            mapping with required paths and optional indexed library paths,
+            used to build run-scoped documentation boxes.
+        max_experiments: Hard cap on sealed generated-output bundles (default 3).
+    """
+    try:
+        from .organization import create_run_request
+
+        request = create_run_request(
+            working_directory=working_directory,
+            mission=mission,
+            provider=provider,
+            topology=topology,
+            max_rounds=max_rounds,
+            max_concurrency=max_concurrency,
+            turn_timeout_seconds=turn_timeout_seconds,
+            model=model,
+            evidence_paths=evidence_paths,
+            protected_paths=protected_paths,
+            context_manifest=context_manifest,
+            max_experiments=max_experiments,
+        )
+        run_dir = Path(request["run_dir"])
+        stdout_handle = (run_dir / "worker_stdout.txt").open("a", encoding="utf-8")
+        stderr_handle = (run_dir / "worker_stderr.txt").open("a", encoding="utf-8")
+        try:
+            import subprocess
+
+            process = subprocess.Popen(
+                [sys.executable, "-m", "reccli.organization_worker", str(run_dir / "request.json")],
+                cwd=request["project_root"],
+                env=os.environ.copy(),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                start_new_session=True,
+            )
+        finally:
+            stdout_handle.close()
+            stderr_handle.close()
+
+        # Publish supervisor identity separately. The worker owns status.json;
+        # avoiding two writers prevents a fast worker from having a terminal
+        # status overwritten by the MCP parent after Popen returns.
+        (run_dir / "supervisor.json").write_text(json.dumps({
+            "pid": process.pid,
+            "run_id": request["run_id"],
+            "started_at": request["created_at"],
+        }, indent=2) + "\n", encoding="utf-8")
+        from .hooks.session_recorder import register_bg_task
+        register_bg_task(
+            Path(request["project_root"]),
+            process.pid,
+            f"organization:{request['run_id']}",
+        )
+        return json.dumps({
+            "status": "starting",
+            "run_id": request["run_id"],
+            "run_dir": request["run_dir"],
+            "pid": process.pid,
+            "provider": request["provider"],
+            "provider_requested": request["provider_requested"],
+            "host_provider": request["host_provider"],
+            "provider_assignments": request["provider_assignments"],
+            "blind_verifier_provider": request["blind_verifier_provider"],
+            "topology": request["topology"],
+            "human_promotion_required": request["human_promotion_required"],
+            "evidence_paths": request["evidence_paths"],
+            "protected_paths": request["protected_paths"],
+            "context_manifest": request["context_manifest"],
+            "max_experiments": request["max_experiments"],
+            "next": "Call organization_status with this run_id.",
+        }, indent=2)
+    except Exception as exc:
+        return json.dumps({"status": "failed_to_start", "error": str(exc)}, indent=2)
+
+
+@mcp.tool()
+def organization_status(
+    working_directory: str,
+    run_id: str,
+    include_recent_events: int = 10,
+) -> str:
+    """Read durable status for a multi-agent organization run.
+
+    This is safe to call after an MCP restart because status is read from the
+    project's run directory rather than process memory.
+
+    Args:
+        working_directory: Project root or any path inside the project.
+        run_id: Run ID returned by `start_organization`, or an absolute run path.
+        include_recent_events: Number of recent event/message records to include.
+    """
+    try:
+        from .organization_control import organization_snapshot
+
+        payload = organization_snapshot(
+            working_directory,
+            run_id,
+            include_recent=include_recent_events,
+        )
+        payload["recent_events"] = payload.get("activities", [])
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"status": "status_error", "run_id": run_id, "error": str(exc)}, indent=2)
+
+
+@mcp.tool()
+def list_organizations(
+    working_directory: str,
+    limit: int = 100,
+) -> str:
+    """List durable organization runs for a project, newest first."""
+    try:
+        from .organization_control import list_organization_runs
+
+        return json.dumps(
+            list_organization_runs(working_directory, limit=limit),
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        return json.dumps({
+            "status": "list_error",
+            "error": str(exc),
+        }, indent=2)
+
+
+@mcp.tool()
+def steer_organization(
+    working_directory: str,
+    run_id: str,
+    target: str,
+    message: str,
+    tag: str = "plan",
+    idempotency_key: Optional[str] = None,
+) -> str:
+    """Queue a human steering message for an agent or role group.
+
+    The organization applies the message at its next safe round boundary and
+    records a durable acknowledgement. Targets may be an exact agent ID or one
+    of: ``all``, ``lead``, ``finalizer``, ``managers``, ``workers``, or
+    ``integrators``.
+    """
+    try:
+        from .organization_control import queue_control_request
+
+        result = queue_control_request(
+            working_directory,
+            run_id,
+            "message",
+            target=target,
+            content=message,
+            tag=tag,
+            idempotency_key=idempotency_key,
+            requested_by="mcp-human-operator",
+        )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({
+            "status": "steer_error",
+            "run_id": run_id,
+            "error": str(exc),
+        }, indent=2)
+
+
+@mcp.tool()
+def pause_organization(
+    working_directory: str,
+    run_id: str,
+    idempotency_key: Optional[str] = None,
+) -> str:
+    """Pause after the active synchronized round finishes."""
+    try:
+        from .organization_control import queue_control_request
+
+        return json.dumps(queue_control_request(
+            working_directory,
+            run_id,
+            "pause",
+            idempotency_key=idempotency_key,
+            requested_by="mcp-human-operator",
+        ), indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({
+            "status": "pause_error",
+            "run_id": run_id,
+            "error": str(exc),
+        }, indent=2)
+
+
+@mcp.tool()
+def resume_organization(
+    working_directory: str,
+    run_id: str,
+    idempotency_key: Optional[str] = None,
+) -> str:
+    """Resume a run paused at a synchronized round boundary."""
+    try:
+        from .organization_control import queue_control_request
+
+        return json.dumps(queue_control_request(
+            working_directory,
+            run_id,
+            "resume",
+            idempotency_key=idempotency_key,
+            requested_by="mcp-human-operator",
+        ), indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({
+            "status": "resume_error",
+            "run_id": run_id,
+            "error": str(exc),
+        }, indent=2)
+
+
+@mcp.tool()
+def open_organization_console(
+    working_directory: str,
+    port: int = 8777,
+    open_browser: bool = True,
+) -> str:
+    """Launch the localhost Next.js organization viewer and steering console.
+
+    Dependency installation and production build are automatic on first use.
+    The detached console binds only to ``127.0.0.1`` and requires a generated
+    per-launch token for its data and control routes.
+    """
+    try:
+        import secrets
+        import subprocess
+
+        root = _resolve_root(working_directory)
+        if root is None:
+            return json.dumps({
+                "status": "not_found",
+                "working_directory": working_directory,
+            }, indent=2)
+        token = secrets.token_urlsafe(24)
+        log_dir = root / "devsession" / "organization-console"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"console-{int(port)}.log"
+        log_handle = log_path.open("a", encoding="utf-8")
+        args = [
+            sys.executable,
+            "-m",
+            "reccli.organization_console",
+            str(root),
+            "--port",
+            str(int(port)),
+            "--token",
+            token,
+        ]
+        if not open_browser:
+            args.append("--no-open")
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=root,
+                env=os.environ.copy(),
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=log_handle,
+                start_new_session=True,
+            )
+        finally:
+            log_handle.close()
+        from .hooks.session_recorder import register_bg_task
+
+        register_bg_task(root, process.pid, f"organization-console:{int(port)}")
+        return json.dumps({
+            "status": "starting",
+            "pid": process.pid,
+            "url": f"http://127.0.0.1:{int(port)}/?token={token}",
+            "project_root": str(root),
+            "log": str(log_path),
+            "detail": (
+                "The first launch may install and build frontend dependencies "
+                "before opening the browser."
+            ),
+        }, indent=2)
+    except Exception as exc:
+        return json.dumps({
+            "status": "console_error",
+            "error": str(exc),
+        }, indent=2)
+
+
+@mcp.tool()
+def cancel_organization(working_directory: str, run_id: str) -> str:
+    """Cancel a running multi-agent organization and its native CLI children.
+
+    The cancellation marker is durable. The tool also reconciles that persisted
+    state with process-group liveness: even if status.json already says
+    cancelled, a matching live supervisor group is still terminated so active
+    Claude/Codex turns stop promptly.
+
+    Args:
+        working_directory: Project root or any path inside the project.
+        run_id: Run ID returned by `start_organization`, or an absolute run path.
+    """
+    try:
+        from .organization_control import cancel_organization_run
+
+        result = cancel_organization_run(
+            working_directory,
+            run_id,
+            requested_by="mcp-human-operator",
+            process_group_liveness=_organization_process_group_is_live,
+        )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"status": "cancel_error", "run_id": run_id, "error": str(exc)}, indent=2)
 
 
 @mcp.tool()
@@ -2174,7 +2726,8 @@ def save_session_notes(
             "if s.summary:\n"
             "    for cat in ['decisions','code_changes','problems_solved','open_issues','next_steps']:\n"
             "        for item in s.summary.get(cat, []):\n"
-            "            item.pop('embedding', None)\n"
+            "            if isinstance(item, dict):\n"
+            "                item.pop('embedding', None)\n"
             "s.save(path)\n"
             "from reccli.retrieval.vector_index import update_index_with_new_session\n"
             "update_index_with_new_session(path.parent, path, verbose=False)\n"
@@ -2426,7 +2979,8 @@ def summarize_previous_session(
             "if s.summary:\n"
             "    for cat in ['decisions','code_changes','problems_solved','open_issues','next_steps']:\n"
             "        for item in s.summary.get(cat, []):\n"
-            "            item.pop('embedding', None)\n"
+            "            if isinstance(item, dict):\n"
+            "                item.pop('embedding', None)\n"
             "s.save(path)\n"
             "from reccli.retrieval.vector_index import build_unified_index\n"
             "build_unified_index(path.parent, verbose=False)\n"
@@ -2832,7 +3386,7 @@ def _find_session_with_item(sessions_dir: Path, item_id: str):
             continue
         for cat in ("decisions", "code_changes", "problems_solved", "open_issues", "next_steps"):
             for item in s.summary.get(cat, []):
-                if item.get("id") == item_id:
+                if isinstance(item, dict) and item.get("id") == item_id:
                     return sf, s, cat, item
     return None, None, None, None
 
@@ -3012,7 +3566,8 @@ def retry_summarization(
             "if s.summary:\n"
             "    for cat in ['decisions','code_changes','problems_solved','open_issues','next_steps']:\n"
             "        for item in s.summary.get(cat, []):\n"
-            "            item.pop('embedding', None)\n"
+            "            if isinstance(item, dict):\n"
+            "                item.pop('embedding', None)\n"
             "s.save(path)\n"
             "from reccli.retrieval.vector_index import build_unified_index\n"
             "build_unified_index(path.parent, verbose=False)\n"

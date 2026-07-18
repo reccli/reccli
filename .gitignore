@@ -67,6 +67,7 @@ web/.vercel/
 # Dependencies
 node_modules/
 package-lock.json
+!packages/reccli/organization-web/package-lock.json
 yarn.lock
 
 # Logs
@@ -100,4 +101,3 @@ apps/web/build/
 apps/web/.vercel/
 packages/reccli-core/ui/node_modules/
 packages/reccli-core/ui/package-lock.json
-

@@ -1,0 +1,668 @@
+"""Durable observation and operator control for RecCli organizations.
+
+The organization worker owns the in-memory inboxes used by native agent
+sessions. External callers therefore communicate through an append-only,
+run-local command queue. The worker applies commands only at round boundaries,
+records an acknowledgement, and mirrors operator messages into the normal
+message trace.
+
+This module is deliberately usable from MCP, the CLI, and the local web
+console. None of those surfaces edits ``status.json`` or an agent inbox
+directly.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import signal
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+from .project.devproject import discover_project_root
+
+
+CONTROL_SCHEMA = "reccli.organization-control.v1"
+CONTROL_ACTIONS = {"message", "pause", "resume", "cancel"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "round_limit", "stalled"}
+MAX_OPERATOR_MESSAGE_CHARS = 12_000
+
+
+def _utc_now() -> str:
+    from .organization import _utc_now as organization_utc_now
+
+    return organization_utc_now()
+
+
+def _safe_name(value: str) -> str:
+    from .organization import _safe_name as organization_safe_name
+
+    return organization_safe_name(value)
+
+
+def _read_json(path: Path, default: Any = None) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return default
+
+
+def _atomic_write_json(path: Path, value: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _tail_jsonl(path: Path, limit: int) -> List[Dict[str, Any]]:
+    if limit <= 0 or not path.is_file():
+        return []
+    result: List[Dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]:
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            result.append(value)
+    return result
+
+
+def _resolve_run(working_directory: str, run_id: str) -> Optional[Path]:
+    from .organization import find_run
+
+    return find_run(working_directory, run_id)
+
+
+def _organization_root(working_directory: str) -> Optional[Path]:
+    from .organization import organization_root
+
+    project_root = discover_project_root(
+        Path(working_directory).expanduser().resolve(),
+    )
+    return organization_root(project_root) if project_root else None
+
+
+def _supervisor_pid(run_dir: Path, status: Dict[str, Any]) -> int:
+    try:
+        pid = int(status.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid > 1:
+        return pid
+    supervisor = _read_json(run_dir / "supervisor.json", {})
+    try:
+        return int((supervisor or {}).get("pid") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def process_group_is_live(pid: int, run_dir: Path) -> Optional[bool]:
+    """Return whether the run's detached supervisor process group is live.
+
+    ``None`` means the operating system could not provide a reliable answer.
+    Zombie-only groups are treated as stopped.
+    """
+    if pid <= 1:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "pid=,stat=,command=", "-g", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return False
+    request_path = str(run_dir / "request.json")
+    saw_native_child = False
+    for raw_line in (proc.stdout or "").splitlines():
+        pieces = raw_line.strip().split(None, 2)
+        if len(pieces) < 3:
+            continue
+        stat, command = pieces[1], pieces[2]
+        if stat.startswith("Z"):
+            continue
+        if "reccli.organization_worker" in command and request_path in command:
+            return True
+        if command.startswith("claude ") or " codex exec " in f" {command} ":
+            saw_native_child = True
+    return saw_native_child
+
+
+def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str, Any]:
+    from .organization import get_topology
+
+    topology_id = str(run.get("topology") or status.get("topology") or "")
+    if not topology_id:
+        return {"agents": [], "routes": []}
+    try:
+        topology = get_topology(topology_id)
+    except (KeyError, ValueError):
+        return {"agents": [], "routes": []}
+    provider_assignments = (
+        run.get("provider_assignments")
+        or status.get("provider_assignments")
+        or {}
+    )
+    states = status.get("agent_states") or {}
+    agents = [
+        {
+            "id": agent.agent_id,
+            "role": agent.role,
+            "provider": provider_assignments.get(agent.agent_id),
+            "state": states.get(agent.agent_id, "unknown"),
+            "write_scope": agent.write_scope,
+            "is_lead": agent.agent_id == topology.leader_id,
+            "is_finalizer": agent.agent_id == topology.finalizer_id,
+            "is_integrator": agent.agent_id in topology.integrator_ids,
+        }
+        for agent in topology.agents
+    ]
+    routes = [
+        {
+            "from": sender,
+            "to": recipient,
+            "tags": sorted(tags) if tags is not None else None,
+        }
+        for (sender, recipient), tags in sorted(topology.routes.items())
+    ]
+    return {
+        "id": topology.topology_id,
+        "name": topology.name,
+        "description": topology.description,
+        "culture": topology.culture,
+        "leader_id": topology.leader_id,
+        "finalizer_id": topology.finalizer_id,
+        "manager_ids": list(topology.manager_ids),
+        "worker_ids": list(topology.worker_ids),
+        "primary_manager_by_worker": dict(topology.primary_manager_by_worker),
+        "integrator_ids": sorted(topology.integrator_ids),
+        "scheduler": topology.scheduler,
+        "delegation_gate": topology.delegation_gate,
+        "inbox_only_ids": sorted(topology.inbox_only_ids),
+        "agents": agents,
+        "routes": routes,
+    }
+
+
+def _control_records(run_dir: Path, limit: int = 50) -> List[Dict[str, Any]]:
+    requests_dir = run_dir / "control" / "requests"
+    acknowledgements_dir = run_dir / "control" / "acknowledgements"
+    records: List[Dict[str, Any]] = []
+    request_paths = sorted(requests_dir.glob("*.json"))[-max(0, limit):] if requests_dir.is_dir() else []
+    for request_path in request_paths:
+        request = _read_json(request_path, {})
+        if not isinstance(request, dict):
+            continue
+        acknowledgement = _read_json(
+            acknowledgements_dir / f"{request.get('id', '')}.json",
+            None,
+        )
+        records.append({
+            **request,
+            "acknowledgement": acknowledgement,
+            "queue_status": (
+                acknowledgement.get("status", "acknowledged")
+                if isinstance(acknowledgement, dict)
+                else "queued"
+            ),
+        })
+    return records
+
+
+def organization_snapshot(
+    working_directory: str,
+    run_id: str,
+    include_recent: int = 100,
+) -> Dict[str, Any]:
+    """Build one dashboard-ready, durable snapshot for a run."""
+    run_dir = _resolve_run(working_directory, run_id)
+    if run_dir is None:
+        return {"status": "not_found", "run_id": run_id}
+    status = _read_json(run_dir / "status.json", {}) or {}
+    run = _read_json(run_dir / "run.json", {}) or {}
+    if not run:
+        run = _read_json(run_dir / "request.json", {}) or {}
+    supervisor = _read_json(run_dir / "supervisor.json", {}) or {}
+    pid = _supervisor_pid(run_dir, status)
+    live = process_group_is_live(pid, run_dir)
+    count = max(0, min(int(include_recent), 500))
+
+    all_messages = _tail_jsonl(run_dir / "messages.jsonl", max(count, 5_000))
+    messages = all_messages[-count:] if count else []
+    events = _tail_jsonl(run_dir / "events.jsonl", count)
+    activities: List[Dict[str, Any]] = []
+    last_turns: Dict[str, Dict[str, Any]] = {}
+    turns_dir = run_dir / "turns"
+    if turns_dir.is_dir():
+        for path in sorted(turns_dir.glob("*.jsonl")):
+            turns = _tail_jsonl(path, count)
+            for turn in turns:
+                turn["source"] = f"turns/{path.name}"
+                turn["activity_type"] = "turn"
+                activities.append(turn)
+            if turns:
+                last_turns[str(turns[-1].get("agent_id") or path.stem)] = turns[-1]
+    for message in messages:
+        message["source"] = "messages.jsonl"
+        message["activity_type"] = "message"
+        activities.append(message)
+    for event in events:
+        event["source"] = "events.jsonl"
+        event["activity_type"] = "event"
+        activities.append(event)
+    activities.sort(key=lambda item: str(
+        item.get("ts")
+        or item.get("deliveredAt")
+        or item.get("updated_at")
+        or f"{int(item.get('round', 0) or 0):08d}"
+    ))
+
+    promotion = _read_json(run_dir / "promotion-request.json", None)
+    artifact_manifest = _read_json(run_dir / "deliverables" / "manifest.json", None)
+    topology = _topology_snapshot(run, status)
+    for agent in topology.get("agents", []):
+        last = last_turns.get(agent["id"])
+        if last:
+            reply = last.get("reply") or {}
+            agent["last_turn"] = {
+                "round": last.get("round"),
+                "status": last.get("status"),
+                "duration_ms": last.get("duration_ms"),
+                "summary": reply.get("summary") if isinstance(reply, dict) else None,
+                "usage": last.get("usage") or {},
+            }
+            if agent.get("state") == "unknown":
+                if last.get("status") == "failed":
+                    agent["state"] = "blocked"
+                elif isinstance(reply, dict) and reply.get("state"):
+                    agent["state"] = reply["state"]
+                else:
+                    agent["state"] = "idle"
+        if agent["id"] in topology.get("worker_ids", []):
+            primary = topology.get("primary_manager_by_worker", {}).get(agent["id"])
+            assignments = [
+                message for message in all_messages
+                if message.get("status", "delivered") == "delivered"
+                and message.get("from") == primary
+                and message.get("to") == agent["id"]
+                and message.get("tag") in {"plan", "handoff"}
+                and message.get("workItem")
+                and message.get("risk") in {"routine", "high", "release"}
+            ]
+            agent["assignment"] = assignments[-1] if assignments else None
+            if not assignments and not last:
+                agent["state"] = "awaiting_assignment"
+
+    controls = _control_records(run_dir)
+    return {
+        **status,
+        "run_id": status.get("run_id") or run.get("run_id") or run_id,
+        "run_dir": str(run_dir),
+        "mission": run.get("mission"),
+        "created_at": run.get("created_at"),
+        "pid": status.get("pid") or pid,
+        "provider": run.get("provider") or status.get("provider"),
+        "host_provider": run.get("host_provider") or status.get("host_provider"),
+        "provider_assignments": (
+            run.get("provider_assignments")
+            or status.get("provider_assignments")
+            or {}
+        ),
+        "human_promotion_required": bool(
+            run.get("human_promotion_required")
+            or status.get("human_promotion_required")
+        ),
+        "process": {
+            "pid": pid,
+            "live": live,
+            "supervisor": supervisor,
+        },
+        "topology_graph": topology,
+        "messages": messages,
+        "events": events,
+        "activities": activities[-count:] if count else [],
+        "controls": controls,
+        "control_capabilities": {
+            "protocol": (
+                run.get("control_protocol")
+                or status.get("control_protocol")
+            ),
+            "message": bool(
+                run.get("control_protocol")
+                or status.get("control_protocol")
+            ) and status.get("status") not in TERMINAL_STATUSES,
+            "pause": bool(
+                run.get("control_protocol")
+                or status.get("control_protocol")
+            ) and status.get("status") in {"running", "starting"},
+            "resume": bool(
+                run.get("control_protocol")
+                or status.get("control_protocol")
+            ) and status.get("status") == "paused",
+            "cancel": status.get("status") not in TERMINAL_STATUSES or live is True,
+        },
+        "promotion_request": promotion,
+        "artifact_manifest": artifact_manifest,
+    }
+
+
+def list_organization_runs(
+    working_directory: str,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """List durable organization runs for one project."""
+    root = _organization_root(working_directory)
+    if root is None:
+        return {"status": "not_found", "runs": []}
+    project_root = discover_project_root(
+        Path(working_directory).expanduser().resolve(),
+    )
+    runs: List[Dict[str, Any]] = []
+    if root.is_dir():
+        paths = sorted(
+            (path for path in root.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for run_dir in paths[:max(1, min(int(limit), 500))]:
+            status = _read_json(run_dir / "status.json", {}) or {}
+            run = _read_json(run_dir / "run.json", {}) or _read_json(
+                run_dir / "request.json", {},
+            ) or {}
+            pid = _supervisor_pid(run_dir, status)
+            runs.append({
+                "run_id": status.get("run_id") or run.get("run_id") or run_dir.name,
+                "run_dir": str(run_dir),
+                "status": status.get("status", "unknown"),
+                "round": status.get("round", 0),
+                "max_rounds": status.get("max_rounds") or run.get("max_rounds"),
+                "phase": status.get("phase"),
+                "closeout_round": status.get("closeout_round", 0),
+                "max_closeout_rounds": (
+                    status.get("max_closeout_rounds")
+                    or run.get("max_closeout_rounds")
+                ),
+                "detail": status.get("detail"),
+                "updated_at": status.get("updated_at"),
+                "created_at": run.get("created_at"),
+                "topology": run.get("topology") or status.get("topology"),
+                "provider": run.get("provider") or status.get("provider"),
+                "host_provider": run.get("host_provider") or status.get("host_provider"),
+                "human_promotion_required": bool(
+                    run.get("human_promotion_required")
+                    or status.get("human_promotion_required")
+                ),
+                "process_live": process_group_is_live(pid, run_dir),
+                "control_protocol": (
+                    run.get("control_protocol")
+                    or status.get("control_protocol")
+                ),
+            })
+    return {
+        "status": "ok",
+        "project_root": str(project_root) if project_root else None,
+        "runs": runs,
+    }
+
+
+def _request_id(
+    run_id: str,
+    action: str,
+    idempotency_key: Optional[str],
+) -> str:
+    if idempotency_key:
+        digest = hashlib.sha256(
+            f"{run_id}\0{action}\0{idempotency_key}".encode("utf-8"),
+        ).hexdigest()[:24]
+        return f"ctrl_{digest}"
+    return f"ctrl_{uuid.uuid4().hex}"
+
+
+def _validate_target(run: Dict[str, Any], target: Optional[str]) -> str:
+    from .organization import get_topology
+
+    value = str(target or "").strip()
+    if not value:
+        raise ValueError("message control requires a target")
+    aliases = {"all", "lead", "finalizer", "managers", "workers", "integrators"}
+    if value in aliases:
+        return value
+    topology = get_topology(str(run.get("topology") or "google-rotating"))
+    if value not in {agent.agent_id for agent in topology.agents}:
+        raise ValueError(f"unknown organization target: {value}")
+    return value
+
+
+def queue_control_request(
+    working_directory: str,
+    run_id: str,
+    action: str,
+    *,
+    target: Optional[str] = None,
+    content: Optional[str] = None,
+    tag: str = "plan",
+    idempotency_key: Optional[str] = None,
+    requested_by: str = "human-operator",
+    allow_terminal_cancel: bool = False,
+) -> Dict[str, Any]:
+    """Queue one idempotent command for application at a safe boundary."""
+    action = str(action).strip().lower()
+    if action not in CONTROL_ACTIONS:
+        raise ValueError(f"action must be one of {sorted(CONTROL_ACTIONS)}")
+    run_dir = _resolve_run(working_directory, run_id)
+    if run_dir is None:
+        return {"status": "not_found", "run_id": run_id}
+    status = _read_json(run_dir / "status.json", {}) or {}
+    run = _read_json(run_dir / "run.json", {}) or _read_json(
+        run_dir / "request.json", {},
+    ) or {}
+    if (
+        status.get("status") in TERMINAL_STATUSES
+        and not (action == "cancel" and allow_terminal_cancel)
+    ):
+        return {
+            "status": "rejected",
+            "run_id": run.get("run_id") or run_id,
+            "detail": f"run is terminal: {status.get('status')}",
+        }
+    if action in {"message", "pause", "resume"} and not (
+        run.get("control_protocol") or status.get("control_protocol")
+    ):
+        return {
+            "status": "unsupported",
+            "run_id": run.get("run_id") or run_id,
+            "detail": "run predates the durable steering protocol",
+        }
+    normalized_target = None
+    normalized_content = None
+    if action == "message":
+        from .organization import MESSAGE_TAGS
+
+        normalized_target = _validate_target(run, target)
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            raise ValueError("message control requires non-empty content")
+        if len(normalized_content) > MAX_OPERATOR_MESSAGE_CHARS:
+            raise ValueError(
+                f"message exceeds {MAX_OPERATOR_MESSAGE_CHARS} characters",
+            )
+        if tag not in MESSAGE_TAGS:
+            raise ValueError(f"tag must be one of {sorted(MESSAGE_TAGS)}")
+    else:
+        tag = "status"
+
+    resolved_run_id = str(run.get("run_id") or status.get("run_id") or run_id)
+    control_id = _request_id(resolved_run_id, action, idempotency_key)
+    requests_dir = run_dir / "control" / "requests"
+    request_path = requests_dir / f"{control_id}.json"
+    existing = _read_json(request_path, None)
+    if isinstance(existing, dict):
+        acknowledgement = _read_json(
+            run_dir / "control" / "acknowledgements" / f"{control_id}.json",
+            None,
+        )
+        return {
+            **existing,
+            "status": (
+                acknowledgement.get("status", "acknowledged")
+                if isinstance(acknowledgement, dict)
+                else "queued"
+            ),
+            "acknowledgement": acknowledgement,
+            "idempotent_replay": True,
+        }
+    request = {
+        "schema": CONTROL_SCHEMA,
+        "id": control_id,
+        "run_id": resolved_run_id,
+        "action": action,
+        "target": normalized_target,
+        "tag": tag,
+        "content": normalized_content,
+        "requested_by": str(requested_by or "human-operator"),
+        "requested_at": _utc_now(),
+        "idempotency_key": idempotency_key,
+    }
+    _atomic_write_json(request_path, request)
+    return {**request, "status": "queued", "run_dir": str(run_dir)}
+
+
+def pending_control_requests(run_dir: Path) -> List[Dict[str, Any]]:
+    """Return well-formed requests that do not yet have acknowledgements."""
+    requests_dir = run_dir / "control" / "requests"
+    acknowledgements_dir = run_dir / "control" / "acknowledgements"
+    if not requests_dir.is_dir():
+        return []
+    pending: List[Dict[str, Any]] = []
+    for path in sorted(requests_dir.glob("*.json")):
+        request = _read_json(path, None)
+        if not isinstance(request, dict) or request.get("schema") != CONTROL_SCHEMA:
+            continue
+        control_id = str(request.get("id") or "")
+        if not control_id or (acknowledgements_dir / f"{control_id}.json").exists():
+            continue
+        pending.append(request)
+    pending.sort(key=lambda value: (
+        str(value.get("requested_at") or ""),
+        str(value.get("id") or ""),
+    ))
+    return pending
+
+
+def acknowledge_control_request(
+    run_dir: Path,
+    request: Dict[str, Any],
+    status: str,
+    detail: str,
+    *,
+    applied_round: Optional[int] = None,
+    targets: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    acknowledgement = {
+        "schema": CONTROL_SCHEMA,
+        "id": request.get("id"),
+        "run_id": request.get("run_id"),
+        "action": request.get("action"),
+        "status": status,
+        "detail": detail,
+        "applied_round": applied_round,
+        "targets": list(targets or []),
+        "acknowledged_at": _utc_now(),
+    }
+    _atomic_write_json(
+        run_dir / "control" / "acknowledgements" / f"{request['id']}.json",
+        acknowledgement,
+    )
+    return acknowledgement
+
+
+def cancel_organization_run(
+    working_directory: str,
+    run_id: str,
+    *,
+    idempotency_key: Optional[str] = None,
+    requested_by: str = "human-operator",
+    process_group_liveness: Any = process_group_is_live,
+) -> Dict[str, Any]:
+    """Durably request cancellation and enforce process-group termination."""
+    run_dir = _resolve_run(working_directory, run_id)
+    if run_dir is None:
+        return {"status": "not_found", "run_id": run_id}
+    status_path = run_dir / "status.json"
+    status = _read_json(status_path, {}) or {}
+    was_terminal = status.get("status") in TERMINAL_STATUSES
+    request = queue_control_request(
+        working_directory,
+        run_id,
+        "cancel",
+        idempotency_key=idempotency_key,
+        requested_by=requested_by,
+        allow_terminal_cancel=True,
+    )
+    (run_dir / "cancel.requested").write_text(_utc_now() + "\n", encoding="utf-8")
+    pid = _supervisor_pid(run_dir, status)
+    live = process_group_liveness(pid, run_dir)
+    should_signal = (
+        pid > 1
+        and pid != os.getpid()
+        and (not was_terminal or live is not False)
+    )
+    signalled = False
+    if should_signal:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            signalled = True
+        except (ProcessLookupError, PermissionError):
+            pass
+    if isinstance(request, dict) and request.get("id"):
+        acknowledge_control_request(
+            run_dir,
+            request,
+            "signalled" if signalled else "acknowledged",
+            (
+                "Cancellation marker persisted and the live process group was signalled."
+                if signalled
+                else "Cancellation marker persisted; no live process group required signalling."
+            ),
+        )
+    if not was_terminal:
+        status.update({
+            "status": "cancelled",
+            "detail": (
+                "Cancellation requested; process group termination signalled"
+                if signalled
+                else "Cancellation requested"
+            ),
+            "updated_at": _utc_now(),
+            "run_id": status.get("run_id", run_id),
+            "cancellation_requested": True,
+            "process_group_signalled": signalled,
+        })
+        _atomic_write_json(status_path, status)
+    return {
+        "status": status.get("status") if was_terminal else "cancelled",
+        "run_id": status.get("run_id", run_id),
+        "run_dir": str(run_dir),
+        "process_group_live": live,
+        "process_group_signalled": signalled,
+        "detail": (
+            "Terminal status had a live process group; termination was enforced."
+            if was_terminal and signalled
+            else (
+                "Run is terminal and no live organization process group remains."
+                if was_terminal
+                else "Cancellation requested."
+            )
+        ),
+    }

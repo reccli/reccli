@@ -998,6 +998,122 @@ def cmd_compact(args):
         return 1
 
 
+def cmd_browse(args):
+    """Start the local web UI for browsing the .devsession corpus."""
+    from .browse import serve
+    from ..project.devproject import discover_project_root
+
+    if args.path:
+        root = Path(args.path).resolve()
+    else:
+        root = discover_project_root(Path.cwd())
+        if not root:
+            print("No project found. Run from inside a project directory or pass a path.", file=sys.stderr)
+            return 1
+    try:
+        serve(root, port=args.port, open_browser=not args.no_open)
+        return 0
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+
+def _organization_project(args) -> Optional[Path]:
+    root = _resolve_project_root_arg(getattr(args, "project_root", None))
+    if root is None:
+        print(
+            "No project found. Run inside a project or pass --project-root.",
+            file=sys.stderr,
+        )
+    return root
+
+
+def cmd_organization_list(args):
+    from ..organization_control import list_organization_runs
+
+    root = _organization_project(args)
+    if root is None:
+        return 1
+    payload = list_organization_runs(str(root), limit=args.limit)
+    if args.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    for run in payload.get("runs", []):
+        live = "live" if run.get("process_live") else "stopped"
+        print(
+            f"{run['run_id']}  {run.get('status', 'unknown'):<11} "
+            f"round {run.get('round', 0)}/{run.get('max_rounds', '?')}  "
+            f"{run.get('provider', '?')}  {live}"
+        )
+    return 0
+
+
+def cmd_organization_status(args):
+    from ..organization_control import organization_snapshot
+
+    root = _organization_project(args)
+    if root is None:
+        return 1
+    payload = organization_snapshot(
+        str(root),
+        args.run_id,
+        include_recent=args.recent,
+    )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0 if payload.get("status") != "not_found" else 1
+
+
+def cmd_organization_control(args):
+    from ..organization_control import (
+        cancel_organization_run,
+        queue_control_request,
+    )
+
+    root = _organization_project(args)
+    if root is None:
+        return 1
+    if args.control_action == "cancel":
+        payload = cancel_organization_run(
+            str(root),
+            args.run_id,
+            idempotency_key=args.idempotency_key,
+            requested_by="reccli-cli",
+        )
+    else:
+        payload = queue_control_request(
+            str(root),
+            args.run_id,
+            args.control_action,
+            target=getattr(args, "target", None),
+            content=getattr(args, "message", None),
+            tag=getattr(args, "tag", "plan"),
+            idempotency_key=args.idempotency_key,
+            requested_by="reccli-cli",
+        )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0 if payload.get("status") not in {
+        "not_found", "rejected", "unsupported",
+    } else 1
+
+
+def cmd_organization_console(args):
+    from ..organization_console import serve_console
+
+    root = _organization_project(args)
+    if root is None:
+        return 1
+    try:
+        return serve_console(
+            root,
+            port=args.port,
+            open_browser=not args.no_open,
+            development=args.dev,
+        )
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_check_tokens(args):
     """Show token count and compaction status"""
     from ..session.devsession import DevSession
@@ -1696,6 +1812,85 @@ Examples:
     compact_parser = subparsers.add_parser('compact', help='Manually trigger preemptive compaction')
     compact_parser.add_argument('session', help='Session name or path')
     compact_parser.set_defaults(func=cmd_compact)
+
+    browse_parser = subparsers.add_parser('browse', help='Open a local web UI to browse the .devsession corpus')
+    browse_parser.add_argument('path', nargs='?', default=None,
+                               help='Project root (default: discover from cwd)')
+    browse_parser.add_argument('--port', type=int, default=8765, help='Local port (default 8765)')
+    browse_parser.add_argument('--no-open', action='store_true',
+                               help='Do not auto-open browser')
+    browse_parser.set_defaults(func=cmd_browse)
+
+    organization_parser = subparsers.add_parser(
+        'organization',
+        help='Observe and steer durable multi-agent organization runs',
+    )
+    organization_subparsers = organization_parser.add_subparsers(
+        dest='organization_command',
+        required=True,
+    )
+
+    organization_list_parser = organization_subparsers.add_parser(
+        'list',
+        help='List organization runs for a project',
+    )
+    organization_list_parser.add_argument('--project-root')
+    organization_list_parser.add_argument('--limit', type=int, default=100)
+    organization_list_parser.add_argument('--json', action='store_true')
+    organization_list_parser.set_defaults(func=cmd_organization_list)
+
+    organization_status_parser = organization_subparsers.add_parser(
+        'status',
+        help='Read a dashboard-ready durable run snapshot',
+    )
+    organization_status_parser.add_argument('run_id')
+    organization_status_parser.add_argument('--project-root')
+    organization_status_parser.add_argument('--recent', type=int, default=150)
+    organization_status_parser.set_defaults(func=cmd_organization_status)
+
+    organization_message_parser = organization_subparsers.add_parser(
+        'message',
+        help='Steer an agent or role group at the next safe boundary',
+    )
+    organization_message_parser.add_argument('run_id')
+    organization_message_parser.add_argument('message')
+    organization_message_parser.add_argument('--target', required=True)
+    organization_message_parser.add_argument(
+        '--tag',
+        default='plan',
+        choices=['plan', 'question', 'answer', 'handoff', 'review',
+                 'decision', 'status', 'blocker'],
+    )
+    organization_message_parser.add_argument('--idempotency-key')
+    organization_message_parser.add_argument('--project-root')
+    organization_message_parser.set_defaults(
+        func=cmd_organization_control,
+        control_action='message',
+    )
+
+    for action, help_text in (
+        ('pause', 'Pause after the current synchronized round'),
+        ('resume', 'Resume a run paused at a round boundary'),
+        ('cancel', 'Cancel and terminate a live organization process group'),
+    ):
+        control_parser = organization_subparsers.add_parser(action, help=help_text)
+        control_parser.add_argument('run_id')
+        control_parser.add_argument('--idempotency-key')
+        control_parser.add_argument('--project-root')
+        control_parser.set_defaults(
+            func=cmd_organization_control,
+            control_action=action,
+        )
+
+    organization_console_parser = organization_subparsers.add_parser(
+        'console',
+        help='Open the localhost organization viewer and steering console',
+    )
+    organization_console_parser.add_argument('--project-root')
+    organization_console_parser.add_argument('--port', type=int, default=8777)
+    organization_console_parser.add_argument('--no-open', action='store_true')
+    organization_console_parser.add_argument('--dev', action='store_true')
+    organization_console_parser.set_defaults(func=cmd_organization_console)
 
     # Project commands (.devproject)
     project_parser = subparsers.add_parser('project', help='Manage .devproject dashboard and proposals')

@@ -97,6 +97,7 @@ from reccli.mcp_server import (  # noqa: E402
     consolidate_audit,
     delete_session,
     edit_summary_item,
+    establish_agent_bridge,
     inspect_result_id,
     list_sessions,
     pin_memory,
@@ -104,6 +105,13 @@ from reccli.mcp_server import (  # noqa: E402
     recover_file,
     replay_audit_agent,
     run_mmc,
+    start_organization,
+    organization_status,
+    list_organizations,
+    steer_organization,
+    pause_organization,
+    resume_organization,
+    cancel_organization,
 )
 
 
@@ -216,6 +224,60 @@ class AutoReasonTieBreakTests(unittest.TestCase):
 
     def test_no_match_returns_none(self):
         self.assertIsNone(detect_intent("say hello"))
+
+
+# ---------------------------------------------------------------------------
+# establish_agent_bridge
+# ---------------------------------------------------------------------------
+
+class EstablishAgentBridgeTests(unittest.TestCase):
+    def test_creates_shared_log_and_mirrors(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = establish_agent_bridge(
+                agent_id="codex",
+                peer_id="claude",
+                channel_name="agent chat",
+                message="hello claude",
+                base_directory=td,
+                tail_lines=20,
+            )
+
+            root = Path(td).resolve()
+            log_path = root / "agent_chat.log"
+            outbound = root / "codex_to_claude.txt"
+            inbound = root / "claude_to_codex.txt"
+
+            self.assertTrue(log_path.exists())
+            self.assertTrue(outbound.exists())
+            self.assertFalse(inbound.exists())
+            self.assertIn(f"shared_log: {log_path}", result)
+            self.assertIn(f"outbound_mirror: {outbound}", result)
+            self.assertIn(f"inbound_mirror: {inbound}", result)
+
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("# RecCli agent bridge", log_text)
+            self.assertIn("codex]: hello claude", log_text)
+            self.assertIn("codex]: hello claude", outbound.read_text(encoding="utf-8"))
+
+    def test_repeated_call_appends_without_truncating(self):
+        with tempfile.TemporaryDirectory() as td:
+            establish_agent_bridge(
+                agent_id="codex",
+                peer_id="claude",
+                message="first",
+                base_directory=td,
+            )
+            establish_agent_bridge(
+                agent_id="codex",
+                peer_id="claude",
+                message="second",
+                base_directory=td,
+            )
+
+            log_text = (Path(td) / "agent_chat.log").read_text(encoding="utf-8")
+            self.assertEqual(log_text.count("# RecCli agent bridge"), 1)
+            self.assertIn("codex]: first", log_text)
+            self.assertIn("codex]: second", log_text)
 
 
 # ---------------------------------------------------------------------------
@@ -1640,6 +1702,205 @@ class BgTaskRegistryTests(unittest.TestCase):
             rec = json.loads(registry.read_text().strip().splitlines()[0])
             self.assertEqual(rec["pid"], 12345)
             self.assertEqual(rec["purpose"], "unit-test")
+
+
+class OrganizationMcpLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _make_git_project(root: Path) -> Path:
+        import subprocess
+
+        project_root = _make_project(root)
+        shutil.rmtree(project_root / ".git")
+        subprocess.run(["git", "init", "-q"], cwd=project_root, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project_root, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=project_root, check=True)
+        (project_root / "app.py").write_text("print('test')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "app.py"], cwd=project_root, check=True)
+        subprocess.run(["git", "commit", "-qm", "initial"], cwd=project_root, check=True)
+        return project_root
+
+    @staticmethod
+    def _provider_plan(provider: str):
+        from reccli.organization import ProviderPlan, get_topology
+
+        topology = get_topology("google-rotating")
+        assignments = {agent.agent_id: provider for agent in topology.agents}
+        return ProviderPlan(
+            mode=provider, requested=provider, host_provider=provider,
+            available_providers=[provider], provider_assignments=assignments,
+            blind_verifier_provider=provider,
+            authentication={provider: "authenticated"},
+        )
+
+    def test_start_registers_detached_worker_and_status_is_durable(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            project_root = self._make_git_project(Path(d))
+            evidence = project_root / "ignored-evidence"
+            evidence.mkdir()
+            (evidence / "receipt.txt").write_text("accepted\n", encoding="utf-8")
+            docs = project_root / "docs"
+            docs.mkdir()
+            (docs / "common.md").write_text("shared context\n", encoding="utf-8")
+            context_manifest = project_root / "context-packs.json"
+            context_manifest.write_text(json.dumps({
+                "schema": "reccli.organization-context-packs.v1",
+                "common": {
+                    "purpose": "Shared context.",
+                    "paths": ["docs/common.md"],
+                },
+                "agents": {},
+                "full_context_agents": [],
+            }, indent=2) + "\n", encoding="utf-8")
+            import subprocess
+            subprocess.run(
+                ["git", "add", "docs/common.md", "context-packs.json"],
+                cwd=project_root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "add context"],
+                cwd=project_root, check=True,
+            )
+            fake_process = mock.Mock(pid=424242)
+            with mock.patch(
+                "reccli.organization.resolve_provider_plan",
+                return_value=self._provider_plan("claude"),
+            ), mock.patch(
+                "reccli.organization._validate_clean_repository",
+            ), mock.patch(
+                "reccli.organization.resolve_protected_paths",
+                return_value=["app.py"],
+            ), mock.patch(
+                "reccli.organization.resolve_context_manifest",
+                return_value=context_manifest.resolve(),
+            ), mock.patch("subprocess.Popen", return_value=fake_process):
+                started = json.loads(start_organization(
+                    str(project_root), "Implement and verify the requested feature.",
+                    provider="claude", max_rounds=2,
+                    evidence_paths=["ignored-evidence"],
+                    protected_paths=["app.py"],
+                    context_manifest="context-packs.json",
+                    max_experiments=2,
+                ))
+
+            self.assertEqual(started["status"], "starting", started)
+            self.assertEqual(started["pid"], 424242)
+            self.assertEqual(started["evidence_paths"], [str(evidence.resolve())])
+            self.assertEqual(started["protected_paths"], ["app.py"])
+            self.assertEqual(started["context_manifest"], "context-packs.json")
+            self.assertEqual(started["max_experiments"], 2)
+            registry = _bg_tasks_file(project_root)
+            records = [json.loads(line) for line in registry.read_text().splitlines()]
+            self.assertEqual(records[-1]["pid"], 424242)
+            self.assertEqual(records[-1]["purpose"], f"organization:{started['run_id']}")
+
+            durable = json.loads(organization_status(
+                str(project_root), started["run_id"], include_recent_events=0,
+            ))
+            self.assertEqual(durable["run_id"], started["run_id"])
+            self.assertEqual(durable["pid"], 424242)
+
+    def test_cancel_writes_marker_and_signals_process_group(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            project_root = self._make_git_project(Path(d))
+            fake_process = mock.Mock(pid=434343)
+            with mock.patch(
+                "reccli.organization.resolve_provider_plan",
+                return_value=self._provider_plan("codex"),
+            ), mock.patch(
+                "reccli.organization._validate_clean_repository",
+            ), mock.patch("subprocess.Popen", return_value=fake_process):
+                started = json.loads(start_organization(
+                    str(project_root), "Build the bounded change.", provider="codex",
+                ))
+            with mock.patch("os.killpg") as killpg:
+                cancelled = json.loads(cancel_organization(str(project_root), started["run_id"]))
+            self.assertEqual(cancelled["status"], "cancelled")
+            killpg.assert_called_once()
+            self.assertTrue((Path(started["run_dir"]) / "cancel.requested").exists())
+
+    def test_mcp_surface_lists_and_queues_boundary_controls(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            project_root = self._make_git_project(Path(d))
+            fake_process = mock.Mock(pid=454545)
+            with mock.patch(
+                "reccli.organization.resolve_provider_plan",
+                return_value=self._provider_plan("codex"),
+            ), mock.patch(
+                "reccli.organization._validate_clean_repository",
+            ), mock.patch("subprocess.Popen", return_value=fake_process):
+                started = json.loads(start_organization(
+                    str(project_root),
+                    "Map, delegate, then implement.",
+                    provider="codex",
+                ))
+            listed = json.loads(list_organizations(str(project_root)))
+            self.assertEqual(listed["runs"][0]["run_id"], started["run_id"])
+            steered = json.loads(steer_organization(
+                str(project_root),
+                started["run_id"],
+                "lead",
+                "Keep the first worker wave assignment-specific.",
+                idempotency_key="mcp-steer-1",
+            ))
+            self.assertEqual(steered["status"], "queued")
+            paused = json.loads(pause_organization(
+                str(project_root),
+                started["run_id"],
+                idempotency_key="mcp-pause-1",
+            ))
+            resumed = json.loads(resume_organization(
+                str(project_root),
+                started["run_id"],
+                idempotency_key="mcp-resume-1",
+            ))
+            self.assertEqual(paused["status"], "queued")
+            self.assertEqual(resumed["status"], "queued")
+            snapshot = json.loads(organization_status(
+                str(project_root),
+                started["run_id"],
+                include_recent_events=0,
+            ))
+            self.assertEqual(len(snapshot["controls"]), 3)
+
+    def test_cancel_reconciles_terminal_status_with_live_process_group(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            project_root = self._make_git_project(Path(d))
+            fake_process = mock.Mock(pid=444444)
+            with mock.patch(
+                "reccli.organization.resolve_provider_plan",
+                return_value=self._provider_plan("claude"),
+            ), mock.patch(
+                "reccli.organization._validate_clean_repository",
+            ), mock.patch("subprocess.Popen", return_value=fake_process):
+                started = json.loads(start_organization(
+                    str(project_root), "Build the bounded change.", provider="claude",
+                ))
+            status_path = Path(started["run_dir"]) / "status.json"
+            status = json.loads(status_path.read_text())
+            status["status"] = "cancelled"
+            status_path.write_text(json.dumps(status) + "\n")
+
+            with mock.patch(
+                "reccli.mcp_server._organization_process_group_is_live",
+                return_value=True,
+            ), mock.patch("os.killpg") as killpg:
+                cancelled = json.loads(cancel_organization(
+                    str(project_root), started["run_id"],
+                ))
+
+            self.assertEqual(cancelled["status"], "cancelled")
+            self.assertTrue(cancelled["process_group_live"])
+            self.assertTrue(cancelled["process_group_signalled"])
+            self.assertIn("termination was enforced", cancelled["detail"])
+            killpg.assert_called_once_with(444444, mock.ANY)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,380 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from reccli.organization import OrganizationRunner, get_topology
+from reccli.organization_console_bridge import dispatch
+from reccli.organization_control import (
+    acknowledge_control_request,
+    list_organization_runs,
+    organization_snapshot,
+    pending_control_requests,
+    queue_control_request,
+)
+
+
+def _init_project(root: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=root,
+        check=True,
+    )
+    (root / "app.py").write_text("print('test')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=root, check=True)
+
+
+def _make_run(root: Path, run_id: str = "control-run", protocol: bool = True) -> Path:
+    run_dir = root / "devsession" / "agent-organizations" / run_id
+    run_dir.mkdir(parents=True)
+    topology = get_topology("scientific")
+    assignments = {
+        agent.agent_id: ("claude" if index % 2 else "codex")
+        for index, agent in enumerate(topology.agents)
+    }
+    run = {
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "project_root": str(root),
+        "mission": "Qualify the system.",
+        "provider": "mixed",
+        "host_provider": "codex",
+        "provider_assignments": assignments,
+        "topology": "scientific",
+        "max_rounds": 8,
+        "human_promotion_required": True,
+    }
+    if protocol:
+        run["control_protocol"] = "reccli.organization-control.v1"
+    (run_dir / "request.json").write_text(
+        json.dumps(run, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "run.json").write_text(
+        json.dumps(run, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    status = {
+        "run_id": run_id,
+        "status": "running",
+        "round": 2,
+        "max_rounds": 8,
+        "completed_turns": 4,
+        "attempted_turns": 4,
+        "provider": "mixed",
+        "topology": "scientific",
+        "agent_states": {"worker-a": "working"},
+    }
+    if protocol:
+        status["control_protocol"] = "reccli.organization-control.v1"
+    (run_dir / "status.json").write_text(
+        json.dumps(status, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+class OrganizationCliBootstrapTests(unittest.TestCase):
+    def test_organization_cli_runs_without_optional_python_dependencies(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _make_run(root)
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    "-m",
+                    "reccli.cli_bootstrap",
+                    "organization",
+                    "list",
+                    "--project-root",
+                    str(root),
+                    "--json",
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["runs"][0]["run_id"], "control-run")
+
+            steering = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    "-m",
+                    "reccli.cli_bootstrap",
+                    "organization",
+                    "message",
+                    "control-run",
+                    "Recheck the bounded acceptance evidence.",
+                    "--target",
+                    "manager-c",
+                    "--tag",
+                    "review",
+                    "--idempotency-key",
+                    "cli-bootstrap-steering",
+                    "--project-root",
+                    str(root),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(steering.returncode, 0, steering.stderr)
+            queued = json.loads(steering.stdout)
+            self.assertEqual(queued["status"], "queued")
+            request_path = (
+                Path(queued["run_dir"])
+                / "control"
+                / "requests"
+                / f"{queued['id']}.json"
+            )
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            self.assertEqual(request["target"], "manager-c")
+            self.assertEqual(request["tag"], "review")
+
+
+class OrganizationControlTests(unittest.TestCase):
+    def test_snapshot_builds_dashboard_graph_and_activity(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root)
+            (run_dir / "messages.jsonl").write_text(
+                json.dumps({
+                    "round": 2,
+                    "from": "worker-a",
+                    "to": "manager-a",
+                    "tag": "status",
+                    "content": "Fixture reproduced.",
+                    "deliveredAt": "2026-07-17T00:00:00Z",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            turns = run_dir / "turns"
+            turns.mkdir()
+            (turns / "worker-a.jsonl").write_text(
+                json.dumps({
+                    "round": 2,
+                    "agent_id": "worker-a",
+                    "status": "completed",
+                    "duration_ms": 1200,
+                    "reply": {"summary": "Reproduced the fixture."},
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            snapshot = organization_snapshot(str(root), "control-run")
+            self.assertEqual(snapshot["status"], "running")
+            self.assertEqual(len(snapshot["topology_graph"]["agents"]), 9)
+            self.assertEqual(
+                next(
+                    agent for agent in snapshot["topology_graph"]["agents"]
+                    if agent["id"] == "worker-a"
+                )["last_turn"]["summary"],
+                "Reproduced the fixture.",
+            )
+            self.assertEqual(len(snapshot["messages"]), 1)
+            self.assertEqual(len(snapshot["activities"]), 2)
+
+            listed = list_organization_runs(str(root))
+            self.assertEqual(listed["runs"][0]["run_id"], "control-run")
+            self.assertEqual(listed["runs"][0]["control_protocol"],
+                             "reccli.organization-control.v1")
+
+    def test_idempotent_message_is_applied_to_group_at_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root)
+            runner = OrganizationRunner(
+                root,
+                "Qualify the system.",
+                "claude",
+                "scientific",
+                "control-run",
+                run_dir,
+            )
+            first = queue_control_request(
+                str(root),
+                "control-run",
+                "message",
+                target="workers",
+                content="Prioritize the smallest failing layer.",
+                tag="plan",
+                idempotency_key="operator-1",
+            )
+            second = queue_control_request(
+                str(root),
+                "control-run",
+                "message",
+                target="workers",
+                content="Prioritize the smallest failing layer.",
+                tag="plan",
+                idempotency_key="operator-1",
+            )
+            self.assertEqual(first["id"], second["id"])
+            self.assertTrue(second["idempotent_replay"])
+
+            self.assertIsNone(runner._apply_control_requests(2))
+            for worker_id in runner.topology.worker_ids:
+                self.assertEqual(len(runner.inboxes[worker_id]), 1)
+                self.assertTrue(runner.inboxes[worker_id][0]["operator_message"])
+                self.assertEqual(runner.states[worker_id], "working")
+            self.assertEqual(pending_control_requests(run_dir), [])
+            acknowledgement = json.loads(
+                (run_dir / "control" / "acknowledgements" /
+                 f"{first['id']}.json").read_text(),
+            )
+            self.assertEqual(acknowledgement["status"], "applied")
+            self.assertEqual(
+                acknowledgement["targets"],
+                runner.topology.worker_ids,
+            )
+
+    def test_pause_and_resume_are_durable_boundary_commands(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root)
+            runner = OrganizationRunner(
+                root,
+                "Qualify the system.",
+                "claude",
+                "scientific",
+                "control-run",
+                run_dir,
+            )
+            queue_control_request(str(root), "control-run", "pause")
+            runner._apply_control_requests(3)
+            self.assertTrue(runner.paused)
+            queue_control_request(str(root), "control-run", "resume")
+            runner._apply_control_requests(3)
+            self.assertFalse(runner.paused)
+
+    def test_worker_first_turn_requires_primary_manager_work_package(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root)
+            runner = OrganizationRunner(
+                root,
+                "Qualify the system.",
+                "claude",
+                "scientific",
+                "control-run",
+                run_dir,
+            )
+            base = {
+                "to": "worker-a",
+                "tag": "plan",
+                "content": "Run the bounded control.",
+                "candidate": None,
+                "workItem": "p0-control",
+                "risk": "high",
+            }
+            runner._deliver_message("manager-b", base, 2)
+            self.assertEqual(len(runner.inboxes["worker-a"]), 1)
+            self.assertNotIn(
+                "worker-a",
+                {agent.agent_id for agent in runner._select_agents(3)},
+            )
+            runner._deliver_message(
+                "manager-a",
+                {**base, "workItem": None},
+                2,
+            )
+            self.assertEqual(len(runner.inboxes["worker-a"]), 1)
+            runner._deliver_message("manager-a", base, 2)
+            self.assertEqual(len(runner.inboxes["worker-a"]), 2)
+            scheduled = {
+                agent.agent_id for agent in runner._select_agents(3)
+            }
+            self.assertIn("worker-a", scheduled)
+            records = [
+                json.loads(line)
+                for line in (run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(records[0]["status"], "delivered")
+            self.assertEqual(records[1]["status"], "dropped")
+            self.assertIn("workItem", records[1]["reason"])
+            self.assertEqual(records[2]["status"], "delivered")
+
+    def test_legacy_run_rejects_steering_but_remains_observable(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _make_run(root, protocol=False)
+            result = queue_control_request(
+                str(root),
+                "control-run",
+                "message",
+                target="lead",
+                content="Change direction.",
+            )
+            self.assertEqual(result["status"], "unsupported")
+            snapshot = organization_snapshot(str(root), "control-run")
+            self.assertFalse(snapshot["control_capabilities"]["message"])
+
+    def test_console_bridge_uses_same_control_layer(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _make_run(root)
+            listed = dispatch({
+                "command": "list",
+                "working_directory": str(root),
+            })
+            self.assertEqual(listed["runs"][0]["run_id"], "control-run")
+            queued = dispatch({
+                "command": "control",
+                "working_directory": str(root),
+                "run_id": "control-run",
+                "action": "message",
+                "target": "lead",
+                "content": "Report the earliest failing layer.",
+                "idempotency_key": "bridge-1",
+            })
+            self.assertEqual(queued["status"], "queued")
+
+    def test_acknowledgement_is_atomic_and_removes_pending_request(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root)
+            request = queue_control_request(
+                str(root),
+                "control-run",
+                "pause",
+            )
+            self.assertEqual(len(pending_control_requests(run_dir)), 1)
+            acknowledge_control_request(
+                run_dir,
+                request,
+                "applied",
+                "Paused.",
+                applied_round=2,
+            )
+            self.assertEqual(pending_control_requests(run_dir), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

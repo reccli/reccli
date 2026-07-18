@@ -1,14 +1,20 @@
 # Agent Harness
 
-**Status:** Product/design document with an initial MCP implementation.
+**Status:** Product/design document with implemented audit, patch-proposal, and organization MCP workflows.
 
-This document describes a RecCli-native harness for launching scoped coding agents against project memory. The initial executable slice is the `audit_feature` MCP tool, which creates a read-only feature-scoped run package under `devsession/agent-audits/` and dispatches through subscription-auth CLI adapters for Claude or Codex.
+This document describes a RecCli-native harness for launching scoped coding agents against project memory. `audit_feature` and `propose_patch` cover bounded read-only analysis. The asynchronous organization tools cover opt-in delivery work in isolated Git worktrees. All three paths dispatch through the installed subscription-auth Claude Code or Codex CLI rather than model APIs.
 
 ## Overview
 
 The agent harness uses RecCli's existing project memory to run focused, parallel agent work. Each v1 agent receives a bounded work package for one feature or risk area, performs a read-only audit, and returns structured findings for a human to review.
 
 The key product bet is that agent quality improves more from context quality than raw concurrency. A small number of agents with feature-scoped context packs should produce better findings than a large fleet pointed at a repository with generic instructions.
+
+The delivery workflow adds a second bet: hierarchy is useful for attention
+management, but seams need independent review. Its default organization keeps
+workers focused behind managers, lets managers coordinate laterally, rotates an
+alternate manager into each worker handoff, and gives the exact integrated
+candidate to a fresh final verifier.
 
 ## Why This Belongs In RecCli
 
@@ -188,6 +194,293 @@ Adapters write raw output plus parsed findings back into the agent's JSON and Ma
 Future hardening: cache provider probe results by CLI version in `~/.reccli/provider-probes.json`, and re-run probes only when the installed provider version changes.
 
 V1 inlines the generated context pack into each provider prompt. That keeps execution predictable and avoids depending on provider-specific read tools, but it duplicates context across agents. If real audits are slow or quota-heavy, the first optimization should be a reference-mode prompt that lets read-only agents load files from the context pack paths.
+
+## Organization Delivery Workflow
+
+Organization runs are explicit, write-capable jobs for a concrete mission. They
+are not an always-on daemon and do not poll for work. Start one from any
+MCP-connected Claude Code or Codex session:
+
+```python
+start_organization(
+    working_directory="/path/to/project",
+    mission="Implement the feature and satisfy these acceptance criteria: ...",
+    provider="auto",
+    topology="google-rotating",
+    max_rounds=8,
+    max_concurrency=5,
+    evidence_paths=["out/project-intelligence", "/path/to/reference-assets"],
+)
+```
+
+The call returns immediately. Poll with:
+
+```python
+organization_status(
+    working_directory="/path/to/project",
+    run_id="<returned-run-id>",
+)
+```
+
+Stop it with `cancel_organization`. The status path is durable, so polling still
+works after the MCP host reconnects. Cancellation reconciles status with the
+actual process group; a stale `cancelled` status cannot suppress termination of
+a still-live supervisor or native-agent child.
+
+The default work cap is eight synchronized rounds. A round is a barrier, not a
+single model call: every scheduled organization member runs one agent turn in
+parallel during that round. Status therefore reports `round/max_rounds`, the
+number of agent turns scheduled in the current round, and cumulative completed
+turns separately. If an immutable candidate is still traversing review when the
+work cap arrives, RecCli permits at most four additional closeout boundaries.
+Closeout never wakes workers or starts implementation/experiments; it can only
+finish existing review, manager routing, host integration, release review, and
+finalization. Increase `max_rounds` explicitly for unusually large missions
+rather than treating eight as a total-agent-call budget.
+
+### Native provider assignment
+
+`provider="auto"` is diversity-aware for organization runs. RecCli checks the
+installed Claude Code and Codex CLI authentication status without retaining
+account output. When both subscriptions are usable, auto resolves to `mixed`.
+When only one is usable, auto resolves to a homogeneous run on that provider.
+
+The default mixed assignment is relative to the MCP host provider:
+
+| Role | Provider |
+|------|----------|
+| Mission lead | Host |
+| Manager/worker lanes A and C | Opposite |
+| Manager/worker lanes B and D | Host |
+| Release manager (`manager-d`) | Host |
+| Rotating release reviewer | Prefer opposite |
+| Fresh final verifier | Opposite |
+
+Keeping each worker and primary manager on the same provider preserves shared
+working assumptions. Governance then prefers an eligible alternate manager on
+the other provider, adding independent model-family judgment at the review
+seam. Provider assignments are fixed for the run, recorded in `request.json`,
+`run.json`, status, per-turn traces, and `result.json`; agents do not switch
+provider between rounds. Token usage is reported both in aggregate and by
+provider.
+
+Pass `provider="claude"` or `provider="codex"` to force a homogeneous run.
+Pass `provider="mixed"` to require both authenticated CLIs and fail early if
+either is unavailable. Mixed runs currently require `model="auto"`, allowing
+each native CLI to use its own configured model rather than passing one
+provider-specific model name to both.
+
+The default topology is deliberately close to Org-Bench's successful Google
+shape while adding two bounded controls:
+
+- Workers communicate through a primary manager and have no direct lead or
+  peer edge. Managers form a lateral mesh for routine coordination and selective
+  escalation.
+- Each immutable worker candidate is assigned to an alternate manager for review.
+  The assignment rotates deterministically and excludes the worker's primary
+  manager and, when possible, the release manager.
+
+`manager-d` owns the integration decision while RecCli owns Git mutation. A
+rotating non-release manager and the mission lead must approve the exact
+integration commit before finalization. A
+new read-only Claude/Codex session then verifies that exact commit without team
+messages or prior agent-session state. This final agent is intentionally fresh;
+the rotating managers are intentionally context-aware. The two checks cover
+different failure modes.
+
+Workers do receive documentation. On their first turn they receive the mission,
+the `.devproject` feature map (including linked documentation paths), the team
+charter, and their role. Their worktree contains source, tests, and repository
+documentation, and the prompt explicitly tells them to inspect task-relevant
+docs and published interface decisions. They do not receive raw manager
+deliberation or unrelated inbox traffic. The scientific adversarial auditor is
+the deliberate exception: it receives the full relevant durable decision
+record, candidate bundle references, prior-attempt evidence, and primary
+evidence so independence does not come from context starvation.
+
+Projects may additionally pass a tracked `context_manifest` using schema
+`reccli.organization-context-packs.v1`. It declares ordered `common.paths`,
+per-agent `agents.<id>.paths`, optional `library_paths` on either pack, and
+`full_context_agents`. RecCli expands tracked directories, copies the selected
+files into per-agent run-owned boxes, preserves project-relative paths under
+`canonical/`, removes write bits, records hashes, and verifies both boxes and
+canonical sources throughout the run. Required `paths` are the ordered first-
+turn reading set. `library_paths` are an indexed, lane-scoped reference set that
+agents consult when relevant rather than ingesting wholesale. The assignment is
+educational routing, not a deny-read ACL: canonical cross-lane documents remain
+available when an interface or contradiction requires them.
+
+```json
+{
+  "schema": "reccli.organization-context-packs.v1",
+  "common": {
+    "purpose": "Authority every agent must know.",
+    "paths": ["AGENTS.md", "docs/Core/Critical"]
+  },
+  "agents": {
+    "worker-a": {
+      "purpose": "Reproduction and metrology.",
+      "paths": ["research/metrology.md"],
+      "library_paths": ["docs/attempts/metrology"]
+    }
+  },
+  "full_context_agents": ["lead", "manager-a", "manager-b", "manager-c", "manager-d"]
+}
+```
+
+Paths and directories must be project-relative, tracked, and free of symlinks.
+Workers read required common-plus-lane `paths` before substantive work and
+consult relevant `library_paths` before acting on a matching hypothesis or
+failure mode. Full-context agents read the common authority first and use the
+lane union as an indexed library, avoiding needless up-front context ingestion.
+
+`topology="scientific"` is a single reversibility-based organization for
+evidence-heavy research and engineering. RecCli supplies generic role slots:
+reproduction and receipt integrity, hypothesis/model evaluation, structural
+and integration validation, and uncertainty/alternative explanations. The
+project's tracked context manifest specializes those slots with domain-specific
+lane purposes and documents. Its four workers may choose hypotheses, modify
+disposable branches, and run sandbox experiments immediately after the
+lead/manager delegation gate opens. `max_experiments` limits sealed
+generated-output bundles as a hard resource budget; it does not pretend to
+decide novelty or scientific merit. Managers A/B coordinate evidence and
+hypotheses, manager C is fully sighted and veto-only, and manager D may integrate
+only patch-identical candidates whose adversarial review completed without a
+veto. No agent can apply the resulting proposal to the canonical branch or
+archive.
+
+```python
+start_organization(
+    working_directory="/path/to/scientific-project",
+    mission="Autonomously investigate the objective and prepare a promotion proposal.",
+    provider="auto",
+    topology="scientific",
+    max_rounds=8,
+    max_experiments=3,
+    evidence_paths=["out/project-intelligence", "/path/to/reference-assets"],
+    protected_paths=["docs/frozen-authority.md", "data/immutable-input.bin"],
+    context_manifest="benchmarks/organization/context-packs-v1.json",
+)
+```
+
+Each native organization member has a resumable subscription-backed CLI
+session. RecCli invokes `claude -p` or `codex exec`; no API SDK or API key is
+used. Claude sessions use native session IDs/resume, while Codex sessions use
+the thread ID emitted by `codex exec --json`. The fresh Codex verifier is
+ephemeral, and the fresh Claude verifier disables session persistence.
+
+The project must have a clean tracked Git worktree before launch. Agents operate
+on isolated branches/worktrees, and durable traces are written under:
+
+```text
+devsession/agent-organizations/<run-id>/
+  request.json
+  status.json
+  run.json
+  result.json                 # terminal runs
+  promotion-request.json      # scientific proposal awaiting human authorization
+  evidence-manifest.json      # selected ignored/external sources + hashes
+  context-pack-manifest.json  # per-agent docs, canonical hashes, assigned scope
+  context-packs/              # read-only common-plus-lane educational views
+  evidence-snapshot/          # read-only view shared by every agent
+  candidate-artifacts/        # sealed ignored/generated output bundles
+  candidate-artifacts.jsonl   # durable bundle index
+  artifact-manifest.json      # hashes and source candidate for final outputs
+  deliverables/               # verified run-scoped reports/plans/artifacts
+  events.jsonl
+  messages.jsonl
+  turns/<agent>.jsonl
+  *_stdout.txt
+  *_stderr.txt
+```
+
+Run-scoped deliverables do not use the project's ignored `devsession/` path as
+an inter-agent Git surface, and temporary drafts are not placed in the product's
+permanent `docs/` tree. Agents write those files under the run-specific
+`.reccli-org-artifacts/<run-id>/` staging prefix in their isolated branches;
+RecCli validates and commits them after the native turn.
+That gives worker handoffs, alternate-manager review, and release integration
+the same immutable-SHA semantics as source changes. Reviewers can inspect a
+candidate artifact with `git show <sha>:.reccli-org-artifacts/<run-id>/<path>`.
+
+After exact-candidate review, the orchestrator
+reads the artifact blobs from that exact commit and exports them to
+`<run-dir>/deliverables/`. `artifact-manifest.json` records their SHA-256 and
+Git blob IDs. When staged artifacts exist, `result.json` exposes two commits:
+
+- `verified_candidate`: the exact integration candidate that managers and the
+  reviewers evaluated, including its temporary artifact staging tree.
+- `promotion_candidate` / `promotion_branch`: an orchestrator-created child
+  commit whose tree differs only by removing temporary RecCli staging,
+  including any staging inherited from an exact candidate recovered from a
+  prior organization run.
+  This is a clean local proposal. For a scientific run it is not merged,
+  pushed, imported, or canonically accepted; `promotion-request.json` binds the
+  proposal and lists the actions requiring human authorization.
+
+Native agents receive read-only Git inspection (`status`, `diff`, `show`,
+`rev-parse`) but do not stage, commit, merge, or cherry-pick. Codex deliberately
+protects `.git` and resolved worktree metadata even when a workspace is
+writable, so RecCli performs those mutations in the trusted supervisor after
+validating deny-write and role scopes. This provider-neutral ownership also
+prevents Claude and Codex lanes from having different Git capabilities. The
+harness never grants or requires `git push`, hosting-provider credentials, or
+GitHub access; remote publication remains a separate, explicit user action.
+
+When the canonical project has `.venv/bin/python`, RecCli creates an ignored
+worktree-local launcher at the same relative path. It executes the canonical
+environment but prepends the candidate worktree's `src/` and root to
+`PYTHONPATH`, so tests do not silently import an editable install from the
+caller checkout. The bridge is runtime infrastructure, never candidate content.
+
+### Ignored and external evidence
+
+Git worktrees intentionally contain only the committed checkpoint. Pass
+`evidence_paths` when agents also need ignored generated outputs, sealed
+receipts, or assets from a related project. Relative paths resolve from the project root;
+absolute paths may select external local evidence. RecCli rejects symlinks,
+prefers APFS clone copies on macOS, falls back to ordinary copies elsewhere,
+removes all write bits, and records SHA-256, size, mode, and timestamp for every
+file. Every native session receives the same snapshot path, not the original
+source path. Inventory is checked after every round and content is fully
+re-hashed before release.
+
+This does not make a dirty tracked worktree launchable. Source and tracked
+documentation still need one clean checkpoint so every branch has an
+unambiguous code base.
+
+Pass project-relative `protected_paths` for tracked immutable evidence,
+ledgers, authority documents, or frozen standards. RecCli removes write bits in every
+worktree and rejects any turn whose Git delta touches a protected path. Agents
+may draft proposed authority changes under the run-artifact staging prefix.
+
+### Generated outputs outside Git
+
+Large generated experiment outputs should not be force-added to Git. A writable agent
+leaves each new ignored output in its isolated worktree and names only the
+required path in the structured reply's `artifacts` array while handing off the
+`RECCLI_HOST_CANDIDATE` marker. RecCli first resolves that marker to its
+host-materialized exact commit. After every agent in the round stops, RecCli seals those paths
+under `candidate-artifacts/`, hashes them, makes them read-only, binds the
+manifest to the exact candidate commit, and notifies the primary manager.
+
+The bundle is durable evidence, not an automatic write into the caller's
+ignored archive. Projects with immutable archives should provide a validated,
+no-overwrite ingest command after human authorization. This prevents disposable
+worktree cleanup from losing experiment results without putting heavy binary
+payloads into Git object storage.
+
+Scientific workers use temporary run-local identifiers. Canonical attempt IDs
+are assigned only by the project's authorized archive-import transaction.
+
+`request.json` includes `host_provider`, `provider_assignments`,
+`blind_verifier_provider`, and authentication-state labels. It never contains
+authentication output, tokens, or API keys.
+
+Subscription quotas and elapsed time remain real constraints: the default team
+can run up to nine concurrent/persistent agent sessions. Use `max_rounds`,
+`max_concurrency`, `turn_timeout_seconds`, and—for scientific runs—
+`max_experiments` as factual resource limits rather than semantic proof gates.
 
 ## Replay
 
