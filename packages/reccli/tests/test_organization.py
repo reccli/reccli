@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -1700,6 +1701,149 @@ class OrganizationProjectTests(unittest.TestCase):
                     runner.topology.agent("worker-d"), reply, 3,
                 )
 
+    def test_scientific_git_backed_probe_consumes_budget_but_report_does_not(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Bound empirical work.", "claude",
+                "scientific", "git-experiment-budget", run_dir,
+                max_experiments=1,
+            )
+            runner.workspaces["worker-a"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            worker = runner.topology.agent("worker-a")
+
+            report = (
+                root / runner.artifact_staging_prefix / "worker-a" /
+                "r1" / "review.md"
+            )
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Review\n\nThis only summarizes existing evidence.\n",
+                encoding="utf-8",
+            )
+            runner._materialize_agent_candidate(
+                worker, _reply("report only"), base, 1,
+            )
+            self.assertEqual(runner._experiment_used(), 0)
+
+            prior = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            probe = (
+                root / runner.artifact_staging_prefix / "worker-a" /
+                "r2" / "probes" / "radius_probe.py"
+            )
+            probe.parent.mkdir(parents=True)
+            probe.write_text("print('measure radius')\n", encoding="utf-8")
+            runner._materialize_agent_candidate(
+                worker, _reply("probe captured"), prior, 2,
+            )
+            self.assertEqual(runner._experiment_used(), 1)
+            self.assertEqual(
+                runner.experiment_records[0]["kinds"],
+                ["git-backed-probe-or-data"],
+            )
+            self.assertIn(
+                probe.relative_to(root).as_posix(),
+                runner.experiment_records[0]["paths"],
+            )
+
+            prior = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            measurement = (
+                root / runner.artifact_staging_prefix / "worker-a" /
+                "r3" / "measurements" / "radius.json"
+            )
+            measurement.parent.mkdir(parents=True)
+            measurement.write_text('{"radius": 8.0}\n', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "budget exhausted"):
+                runner._materialize_agent_candidate(
+                    worker, _reply("second experiment"), prior, 3,
+                )
+            self.assertEqual(runner._experiment_used(), 1)
+
+    def test_scientific_experiment_channels_share_one_turn_slot(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Bound empirical work.", "claude",
+                "scientific", "unified-experiment-budget", root / "run",
+                max_experiments=1,
+            )
+            worker = runner.topology.agent("worker-b")
+            first = runner._claim_experiment_slot(
+                worker, 3,
+                kind="git-backed-probe-or-data",
+                candidate=None,
+                paths=[".reccli-org-artifacts/run/worker-b/r3/probe.py"],
+            )
+            second = runner._claim_experiment_slot(
+                worker, 3,
+                kind="sealed-generated-output",
+                candidate="candidate-3",
+                paths=["out/experiments/worker-b-r3/result.step"],
+            )
+            self.assertEqual(first["slot"], second["slot"])
+            self.assertEqual(runner._experiment_used(), 1)
+            self.assertEqual(
+                second["kinds"],
+                ["git-backed-probe-or-data", "sealed-generated-output"],
+            )
+            self.assertEqual(second["candidate"], "candidate-3")
+
+    def test_scientific_experiment_budget_is_atomic_across_parallel_turns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Bound parallel empirical work.", "claude",
+                "scientific", "parallel-experiment-budget", root / "run",
+                max_experiments=3,
+            )
+            worker = runner.topology.agent("worker-c")
+
+            def claim(round_number):
+                return runner._claim_experiment_slot(
+                    worker, round_number,
+                    kind="git-backed-probe-or-data",
+                    candidate=None,
+                    paths=[
+                        f".reccli-org-artifacts/run/worker-c/r{round_number}/"
+                        "probe.py"
+                    ],
+                )
+
+            successes = 0
+            failures = 0
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(claim, index) for index in range(1, 9)]
+                for future in futures:
+                    try:
+                        future.result()
+                        successes += 1
+                    except RuntimeError as exc:
+                        self.assertIn("budget exhausted", str(exc))
+                        failures += 1
+            self.assertEqual(successes, 3)
+            self.assertEqual(failures, 5)
+            self.assertEqual(runner._experiment_used(), 3)
+            self.assertEqual(
+                {record["slot"] for record in runner.experiment_records},
+                {1, 2, 3},
+            )
+
     def test_protected_tracked_path_rejects_a_writable_worker_turn(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2098,6 +2242,88 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(
                 runner.inboxes["manager-c"][0]["candidate"], base,
             )
+
+    def test_exact_no_veto_review_is_normalized_into_final_decision(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Review one exact release dossier.", "claude",
+                "scientific", "normalize-review", run_dir,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-c"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            runner._deliver_message("manager-c", {
+                "to": "manager-d",
+                "tag": "review",
+                "content": (
+                    f"NO_VETO {base}: no blocking falsification was "
+                    "established for this exact dossier."
+                ),
+                "candidate": base,
+                "workItem": "final-no-promotion",
+                "risk": "release",
+            }, 4)
+
+            delivered = runner.inboxes["manager-d"][0]
+            self.assertEqual(delivered["tag"], "decision")
+            self.assertEqual(delivered["normalizedFromTag"], "review")
+            self.assertEqual(
+                runner.governance.candidate_approvals["manager-c"], base,
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "events.jsonl").read_text().splitlines()
+            ]
+            self.assertIn(
+                "message.decision_normalized",
+                {event["type"] for event in events},
+            )
+
+    def test_no_veto_review_without_exact_identity_is_rejected_and_requeued(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Review one exact release dossier.", "claude",
+                "scientific", "reject-ambiguous-review", run_dir,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-c"] = Workspace(
+                root, "main", "main", root, [], base,
+            )
+            runner._deliver_message("manager-c", {
+                "to": "manager-d",
+                "tag": "review",
+                "content": "NO_VETO: the dossier appears internally consistent.",
+                "candidate": base,
+                "workItem": "final-no-promotion",
+                "risk": "release",
+            }, 4)
+
+            self.assertEqual(runner.inboxes["manager-d"], [])
+            self.assertNotIn(
+                "manager-c", runner.governance.candidate_approvals,
+            )
+            retry = runner.inboxes["manager-c"][0]
+            self.assertEqual(retry["tag"], "blocker")
+            self.assertIn(base, retry["content"])
+            messages = [
+                json.loads(line)
+                for line in (run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(messages[0]["status"], "dropped")
+            self.assertIn("decision was not recorded", messages[0]["reason"])
 
     def test_closeout_ignores_routine_chatter_and_detects_no_progress(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2789,8 +3015,12 @@ class OrganizationRunnerTests(unittest.TestCase):
                     prefix = "NO_VETO" if agent_id == "manager-c" else "APPROVED"
                     reply = response([
                         message(
-                            "manager-d", "decision",
-                            f"{prefix}: exact no-promotion dossier is supported.",
+                            "manager-d",
+                            "review" if agent_id == "manager-c" else "decision",
+                            (
+                                f"{prefix} {report['candidate']}: exact "
+                                "no-promotion dossier is supported."
+                            ),
                             report["candidate"], "final-no-promotion", "release",
                         ),
                     ])

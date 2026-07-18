@@ -172,10 +172,16 @@ worktree:
 
   For `topology="scientific"`, workers may experiment in disposable branches.
   Deterministic enforcement covers only clean/pinned Git identity, evidence
-  hashes, deny-write paths, candidate identity, and resource limits. Scientific
-  completion writes `promotion-request.json`; RecCli does not merge/push the
-  proposal, import canonical attempts, change authority, or declare visual
-  acceptance. A separately reviewed artifact dossier may end the run with
+  hashes, deny-write paths, candidate identity, and resource limits.
+  `max_experiments` atomically counts one scientific work bundle per worker
+  turn across Git-backed probes/fixtures/measurements/result data and explicitly
+  reported ignored/generated outputs; using both channels in the same turn does
+  not double-charge, and parallel turns cannot exceed the cap. Text-only reports
+  over existing evidence remain uncharged. Claims and rejected over-budget
+  attempts are durable in `experiments.jsonl`. Scientific completion writes
+  `promotion-request.json`; RecCli does not merge/push the proposal, import
+  canonical attempts, change authority, or declare visual acceptance. A
+  separately reviewed artifact dossier may end the run with
   `completed_no_promotion`; it creates no promotion candidate or canonical
   effect. When human authority is the sole remaining dependency, a reviewed
   dossier may end as `completed_pending_human`. The console stages its evidence
@@ -193,11 +199,13 @@ worktree:
   After the barrier, lead and managers require new inbox traffic rather than
   self-waking from `state=working`; workers may continue their assigned lane.
   Veto-review `review`/`decision` messages require an exact candidate or
-  release-dossier identity. `host-state.json` owns mechanical Git identity,
-  ancestry, candidate-kind, integration, governance, and budget facts so
-  agents do not repeat repository censuses. Closeout ignores routine
-  candidate-less chatter and stops when its release-state fingerprint does not
-  change.
+  release-dossier identity. A final review message beginning with a binding
+  marker and containing the complete candidate identity is normalized to
+  `decision` before governance records it; an incomplete identity is rejected
+  and requeued to the reviewer. `host-state.json` owns mechanical Git identity,
+  ancestry, candidate-kind, integration, governance, and budget facts so agents
+  do not repeat repository censuses. Closeout ignores routine candidate-less
+  chatter and stops when its release-state fingerprint does not change.
 
   Organization turn traces retain raw native-provider usage and
   host-accounted usage. Claude invocation counters are already incremental;

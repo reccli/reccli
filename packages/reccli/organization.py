@@ -43,6 +43,13 @@ HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
 DEFAULT_CLOSEOUT_ROUNDS = 4
 ACTIVITY_SCHEMA = "reccli.organization-activity.v1"
 HOST_STATE_SCHEMA = "reccli.organization-host-state.v1"
+EXPERIMENT_RECORD_SCHEMA = "reccli.organization-experiment-record.v1"
+REPORT_ONLY_SUFFIXES = frozenset({".md", ".txt", ".rst", ".adoc"})
+EXPERIMENT_PATH_COMPONENTS = frozenset({
+    "benchmark", "benchmarks", "data", "fixture", "fixtures",
+    "measurement", "measurements", "output", "outputs", "probe", "probes",
+    "result", "results",
+})
 _ACTIVITY_WRITE_LOCK = threading.Lock()
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*)"
@@ -2336,6 +2343,11 @@ class OrganizationRunner:
         self.run_dir = run_dir
         self.candidate_artifact_root = self.run_dir / "candidate-artifacts"
         self.candidate_artifact_manifests: List[Dict[str, Any]] = []
+        self.experiment_records: List[Dict[str, Any]] = []
+        self._experiment_records_by_turn: Dict[
+            Tuple[str, int], Dict[str, Any]
+        ] = {}
+        self._experiment_lock = threading.Lock()
         self.artifact_staging_prefix = (
             f"{ARTIFACT_STAGING_ROOT}/{_safe_name(run_id)}"
         )
@@ -2466,6 +2478,7 @@ class OrganizationRunner:
             "context_pack_manifest": str(self.run_dir / "context-pack-manifest.json") if self.context_pack_manifest else None,
             "context_verified_at": self.context_verified_at,
             "candidate_artifact_root": str(self.candidate_artifact_root),
+            "experiment_records": str(self.run_dir / "experiments.jsonl"),
             "human_promotion_required": self.topology.human_promotion_required,
             "canonical_effects_applied": False,
             "control_protocol": self.control_protocol,
@@ -2877,8 +2890,9 @@ class OrganizationRunner:
             ],
             "experiment_budget": {
                 "maximum": self.max_experiments,
-                "used": len(self.candidate_artifact_manifests),
-                "remaining": max(0, self.max_experiments - len(self.candidate_artifact_manifests)),
+                "used": self._experiment_used(),
+                "remaining": self._experiment_remaining(),
+                "records": list(self.experiment_records),
             },
             "protected_paths": self.protected_paths,
             "control_protocol": self.control_protocol,
@@ -2989,6 +3003,125 @@ class OrganizationRunner:
         self._write_json("artifact-manifest.json", payload)
         return payload
 
+    def _experiment_used(self) -> int:
+        return len(self.experiment_records)
+
+    def _experiment_remaining(self) -> int:
+        return max(0, self.max_experiments - self._experiment_used())
+
+    def _claim_experiment_slot(
+        self,
+        agent: AgentSpec,
+        round_number: int,
+        *,
+        kind: str,
+        candidate: Optional[str],
+        paths: List[str],
+    ) -> Dict[str, Any]:
+        """Atomically charge one scientific work bundle per agent turn.
+
+        Git-backed probes/data and ignored generated outputs are two storage
+        channels for the same bounded resource. A turn using both consumes one
+        slot, while parallel turns cannot collectively exceed the configured
+        cap.
+        """
+        key = (agent.agent_id, int(round_number))
+        with self._experiment_lock:
+            existing = self._experiment_records_by_turn.get(key)
+            if existing is not None:
+                if kind not in existing["kinds"]:
+                    existing["kinds"].append(kind)
+                    existing["kinds"].sort()
+                existing["paths"] = sorted(set([
+                    *existing.get("paths", []),
+                    *paths,
+                ]))
+                if candidate:
+                    existing["candidate"] = candidate
+                snapshot = dict(existing)
+                action = "updated"
+            else:
+                if self._experiment_used() >= self.max_experiments:
+                    self._append_jsonl("experiments.jsonl", {
+                        "schema": EXPERIMENT_RECORD_SCHEMA,
+                        "run_id": self.run_id,
+                        "agent_id": agent.agent_id,
+                        "round": round_number,
+                        "candidate": candidate,
+                        "kinds": [kind],
+                        "paths": sorted(set(paths)),
+                        "status": "rejected_budget_exhausted",
+                        "maximum": self.max_experiments,
+                        "used": self._experiment_used(),
+                        "ts": _utc_now(),
+                    })
+                    raise RuntimeError(
+                        "hard experiment budget exhausted "
+                        f"({self.max_experiments} scientific work bundles)"
+                    )
+                record: Dict[str, Any] = {
+                    "schema": EXPERIMENT_RECORD_SCHEMA,
+                    "run_id": self.run_id,
+                    "agent_id": agent.agent_id,
+                    "round": round_number,
+                    "candidate": candidate,
+                    "kinds": [kind],
+                    "paths": sorted(set(paths)),
+                    "slot": self._experiment_used() + 1,
+                    "status": "claimed",
+                    "created_at": _utc_now(),
+                }
+                self.experiment_records.append(record)
+                self._experiment_records_by_turn[key] = record
+                snapshot = dict(record)
+                action = "claimed"
+            self._append_jsonl("experiments.jsonl", {
+                **snapshot,
+                "action": action,
+                "ts": _utc_now(),
+            })
+        self._event(
+            f"experiment.{action}",
+            round_number,
+            agent_id=agent.agent_id,
+            candidate=candidate,
+            kinds=snapshot["kinds"],
+            slot=snapshot.get("slot"),
+            maximum=self.max_experiments,
+        )
+        return snapshot
+
+    def _scientific_experiment_paths(
+        self,
+        agent: AgentSpec,
+        paths: Set[str],
+    ) -> List[str]:
+        """Classify Git-backed worker probes/data that must consume a slot."""
+        if (
+            self.topology.topology_id != "scientific"
+            or agent.agent_id not in self.topology.worker_ids
+        ):
+            return []
+        prefix = PurePosixPath(self.artifact_staging_prefix)
+        result: List[str] = []
+        for path in sorted(paths):
+            supplied = PurePosixPath(path)
+            try:
+                relative = supplied.relative_to(prefix)
+            except ValueError:
+                continue
+            lowered_parts = {part.lower() for part in relative.parts[:-1]}
+            suffix = relative.suffix.lower()
+            name = relative.name.lower()
+            if (
+                lowered_parts & EXPERIMENT_PATH_COMPONENTS
+                or "__pycache__" in lowered_parts
+                or name.startswith("test_")
+                or suffix not in REPORT_ONLY_SUFFIXES
+            ):
+                result.append(path)
+        return result
+
     def _seal_reported_artifacts(
         self, agent: AgentSpec, reply: Dict[str, Any], round_number: int,
     ) -> Dict[str, Any]:
@@ -2998,10 +3131,6 @@ class OrganizationRunner:
         its generated evidence to that exact commit without retaining large
         experiment outputs in Git object storage.
         """
-        if len(self.candidate_artifact_manifests) >= self.max_experiments:
-            raise RuntimeError(
-                f"hard experiment budget exhausted ({self.max_experiments} sealed bundles)"
-            )
         handoffs = [
             message for message in reply["messages"]
             if message.get("tag") == "handoff" and message.get("candidate")
@@ -3053,6 +3182,13 @@ class OrganizationRunner:
                 sources.append((relative, source))
         if not sources:
             raise RuntimeError("no generated artifact paths remained after validation")
+        self._claim_experiment_slot(
+            agent,
+            round_number,
+            kind="sealed-generated-output",
+            candidate=str(candidate),
+            paths=[relative for relative, _ in sources],
+        )
 
         bundle_id = (
             f"{_safe_name(agent.agent_id)}-r{round_number:02d}-{_safe_name(candidate[:12])}"
@@ -3261,7 +3397,7 @@ class OrganizationRunner:
             "protected_paths": list(self.protected_paths),
             "experiment_budget": {
                 "maximum": self.max_experiments,
-                "used": len(self.candidate_artifact_manifests),
+                "used": self._experiment_used(),
             },
             "evidence_manifest": (
                 str(self.run_dir / "evidence-manifest.json")
@@ -3364,10 +3500,7 @@ class OrganizationRunner:
                 source_request.get("protected_paths") or [],
             ),
             "context_manifest": source_request.get("context_manifest"),
-            "max_experiments": max(
-                0,
-                self.max_experiments - len(self.candidate_artifact_manifests),
-            ),
+            "max_experiments": self._experiment_remaining(),
         }
         request: Dict[str, Any] = {
             "schema": "reccli.organization-approval-request.v1",
@@ -3770,12 +3903,9 @@ class OrganizationRunner:
             "workspaces": workspace_state,
             "experiment_budget": {
                 "maximum": self.max_experiments,
-                "used": len(self.candidate_artifact_manifests),
-                "remaining": max(
-                    0,
-                    self.max_experiments
-                    - len(self.candidate_artifact_manifests),
-                ),
+                "used": self._experiment_used(),
+                "remaining": self._experiment_remaining(),
+                "records": list(self.experiment_records),
             },
         }
         canonical = json.dumps(
@@ -3959,6 +4089,33 @@ class OrganizationRunner:
                     ["add", "-A", "-f", "--", self.artifact_staging_prefix],
                 )
 
+        turn_paths = self._git_paths(
+            workspace,
+            [
+                "diff", "--cached", "--diff-filter=AMCR",
+                "--name-only", "-z",
+            ],
+        )
+        if provider_head != previous_head:
+            turn_paths.update(self._git_paths(
+                workspace,
+                [
+                    "diff", "--diff-filter=AMCR", "--name-only", "-z",
+                    f"{previous_head}..{provider_head}",
+                ],
+            ))
+        experiment_paths = self._scientific_experiment_paths(
+            agent, turn_paths,
+        )
+        if experiment_paths:
+            self._claim_experiment_slot(
+                agent,
+                round_number,
+                kind="git-backed-probe-or-data",
+                candidate=None,
+                paths=experiment_paths,
+            )
+
         staged = self._host_git(
             workspace, ["diff", "--cached", "--quiet"], check=False,
         ).returncode == 1
@@ -3983,6 +4140,14 @@ class OrganizationRunner:
         else:
             head = _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
 
+        if experiment_paths:
+            self._claim_experiment_slot(
+                agent,
+                round_number,
+                kind="git-backed-probe-or-data",
+                candidate=head,
+                paths=experiment_paths,
+            )
         candidate_record = self._candidate_record(workspace, head)
         is_implementation = candidate_record["kind"] == "implementation"
         is_terminal_report = reply.get("disposition") in {
@@ -4013,6 +4178,7 @@ class OrganizationRunner:
                 empty=create_empty_identity,
                 candidate_kind=candidate_record["kind"],
                 changed_paths=candidate_record["paths"],
+                experiment_paths=experiment_paths,
             )
             self._append_jsonl("candidates.jsonl", {
                 "runId": self.run_id,
@@ -4020,6 +4186,7 @@ class OrganizationRunner:
                 "agentId": agent.agent_id,
                 **candidate_record,
                 "empty": create_empty_identity,
+                "experiment_paths": experiment_paths,
                 "ts": _utc_now(),
             })
         return head
@@ -4426,9 +4593,8 @@ Indexed reference library (read relevant entries on demand):
                 "ignored/external evidence remains protected by the snapshot "
                 "regardless._"
             )
-        experiment_remaining = max(
-            0, self.max_experiments - len(self.candidate_artifact_manifests),
-        )
+        experiment_used = self._experiment_used()
+        experiment_remaining = self._experiment_remaining()
         review_context = self._scientific_review_context(inbox)
         if agent.web_research:
             research_role_boundary = (
@@ -4607,9 +4773,9 @@ Any change to a declared protected path rejects the turn even in a writable work
 
 ## Reversible experiment budget
 
-Sealed generated-output bundles used: {len(self.candidate_artifact_manifests)} of {self.max_experiments}. Remaining: {experiment_remaining}.
+Scientific work bundles used: {experiment_used} of {self.max_experiments}. Remaining: {experiment_remaining}.
 
-This is a hard resource limit, not a judgment of novelty or scientific value. Use a temporary run-local identifier such as `{self.run_id}/{agent.agent_id}/r{round_number}`. Do not mint, reserve, or claim a canonical experiment/attempt ID; canonical IDs are assigned only at human-authorized archive import.
+This is a hard resource limit, not a judgment of novelty or scientific value. A worker turn consumes one bundle when it preserves new probes, fixtures, measurements, result data, or other non-report evidence under the Git-backed artifact prefix, reports ignored/generated outputs, or uses both channels. Markdown/text-only reports that summarize already-existing evidence do not consume a slot. Do not hide experimental code or data in a report path: unbound experimental claims are not reviewable evidence. Parallel turns cannot exceed the shared cap. Use a temporary run-local identifier such as `{self.run_id}/{agent.agent_id}/r{round_number}`. Do not mint, reserve, or claim a canonical experiment/attempt ID; canonical IDs are assigned only at human-authorized archive import.
 
 ## Durable artifact protocol
 
@@ -4839,6 +5005,7 @@ APPROVED or BLOCKED.
             )
 
     def _deliver_message(self, sender: str, message: Dict[str, Any], round_number: int) -> None:
+        message = dict(message)
         recipient = message.get("to", "")
         tag = message.get("tag", "")
         if recipient == "organization":
@@ -4869,6 +5036,70 @@ APPROVED or BLOCKED.
                 )
             return
         candidate = message.get("candidate")
+        content = str(message.get("content") or "")
+        decision_marker: Optional[str] = None
+        if (
+            tag == "review"
+            and candidate
+            and sender in self.topology.final_reviewer_pool
+        ):
+            upper = content.lstrip().upper()
+            if self.topology.review_policy == "veto":
+                decision_marker = next(
+                    (
+                        marker for marker in ("NO_VETO", "BLOCKED", "VETO")
+                        if upper.startswith(marker)
+                    ),
+                    None,
+                )
+            else:
+                decision_marker = next(
+                    (
+                        marker for marker in ("APPROVED", "BLOCKED")
+                        if upper.startswith(marker)
+                    ),
+                    None,
+                )
+        if decision_marker:
+            if str(candidate).lower() not in content.lower():
+                self.dropped_messages += 1
+                self._append_jsonl("messages.jsonl", {
+                    "round": round_number,
+                    "from": sender,
+                    **message,
+                    "status": "dropped",
+                    "reason": (
+                        f"{decision_marker} review must name exact candidate "
+                        f"{candidate}; decision was not recorded"
+                    ),
+                    "ts": _utc_now(),
+                })
+                self._system_message(
+                    sender,
+                    "blocker",
+                    (
+                        f"Your {decision_marker} review was not recorded "
+                        f"because its content did not name exact candidate "
+                        f"{candidate}. Resend it with tag=decision and the "
+                        "complete candidate identity."
+                    ),
+                    round_number,
+                    str(candidate),
+                    message.get("workItem"),
+                    message.get("risk"),
+                )
+                return
+            message["tag"] = "decision"
+            message["normalizedFromTag"] = "review"
+            tag = "decision"
+            self._event(
+                "message.decision_normalized",
+                round_number,
+                sender=sender,
+                recipient=recipient,
+                candidate=candidate,
+                marker=decision_marker,
+            )
         if (
             self.topology.review_policy == "veto"
             and tag in {"review", "decision"}
@@ -5107,6 +5338,8 @@ APPROVED or BLOCKED.
             artifacts.add(str(self.run_dir / "promotion-request.json"))
         if (self.run_dir / "deliverables" / "manifest.json").is_file():
             artifacts.add(str(self.run_dir / "deliverables" / "manifest.json"))
+        if (self.run_dir / "experiments.jsonl").is_file():
+            artifacts.add(str(self.run_dir / "experiments.jsonl"))
 
         return {
             "terminal_status": status,
@@ -5137,12 +5370,9 @@ APPROVED or BLOCKED.
             "artifacts": sorted(artifacts),
             "experiment_budget": {
                 "maximum": self.max_experiments,
-                "used": len(self.candidate_artifact_manifests),
-                "remaining": max(
-                    0,
-                    self.max_experiments
-                    - len(self.candidate_artifact_manifests),
-                ),
+                "used": self._experiment_used(),
+                "remaining": self._experiment_remaining(),
+                "records": list(self.experiment_records),
             },
         }
 
@@ -5668,6 +5898,7 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
                 }
                 for item in self.candidate_artifact_manifests
             ],
+            "experiment_records": list(self.experiment_records),
             "integration_head": integration_head,
             "actionable_inbox": actionable_inbox,
         }
@@ -5762,12 +5993,12 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "context_verified_at": self.context_verified_at,
             "candidate_artifact_root": str(self.candidate_artifact_root),
             "candidate_artifact_bundles": len(self.candidate_artifact_manifests),
+            "scientific_work_bundles": self._experiment_used(),
+            "experiment_records": str(self.run_dir / "experiments.jsonl"),
             "host_state_brief": str(self.run_dir / "host-state.json"),
             "host_state_sha256": self.host_state_brief.get("content_sha256"),
             "max_experiments": self.max_experiments,
-            "experiments_remaining": max(
-                0, self.max_experiments - len(self.candidate_artifact_manifests),
-            ),
+            "experiments_remaining": self._experiment_remaining(),
         }
         if result is not None:
             payload["result"] = result

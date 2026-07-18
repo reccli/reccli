@@ -397,13 +397,20 @@ and integration validation, and uncertainty/alternative explanations. The
 project's tracked context manifest specializes those slots with domain-specific
 lane purposes and documents. Its four workers may choose hypotheses, modify
 disposable branches, and run sandbox experiments immediately after the
-lead/manager delegation gate opens. `max_experiments` limits sealed
-generated-output bundles as a hard resource budget; it does not pretend to
-decide novelty or scientific merit. Managers A/B coordinate evidence and
-hypotheses, manager C is fully sighted and veto-only, and manager D may integrate
-only patch-identical candidates whose adversarial review completed without a
-veto. No agent can apply the resulting proposal to the canonical branch or
-archive.
+lead/manager delegation gate opens. `max_experiments` is one atomic scientific
+work-bundle budget across both persistence channels: Git-backed probes,
+fixtures, measurements, result data, or other non-report evidence beneath the
+run artifact prefix, and explicitly reported ignored/generated outputs. A
+worker using both channels in one turn consumes one slot. Concurrent turns
+cannot collectively pass the cap. Markdown/text reports that only summarize
+existing evidence are free, while placing executable probes or result data
+inside a report directory does not evade accounting. Every claim and rejection
+is recorded in `experiments.jsonl`. The counter limits resources; it does not
+pretend to decide novelty or scientific merit. Managers A/B coordinate evidence
+and hypotheses, manager C is fully sighted and veto-only, and manager D may
+integrate only patch-identical candidates whose adversarial review completed
+without a veto. No agent can apply the resulting proposal to the canonical
+branch or archive.
 
 Lead and manager roles are inbox-driven after delegation. A prior
 `state=working` response does not wake them by itself. Manager C receives
@@ -412,6 +419,16 @@ release-dossier identity; candidate-less coordination uses `plan`, `question`,
 `answer`, or `blocker`. Manager D wakes for an exact candidate or an explicit
 release-risk dossier instruction. Workers remain able to continue a bounded
 assigned implementation lane.
+
+Review intent and routing tags cannot disagree at the final gate. When a final
+reviewer begins a `review` message with the topology's decision marker
+(`NO_VETO`/`BLOCKED` for scientific veto review, `APPROVED`/`BLOCKED`
+otherwise) and includes the complete exact candidate identity in both the
+candidate field and content, RecCli normalizes that message to `decision`
+before governance records it. A marker that omits the full identity is dropped
+and the reviewer receives a blocker requesting a corrected exact-candidate
+decision. This preserves the distinction between ordinary review discussion
+and a binding decision without losing a valid decision to schema vocabulary.
 
 ```python
 start_organization(

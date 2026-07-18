@@ -120,6 +120,21 @@ budget. Agents are instructed to trust these mechanical facts and report a
 concrete contradiction instead of repeatedly rebuilding the same Git census.
 The brief does not decide scientific meaning.
 
+Scientific runs also append `experiments.jsonl`. It is the durable shared
+meter for Git-backed probes/data and sealed generated-output bundles. Each
+worker turn can claim at most one slot even when it uses both channels, and the
+claim is serialized before parallel candidates can commit. The console can use
+these records to show which agent consumed each work bundle, its paths,
+candidate identity, and any rejected over-budget attempt instead of inferring
+experiments from the number of artifact manifests.
+
+Final-review messages expose their binding state directly. If a reviewer sends
+an exact-candidate `NO_VETO`, `APPROVED`, or blocking marker with the `review`
+tag, the runner records a `message.decision_normalized` event and delivers it
+as `decision`. A decision marker without the complete exact candidate identity
+is rejected and routed back to the reviewer as a blocker, so the UI does not
+display a nonbinding review as a completed gate.
+
 Telemetry is deliberately operational rather than cognitive:
 
 - model thinking and chain-of-thought are never copied;
