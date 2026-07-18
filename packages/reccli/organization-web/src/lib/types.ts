@@ -23,6 +23,7 @@ export interface AgentRecord {
   role: string;
   provider?: string;
   state: string;
+  logical_state?: string;
   write_scope: string;
   is_lead: boolean;
   is_finalizer: boolean;
@@ -108,6 +109,7 @@ export interface RunSnapshot {
   process?: {
     pid?: number;
     live?: boolean | null;
+    active_agents?: string[];
   };
   topology_graph: {
     id?: string;

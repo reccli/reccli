@@ -103,14 +103,23 @@ def _supervisor_pid(run_dir: Path, status: Dict[str, Any]) -> int:
         return 0
 
 
-def process_group_is_live(pid: int, run_dir: Path) -> Optional[bool]:
-    """Return whether the run's detached supervisor process group is live.
+def process_group_activity(
+    pid: int,
+    run_dir: Path,
+    agent_ids: Iterable[str] = (),
+) -> tuple[Optional[bool], List[str]]:
+    """Return process liveness and agents with active native CLI children.
 
-    ``None`` means the operating system could not provide a reliable answer.
-    Zombie-only groups are treated as stopped.
+    The durable agent ``state`` is a scheduling intent returned by the model,
+    not proof that its native subprocess is executing right now.  The console
+    needs the latter, so inspect the detached process group and bind Claude or
+    Codex commands back to their per-agent worktree/context-pack paths.
+
+    ``None`` liveness means the operating system could not provide a reliable
+    answer. Zombie-only groups are treated as stopped.
     """
     if pid <= 1:
-        return False
+        return False, []
     try:
         proc = subprocess.run(
             ["ps", "-o", "pid=,stat=,command=", "-g", str(pid)],
@@ -120,11 +129,13 @@ def process_group_is_live(pid: int, run_dir: Path) -> Optional[bool]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, []
     if proc.returncode != 0:
-        return False
+        return False, []
     request_path = str(run_dir / "request.json")
     saw_native_child = False
+    active_agents: set[str] = set()
+    known_agents = [str(agent_id) for agent_id in agent_ids]
     for raw_line in (proc.stdout or "").splitlines():
         pieces = raw_line.strip().split(None, 2)
         if len(pieces) < 3:
@@ -133,10 +144,29 @@ def process_group_is_live(pid: int, run_dir: Path) -> Optional[bool]:
         if stat.startswith("Z"):
             continue
         if "reccli.organization_worker" in command and request_path in command:
-            return True
-        if command.startswith("claude ") or " codex exec " in f" {command} ":
             saw_native_child = True
-    return saw_native_child
+        is_native_agent = (
+            command.startswith("claude ")
+            or " claude " in f" {command} "
+            or command.startswith("codex exec ")
+            or " codex exec " in f" {command} "
+        )
+        if is_native_agent:
+            saw_native_child = True
+            for agent_id in known_agents:
+                if (
+                    f"/{run_dir.name}/{agent_id}" in command
+                    or f"/context-packs/{agent_id}" in command
+                ):
+                    active_agents.add(agent_id)
+                    break
+    return saw_native_child, sorted(active_agents)
+
+
+def process_group_is_live(pid: int, run_dir: Path) -> Optional[bool]:
+    """Return whether the run's detached supervisor process group is live."""
+    live, _ = process_group_activity(pid, run_dir)
+    return live
 
 
 def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,7 +265,6 @@ def organization_snapshot(
         run = _read_json(run_dir / "request.json", {}) or {}
     supervisor = _read_json(run_dir / "supervisor.json", {}) or {}
     pid = _supervisor_pid(run_dir, status)
-    live = process_group_is_live(pid, run_dir)
     count = max(0, min(int(include_recent), 500))
 
     all_messages = _tail_jsonl(run_dir / "messages.jsonl", max(count, 5_000))
@@ -271,7 +300,15 @@ def organization_snapshot(
     promotion = _read_json(run_dir / "promotion-request.json", None)
     artifact_manifest = _read_json(run_dir / "deliverables" / "manifest.json", None)
     topology = _topology_snapshot(run, status)
+    live, active_agent_ids = process_group_activity(
+        pid,
+        run_dir,
+        (agent["id"] for agent in topology.get("agents", [])),
+    )
+    active_agents = set(active_agent_ids)
     for agent in topology.get("agents", []):
+        logical_state = agent.get("state", "unknown")
+        agent["logical_state"] = logical_state
         last = last_turns.get(agent["id"])
         if last:
             reply = last.get("reply") or {}
@@ -303,6 +340,12 @@ def organization_snapshot(
             agent["assignment"] = assignments[-1] if assignments else None
             if not assignments and not last:
                 agent["state"] = "awaiting_assignment"
+        if agent["id"] in active_agents:
+            agent["state"] = "working"
+        elif agent.get("state") not in {"awaiting_assignment", "blocked", "done"}:
+            # A model returning "working" means it wants another scheduled
+            # turn; it does not mean a provider subprocess is still executing.
+            agent["state"] = "idle"
 
     controls = _control_records(run_dir)
     completed_turns = status.get("completed_turns")
@@ -350,6 +393,7 @@ def organization_snapshot(
         "process": {
             "pid": pid,
             "live": live,
+            "active_agents": active_agent_ids,
             "supervisor": supervisor,
         },
         "topology_graph": topology,

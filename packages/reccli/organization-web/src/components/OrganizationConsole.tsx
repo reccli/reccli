@@ -124,7 +124,8 @@ async function apiRequest<T>(
 }
 
 function StatusDot({ status, live }: { status?: string; live?: boolean | null }) {
-  const active = status === "running" || status === "starting";
+  const active =
+    status === "running" || status === "starting" || status === "working";
   const paused = status === "paused";
   return (
     <span

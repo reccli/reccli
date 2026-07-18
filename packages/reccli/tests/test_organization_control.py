@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from reccli.organization import OrganizationRunner, get_topology
 from reccli.organization_console_bridge import dispatch
@@ -13,6 +14,7 @@ from reccli.organization_control import (
     list_organization_runs,
     organization_snapshot,
     pending_control_requests,
+    process_group_activity,
     queue_control_request,
 )
 
@@ -153,6 +155,31 @@ class OrganizationCliBootstrapTests(unittest.TestCase):
 
 
 class OrganizationControlTests(unittest.TestCase):
+    def test_process_activity_tracks_actual_native_agent_not_logical_state(self):
+        run_dir = Path("/tmp/control-run")
+        process_listing = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                " 100 S reccli.organization_worker /tmp/control-run/request.json\n"
+                " 101 S codex exec --cd /tmp/control-run/manager-b --json\n"
+                " 102 S claude -p --add-dir /tmp/control-run/context-packs/manager-c\n"
+                " 103 Z codex exec --cd /tmp/control-run/lead --json\n"
+            ),
+            stderr="",
+        )
+        with patch(
+            "reccli.organization_control.subprocess.run",
+            return_value=process_listing,
+        ):
+            live, active = process_group_activity(
+                100,
+                run_dir,
+                ["lead", "manager-a", "manager-b", "manager-c"],
+            )
+        self.assertTrue(live)
+        self.assertEqual(active, ["manager-b", "manager-c"])
+
     def test_snapshot_builds_dashboard_graph_and_activity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
