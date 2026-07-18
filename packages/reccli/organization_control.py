@@ -27,7 +27,14 @@ from .project.devproject import discover_project_root
 
 CONTROL_SCHEMA = "reccli.organization-control.v1"
 CONTROL_ACTIONS = {"message", "pause", "resume", "cancel"}
-TERMINAL_STATUSES = {"completed", "failed", "cancelled", "round_limit", "stalled"}
+TERMINAL_STATUSES = {
+    "completed",
+    "completed_no_promotion",
+    "failed",
+    "cancelled",
+    "round_limit",
+    "stalled",
+}
 MAX_OPERATOR_MESSAGE_CHARS = 12_000
 
 

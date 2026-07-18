@@ -238,6 +238,13 @@ finish existing review, manager routing, host integration, release review, and
 finalization. Increase `max_rounds` explicitly for unusually large missions
 rather than treating eight as a total-agent-call budget.
 
+The release manager has two reviewed terminal dispositions. `promote` produces
+the normal reversible promotion package. `no_promotion` binds an exact durable
+run-artifact dossier, requires the same lead and rotating-review approvals, and
+ends the run as `completed_no_promotion` without exporting or promoting code.
+This lets a conclusive negative result stop before exhausting closeout rounds;
+ordinary unfinished work still ends `round_limit` or `stalled`.
+
 ### Native provider assignment
 
 `provider="auto"` is diversity-aware for organization runs. RecCli checks the
@@ -444,6 +451,11 @@ removes all write bits, and records SHA-256, size, mode, and timestamp for every
 file. Every native session receives the same snapshot path, not the original
 source path. Inventory is checked after every round and content is fully
 re-hashed before release.
+
+RecCli exports `RECCLI_EVIDENCE_MANIFEST` and
+`RECCLI_EVIDENCE_SNAPSHOT_ROOT` to every native session so a project-owned
+candidate validator can map canonical ignored paths to the exact selected
+snapshot without assuming the full archive is present.
 
 This does not make a dirty tracked worktree launchable. Source and tracked
 documentation still need one clean checkpoint so every branch has an

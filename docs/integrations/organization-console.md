@@ -39,11 +39,12 @@ devsession/agent-organizations/<run-id>/run-conclusion.json
 devsession/agent-organizations/<run-id>/run-conclusion.md
 ```
 
-For normal completion, round-limit, and stalled outcomes, RecCli gives the
-organization lead one final read-only synthesis pass outside the configured
-working-round and closeout budgets. The report separates accomplishments,
-conclusive findings, evidence, scientific or product blockers, infrastructure
-failures, unresolved work, exact candidates, promotion readiness, and the
+For normal completion, reviewed `completed_no_promotion`, round-limit, and
+stalled outcomes, RecCli gives the organization lead one final read-only
+synthesis pass outside the configured working-round and closeout budgets. The
+report separates accomplishments, conclusive findings, evidence, scientific or
+product blockers, infrastructure failures, unresolved work, exact candidates,
+the exact no-promotion dossier when present, promotion readiness, and the
 smallest recommended next action.
 
 Cancellation never starts another model turn after the stop request. A

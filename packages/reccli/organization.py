@@ -36,6 +36,7 @@ MESSAGE_TAGS = {
 DELEGATION_TAGS = {"plan", "handoff", "review"}
 RISKS = {"routine", "high", "release"}
 STATES = {"working", "idle", "blocked", "done"}
+DISPOSITIONS = {"continue", "promote", "no_promotion"}
 ARTIFACT_STAGING_ROOT = ".reccli-org-artifacts"
 CONTEXT_PACK_SCHEMA = "reccli.organization-context-packs.v1"
 HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
@@ -72,9 +73,13 @@ AGENT_REPLY_SCHEMA: Dict[str, Any] = {
         "artifacts": {"type": "array", "items": {"type": "string"}},
         "candidate": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
         "risk": {"anyOf": [{"type": "string", "enum": sorted(RISKS)}, {"type": "null"}]},
+        "disposition": {"type": "string", "enum": sorted(DISPOSITIONS)},
         "final": {"type": "boolean"},
     },
-    "required": ["messages", "summary", "state", "artifacts", "candidate", "risk", "final"],
+    "required": [
+        "messages", "summary", "state", "artifacts", "candidate", "risk",
+        "disposition", "final",
+    ],
     "additionalProperties": False,
 }
 
@@ -237,6 +242,7 @@ class Workspace:
     additional_directories: List[Path]
     base_commit: Optional[str] = None
     runtime_paths: Set[str] = field(default_factory=set)
+    environment: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -765,6 +771,7 @@ class SubscriptionSession:
             ])
             env["VIRTUAL_ENV"] = str(self.workspace.cwd / ".venv")
         env["RECCLI_ORGANIZATION_WORKTREE"] = str(self.workspace.cwd)
+        env.update(self.workspace.environment)
         return env
 
     def _run_claude(self, prompt: str, schema: Dict[str, Any], timeout_seconds: int) -> Dict[str, Any]:
@@ -1287,7 +1294,10 @@ class SubscriptionSession:
 def validate_agent_reply(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("agent reply must be an object")
-    required = {"messages", "summary", "state", "artifacts", "candidate", "risk", "final"}
+    required = {
+        "messages", "summary", "state", "artifacts", "candidate", "risk",
+        "disposition", "final",
+    }
     if set(value) != required:
         raise ValueError(f"agent reply fields must be exactly {sorted(required)}")
     if not isinstance(value["messages"], list) or not isinstance(value["artifacts"], list):
@@ -1300,6 +1310,10 @@ def validate_agent_reply(value: Any) -> Dict[str, Any]:
         raise ValueError("summary is required")
     if value["risk"] is not None and value["risk"] not in RISKS:
         raise ValueError("invalid top-level risk")
+    if value["disposition"] not in DISPOSITIONS:
+        raise ValueError("invalid terminal disposition")
+    if value["final"] and value["disposition"] == "continue":
+        raise ValueError("a final reply requires promote or no_promotion disposition")
     for message in value["messages"]:
         if not isinstance(message, dict):
             raise ValueError("message must be an object")
@@ -2131,7 +2145,10 @@ def _prepare_python_runtime_bridge(
         "#!/bin/sh\n"
         f"export PYTHONPATH={shlex.quote(python_path)}"
         '${PYTHONPATH:+:"$PYTHONPATH"}\n'
-        f"exec {shlex.quote(str(canonical_python.resolve()))} \"$@\"\n"
+        # Keep the virtual-environment entrypoint path intact. Resolving the
+        # symlink to the base interpreter discards pyvenv.cfg discovery and
+        # therefore the canonical environment's installed dependencies.
+        f"exec {shlex.quote(str(canonical_python))} \"$@\"\n"
     )
     for name in ("python", "python3"):
         path = bridge_bin / name
@@ -2311,6 +2328,17 @@ class OrganizationRunner:
                 self.workspaces[agent_id].additional_directories.append(
                     Path(pack["root"])
                 )
+        if self.evidence_manifest:
+            evidence_environment = {
+                "RECCLI_EVIDENCE_MANIFEST": str(
+                    self.run_dir / "evidence-manifest.json"
+                ),
+                "RECCLI_EVIDENCE_SNAPSHOT_ROOT": str(
+                    self.evidence_manifest["snapshot_root"]
+                ),
+            }
+            for workspace in self.workspaces.values():
+                workspace.environment.update(evidence_environment)
         self._write_json("run.json", {
             "run_id": self.run_id, "created_at": _utc_now(),
             "project_root": str(self.project_root), "provider": self.provider,
@@ -2368,6 +2396,7 @@ class OrganizationRunner:
         promotion_branch: Optional[str] = None
         artifact_manifest: Optional[Dict[str, Any]] = None
         promotion_request: Optional[Dict[str, Any]] = None
+        no_promotion_report: Optional[str] = None
         status = "round_limit"
         rounds = 0
 
@@ -2497,6 +2526,7 @@ class OrganizationRunner:
                 if agent.agent_id != self.topology.finalizer_id:
                     self._event("finalization.rejected", round_number, agent_id=agent.agent_id, reason="agent is not the finalizer")
                     continue
+                disposition = reply.get("disposition")
                 if not candidate or reply.get("risk") != "release":
                     self.states[agent.agent_id] = "working"
                     self._event("finalization.rejected", round_number, agent_id=agent.agent_id, reason="release candidate and release risk are required")
@@ -2526,6 +2556,44 @@ class OrganizationRunner:
                 if missing:
                     self.states[agent.agent_id] = "working"
                     self._event("finalization.rejected", round_number, agent_id=agent.agent_id, candidate=candidate, missing_approvers=missing, reason="candidate lacks required approvals")
+                    continue
+                if disposition == "no_promotion":
+                    report_record = self._candidate_record(
+                        self.workspaces[agent.agent_id], candidate,
+                    )
+                    if not any(
+                        self._artifact_path(path)
+                        for path in report_record.get("paths", [])
+                    ):
+                        self.states[agent.agent_id] = "working"
+                        self._event(
+                            "finalization.rejected", round_number,
+                            agent_id=agent.agent_id,
+                            candidate=candidate,
+                            reason=(
+                                "no-promotion disposition requires a durable "
+                                "run-artifact dossier"
+                            ),
+                        )
+                        continue
+                    status = "completed_no_promotion"
+                    no_promotion_report = candidate
+                    finalized_by = agent.agent_id
+                    final_summary = reply["summary"]
+                    self._event(
+                        "finalization.no_promotion",
+                        round_number,
+                        agent_id=agent.agent_id,
+                        report_candidate=candidate,
+                    )
+                    break
+                if disposition != "promote":
+                    self.states[agent.agent_id] = "working"
+                    self._event(
+                        "finalization.rejected", round_number,
+                        agent_id=agent.agent_id,
+                        reason="final disposition must be promote or no_promotion",
+                    )
                     continue
                 if self.topology.blind_final_review:
                     if self.evidence_manifest:
@@ -2592,7 +2660,7 @@ class OrganizationRunner:
                 finalized_by = agent.agent_id
                 final_summary = reply["summary"]
                 break
-            if status == "completed":
+            if status in {"completed", "completed_no_promotion"}:
                 break
 
         self._reject_pending_control_requests(status, rounds)
@@ -2613,6 +2681,7 @@ class OrganizationRunner:
             verified_candidate=verified_candidate,
             promotion_candidate=promotion_candidate,
             promotion_request=promotion_request,
+            no_promotion_report=no_promotion_report,
         )
         result = {
             "run_id": self.run_id, "status": status, "rounds": rounds,
@@ -2628,6 +2697,7 @@ class OrganizationRunner:
             "promotion_candidate": promotion_candidate,
             "promotion_branch": promotion_branch,
             "promotion_request": str(self.run_dir / "promotion-request.json") if promotion_request else None,
+            "no_promotion_report": no_promotion_report,
             "human_promotion_required": self.topology.human_promotion_required,
             "canonical_effects_applied": False,
             "artifact_manifest": artifact_manifest,
@@ -3388,9 +3458,10 @@ class OrganizationRunner:
 
         candidate_record = self._candidate_record(workspace, head)
         is_implementation = candidate_record["kind"] == "implementation"
+        is_no_promotion_report = reply.get("disposition") == "no_promotion"
         self._resolve_reply_candidate(
             reply,
-            head if is_implementation else None,
+            head if is_implementation or is_no_promotion_report else None,
             previous_heads={previous_head, provider_head},
             rewrite_previous_candidates=(
                 is_implementation
@@ -3620,6 +3691,14 @@ class OrganizationRunner:
             self.sessions[agent.agent_id] = session
         result = session.run(prompt, AGENT_REPLY_SCHEMA, self.turn_timeout_seconds)
         reply = validate_agent_reply(result["value"])
+        if (
+            agent.agent_id != self.topology.finalizer_id
+            and reply["disposition"] != "continue"
+        ):
+            raise ValueError(
+                f"{agent.agent_id} is not the finalizer and must use "
+                "disposition=continue"
+            )
         session.record_reply_disposition(reply)
         self._materialize_agent_candidate(
             agent, reply, previous_head, round_number,
@@ -3809,9 +3888,24 @@ Culture: {self.topology.culture}
 {team}
 """
         final_instruction = (
-            f"You may set final=true only for the exact integration HEAD after the reversible candidate and promotion dossier are complete. This does not declare canonical scientific acceptance or apply effects. Set candidate to `{HOST_CANDIDATE}` and risk=release; RecCli resolves it to the exact host-owned HEAD. Required reviewers: {', '.join(sorted(self.governance.required_final_approvers())) or 'none'}."
+            f"""You own the terminal disposition. Use disposition=continue while work remains.
+
+For promotion, set final=true, disposition=promote, candidate=`{HOST_CANDIDATE}`,
+and risk=release only after the reversible implementation candidate and
+promotion dossier are complete.
+
+For a conclusive negative result, write the no-promotion dossier under the
+artifact prefix, set disposition=no_promotion, and request exact-report review
+from every required reviewer using workItem=final-no-promotion, risk=release,
+and candidate=`{HOST_CANDIDATE}`. After their exact-report approvals arrive,
+set final=true with the same no_promotion disposition, candidate, and risk.
+This ends the run as completed_no_promotion without exporting or promoting
+implementation code.
+
+Neither disposition declares canonical scientific acceptance or applies
+effects. Required reviewers: {', '.join(sorted(self.governance.required_final_approvers())) or 'none'}."""
             if agent.agent_id == self.topology.finalizer_id
-            else "You are not the finalizer. Set final=false and top-level candidate/risk to null."
+            else "You are not the finalizer. Set final=false, disposition=continue, and top-level candidate/risk to null."
         )
         closeout_instruction = ""
         if round_number > self.max_rounds:
@@ -3911,7 +4005,14 @@ Read the original mission, acceptance criteria, source and tests, task-relevant 
 
 Complete one cohesive unit of work and inspect real evidence before making claims. If blocked, name the owner and route a question or blocker. {final_instruction}
 
-Return only the schema-constrained reply. Every message must include candidate, workItem, and risk, using null when not applicable. Worker handoffs require all three and must use `{HOST_CANDIDATE}` for the candidate produced by this turn. Under veto review, the assigned auditor must begin its decision with NO_VETO or BLOCKED and name the exact candidate; NO_VETO means only that no blocking falsification was established, never that the scientific claim is true. Other approval decisions begin with APPROVED or BLOCKED.
+Return only the schema-constrained reply. Every reply must include disposition.
+Every message must include candidate, workItem, and risk, using null when not
+applicable. Worker handoffs require all three and must use `{HOST_CANDIDATE}`
+for the candidate produced by this turn. Under veto review, the assigned
+auditor must begin its decision with NO_VETO or BLOCKED and name the exact
+candidate; NO_VETO means only that no blocking falsification was established,
+never that the scientific claim is true. Other approval decisions begin with
+APPROVED or BLOCKED.
 """
 
     def _control_targets(self, target: str) -> List[str]:
@@ -4114,7 +4215,14 @@ Return only the schema-constrained reply. Every message must include candidate, 
             candidate_record = self._candidate_record(
                 self.workspaces[sender], str(candidate),
             )
-            if candidate_record["kind"] in {"artifact-only", "identity-only"}:
+            no_promotion_review = (
+                message.get("workItem") == "final-no-promotion"
+                and message.get("risk") == "release"
+            )
+            if (
+                candidate_record["kind"] in {"artifact-only", "identity-only"}
+                and not no_promotion_review
+            ):
                 self.dropped_messages += 1
                 self._append_jsonl("messages.jsonl", {
                     "round": round_number,
@@ -4212,6 +4320,7 @@ Return only the schema-constrained reply. Every message must include candidate, 
         verified_candidate: Optional[str],
         promotion_candidate: Optional[str],
         promotion_request: Optional[Dict[str, Any]],
+        no_promotion_report: Optional[str] = None,
     ) -> Dict[str, Any]:
         agent_summaries: List[Dict[str, Any]] = []
         failures: List[str] = []
@@ -4334,6 +4443,7 @@ Return only the schema-constrained reply. Every message must include candidate, 
                 str(self.run_dir / "promotion-request.json")
                 if promotion_request else None
             ),
+            "no_promotion_report": no_promotion_report,
             "artifacts": sorted(artifacts),
             "experiment_budget": {
                 "maximum": self.max_experiments,
@@ -4353,6 +4463,8 @@ Return only the schema-constrained reply. Every message must include candidate, 
     ) -> str:
         if status == "cancelled":
             return "cancelled"
+        if status == "completed_no_promotion":
+            return "no_candidate"
         if digest.get("verified_candidate"):
             return (
                 "ready_for_human_review"
@@ -4455,6 +4567,7 @@ Return only the schema-constrained reply. Every message must include candidate, 
         verified_candidate: Optional[str],
         promotion_candidate: Optional[str],
         promotion_request: Optional[Dict[str, Any]],
+        no_promotion_report: Optional[str] = None,
     ) -> Dict[str, Any]:
         digest = self._terminal_conclusion_digest(
             status,
@@ -4462,6 +4575,7 @@ Return only the schema-constrained reply. Every message must include candidate, 
             verified_candidate=verified_candidate,
             promotion_candidate=promotion_candidate,
             promotion_request=promotion_request,
+            no_promotion_report=no_promotion_report,
         )
         lead_id = self.topology.leader_id
         generated_by = "lead"
@@ -4584,6 +4698,7 @@ smallest next action.
             "verified_candidate": verified_candidate,
             "promotion_candidate": promotion_candidate,
             "promotion_request": digest["promotion_request"],
+            "no_promotion_report": no_promotion_report,
             "artifacts": digest["artifacts"],
             "turn_counts": {
                 "attempted": self.attempted_turns,

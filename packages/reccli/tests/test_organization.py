@@ -44,6 +44,7 @@ def _reply(summary="ok"):
         "artifacts": [],
         "candidate": None,
         "risk": None,
+        "disposition": "continue",
         "final": False,
     }
 
@@ -817,9 +818,25 @@ class OrganizationProjectTests(unittest.TestCase):
                 ["git", "commit", "-qm", "add candidate probe"],
                 cwd=root, check=True,
             )
-            canonical_bin = root / ".venv" / "bin"
-            canonical_bin.mkdir(parents=True)
-            (canonical_bin / "python").symlink_to(Path(sys.executable))
+            canonical_environment = root / ".venv"
+            subprocess.run(
+                [
+                    sys.executable, "-m", "venv", "--without-pip",
+                    str(canonical_environment),
+                ],
+                check=True,
+            )
+            canonical_python = canonical_environment / "bin" / "python"
+            site_packages = Path(subprocess.run(
+                [
+                    str(canonical_python), "-c",
+                    "import sysconfig; print(sysconfig.get_path('purelib'))",
+                ],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip())
+            (site_packages / "canonical_environment_probe.py").write_text(
+                "VALUE = 'from-canonical-venv'\n", encoding="utf-8",
+            )
 
             workspaces = prepare_workspaces(
                 root, get_topology("scientific"),
@@ -827,19 +844,38 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             worker = workspaces["worker-a"]
             self.assertEqual(worker.runtime_paths, {".venv"})
+            worker.environment.update({
+                "RECCLI_EVIDENCE_MANIFEST": "/run/evidence-manifest.json",
+                "RECCLI_EVIDENCE_SNAPSHOT_ROOT": "/run/evidence-snapshot",
+            })
+            environment = SubscriptionSession(
+                "codex", worker, True, "runtime-bridge", Path(td),
+            )._process_environment()
+            self.assertEqual(
+                environment["RECCLI_EVIDENCE_MANIFEST"],
+                "/run/evidence-manifest.json",
+            )
+            self.assertEqual(
+                environment["RECCLI_EVIDENCE_SNAPSHOT_ROOT"],
+                "/run/evidence-snapshot",
+            )
             bridge = worker.cwd / ".venv" / "bin" / "python"
             self.assertTrue(os.access(bridge, os.X_OK))
             proc = subprocess.run(
                 [
                     str(bridge), "-c",
-                    "import candidate_probe; print(candidate_probe.LOCATION)",
+                    "import candidate_probe, canonical_environment_probe; "
+                    "print(candidate_probe.LOCATION); "
+                    "print(canonical_environment_probe.VALUE)",
                 ],
                 cwd=worker.cwd, check=True, capture_output=True, text=True,
             )
+            output = proc.stdout.splitlines()
             self.assertTrue(
-                Path(proc.stdout.strip()).is_relative_to(worker.cwd),
+                Path(output[0]).is_relative_to(worker.cwd),
                 proc.stdout,
             )
+            self.assertEqual(output[1], "from-canonical-venv")
 
     def test_host_materializes_codex_worker_candidate_without_agent_git(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1743,11 +1779,11 @@ class OrganizationRunnerTests(unittest.TestCase):
                     "candidate": candidate, "workItem": work_item, "risk": risk,
                 }
 
-            def response(messages=None, state="idle", artifacts=None, candidate=None, risk=None, final=False):
+            def response(messages=None, state="idle", artifacts=None, candidate=None, risk=None, disposition="continue", final=False):
                 return {
                     "messages": messages or [], "summary": "scientific simulated turn",
                     "state": state, "artifacts": artifacts or [], "candidate": candidate,
-                    "risk": risk, "final": final,
+                    "risk": risk, "disposition": disposition, "final": final,
                 }
 
             def fake_run(session, prompt, schema, timeout_seconds):
@@ -1873,7 +1909,7 @@ class OrganizationRunnerTests(unittest.TestCase):
                     elif release_candidate["sha"] and "APPROVED:" in prompt and "NO_VETO:" in prompt:
                         reply = response(
                             state="done", candidate=release_candidate["sha"],
-                            risk="release", final=True,
+                            risk="release", disposition="promote", final=True,
                         )
                 return {"value": reply, "session_id": f"session-{agent_id}", "usage": {}}
 
@@ -1934,11 +1970,11 @@ class OrganizationRunnerTests(unittest.TestCase):
                     "candidate": candidate, "workItem": work_item, "risk": risk,
                 }
 
-            def response(messages=None, state="idle", candidate=None, risk=None, final=False):
+            def response(messages=None, state="idle", candidate=None, risk=None, disposition="continue", final=False):
                 return {
                     "messages": messages or [], "summary": "simulated turn",
                     "state": state, "artifacts": [], "candidate": candidate,
-                    "risk": risk, "final": final,
+                    "risk": risk, "disposition": disposition, "final": final,
                 }
 
             def fake_run(session, prompt, schema, timeout_seconds):
@@ -2070,7 +2106,7 @@ class OrganizationRunnerTests(unittest.TestCase):
                     elif release_candidate["sha"] and prompt.count("APPROVED:") >= 2:
                         reply = response(
                             state="done", candidate=release_candidate["sha"],
-                            risk="release", final=True,
+                            risk="release", disposition="promote", final=True,
                         )
                 elif "Independent review assignment" in prompt:
                     worker_reviewer["id"] = agent_id
@@ -2136,6 +2172,163 @@ class OrganizationRunnerTests(unittest.TestCase):
                 self.assertEqual(
                     seen_providers[f"blind-verifier-{release_candidate['sha']}"],
                     "codex",
+                )
+            finally:
+                if worktree_parent is not None:
+                    shutil.rmtree(worktree_parent, ignore_errors=True)
+
+    def test_scientific_no_promotion_report_ends_without_round_limit(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "no-promotion"
+            runner = OrganizationRunner(
+                root, "Determine whether a change is justified.", "claude",
+                "scientific", "no-promotion", run_dir,
+                max_rounds=5, max_closeout_rounds=2,
+            )
+            report = {"candidate": None}
+
+            def message(to, tag, content, candidate=None, work_item=None, risk=None):
+                return {
+                    "to": to, "tag": tag, "content": content,
+                    "candidate": candidate, "workItem": work_item, "risk": risk,
+                }
+
+            def response(
+                messages=None, state="idle", candidate=None, risk=None,
+                disposition="continue", final=False,
+            ):
+                return {
+                    "messages": messages or [],
+                    "summary": "bounded no-promotion turn",
+                    "state": state,
+                    "artifacts": [],
+                    "candidate": candidate,
+                    "risk": risk,
+                    "disposition": disposition,
+                    "final": final,
+                }
+
+            def fake_run(session, prompt, schema, timeout_seconds):
+                session.turn += 1
+                agent_id = session.session_key
+                if schema is RUN_CONCLUSION_SCHEMA:
+                    return {
+                        "value": _conclusion(
+                            "The reviewed evidence supports no promotion."
+                        ),
+                        "session_id": f"session-{agent_id}",
+                        "usage": {},
+                    }
+                if agent_id == "lead" and session.turn == 1:
+                    reply = response([
+                        message(
+                            manager, "plan", f"Map bounded lane {manager}.",
+                            work_item=f"map-{manager}", risk="routine",
+                        )
+                        for manager in ("manager-a", "manager-b", "manager-c", "manager-d")
+                    ], state="idle")
+                elif session.turn == 1 and agent_id == "manager-a":
+                    reply = response([
+                        message(
+                            worker, "plan", f"Inspect {worker}.",
+                            work_item=f"inspect-{worker}", risk="routine",
+                        )
+                        for worker in ("worker-a", "worker-c")
+                    ], state="idle")
+                elif session.turn == 1 and agent_id == "manager-b":
+                    reply = response([
+                        message(
+                            worker, "plan", f"Inspect {worker}.",
+                            work_item=f"inspect-{worker}", risk="routine",
+                        )
+                        for worker in ("worker-b", "worker-d")
+                    ], state="idle")
+                elif agent_id == "manager-d" and session.turn == 2:
+                    dossier = (
+                        session.workspace.cwd
+                        / runner.artifact_staging_prefix
+                        / "no-promotion.md"
+                    )
+                    dossier.parent.mkdir(parents=True)
+                    dossier.write_text(
+                        "# No promotion\n\nThe bounded evidence rejects a change.\n",
+                        encoding="utf-8",
+                    )
+                    reply = response([
+                        message(
+                            "lead", "review",
+                            "Approve the exact no-promotion dossier.",
+                            HOST_CANDIDATE, "final-no-promotion", "release",
+                        ),
+                        message(
+                            "manager-c", "review",
+                            "Independently review the exact no-promotion dossier.",
+                            HOST_CANDIDATE, "final-no-promotion", "release",
+                        ),
+                    ], state="working", candidate=HOST_CANDIDATE,
+                        risk="release", disposition="no_promotion")
+                elif (
+                    report["candidate"]
+                    and agent_id in {"lead", "manager-c"}
+                    and "final-no-promotion" in prompt
+                ):
+                    prefix = "NO_VETO" if agent_id == "manager-c" else "APPROVED"
+                    reply = response([
+                        message(
+                            "manager-d", "decision",
+                            f"{prefix}: exact no-promotion dossier is supported.",
+                            report["candidate"], "final-no-promotion", "release",
+                        ),
+                    ])
+                elif agent_id == "manager-d" and session.turn >= 4:
+                    reply = response(
+                        state="done", candidate=report["candidate"],
+                        risk="release", disposition="no_promotion", final=True,
+                    )
+                else:
+                    reply = response(
+                        state="working" if agent_id == "manager-d" else "idle"
+                    )
+                return {
+                    "value": reply,
+                    "session_id": f"session-{agent_id}",
+                    "usage": {},
+                }
+
+            original_run_turn = runner._run_turn
+
+            def capture_report(agent, round_number):
+                result = original_run_turn(agent, round_number)
+                reply = result.get("reply") or {}
+                if (
+                    agent.agent_id == "manager-d"
+                    and reply.get("disposition") == "no_promotion"
+                    and reply.get("candidate")
+                ):
+                    report["candidate"] = reply["candidate"]
+                return result
+
+            worktree_parent = None
+            try:
+                with (
+                    patch.object(SubscriptionSession, "run", new=fake_run),
+                    patch.object(runner, "_run_turn", side_effect=capture_report),
+                ):
+                    result = runner.run()
+                worktree_parent = Path(result["integration_workspace"]).parent
+                self.assertEqual(result["status"], "completed_no_promotion")
+                self.assertLessEqual(result["rounds"], 5)
+                self.assertIsNone(result["verified_candidate"])
+                self.assertEqual(result["no_promotion_report"], report["candidate"])
+                self.assertIsNone(result["promotion_request"])
+                self.assertEqual(
+                    result["conclusion"]["promotion_readiness"], "no_candidate",
+                )
+                self.assertEqual(
+                    result["conclusion"]["no_promotion_report"],
+                    report["candidate"],
                 )
             finally:
                 if worktree_parent is not None:

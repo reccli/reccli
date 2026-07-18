@@ -155,7 +155,9 @@ worktree:
   each round and hashes before release. Explicit untracked/generated outputs
   reported by an author are sealed after the round under
   `candidate-artifacts/`, bound to the exact Git candidate, and never copied
-  automatically into the project's ignored archive.
+  automatically into the project's ignored archive. Native sessions receive
+  `RECCLI_EVIDENCE_MANIFEST` and `RECCLI_EVIDENCE_SNAPSHOT_ROOT`, allowing
+  project-owned validators to resolve only explicitly selected evidence.
 
   Optional `context_manifest` must name a tracked project-relative
   `reccli.organization-context-packs.v1` file. Its ordered common and per-agent
@@ -171,7 +173,9 @@ worktree:
   hashes, deny-write paths, candidate identity, and resource limits. Scientific
   completion writes `promotion-request.json`; RecCli does not merge/push the
   proposal, import canonical attempts, change authority, or declare visual
-  acceptance.
+  acceptance. A separately reviewed artifact dossier may end the run with
+  `completed_no_promotion`; it creates no promotion candidate or canonical
+  effect.
 
   Event-driven topologies enforce lead reconnaissance followed by a manager
   delegation barrier. A worker's first turn requires a primary-manager
