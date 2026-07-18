@@ -46,7 +46,7 @@ Claude Code setup configures both the MCP server and lifecycle hooks for session
 | `expand_search_result` | Drill into a search result to see full conversation context |
 | `save_session_notes` | Persist decisions, problems solved, and next steps from current session |
 | `start_organization` | Launch a durable Claude Code/Codex multi-agent delivery run on isolated Git worktrees, with optional immutable evidence snapshots |
-| `start_project_organization` | Atomically run a tracked project launch contract, verify its dynamic mission against HEAD, refuse duplicates/pending approvals, launch the exact emitted organization, and open the console |
+| `start_project_organization` | Atomically run a tracked project launch contract, verify its dynamic mission against HEAD, optionally continue from the latest eligible lead conclusion, refuse duplicates/pending approvals, and open the console |
 | `organization_status` | Poll an organization run and inspect recent events/messages |
 | `list_organizations` | List durable organization runs for a project |
 | `steer_organization` | Queue a human message for an agent or role group at the next safe boundary |

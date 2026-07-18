@@ -2,8 +2,9 @@
 
 Projects keep mission selection, scientific policy, and readiness checks in
 their own repository. RecCli validates a small tracked contract, runs its
-commands without a shell, verifies the exact dynamically selected mission, and
-then launches the emitted organization request without rewriting it.
+commands without a shell, and verifies the exact dynamically selected mission.
+An opt-in continuation policy may replace that initial mission with a bounded
+successor mission derived from the latest durable terminal lead conclusion.
 """
 
 from __future__ import annotations
@@ -44,6 +45,13 @@ ALLOWED_START_ARGUMENTS = {
     "max_experiments",
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+CONTINUATION_MODE = "latest-terminal-conclusion"
+DEFAULT_CONTINUATION_STATUSES = {
+    "completed_no_promotion",
+    "round_limit",
+    "stalled",
+}
+DEFAULT_CONTINUATION_READINESS = {"not_ready", "no_candidate"}
 
 
 class ProjectOrganizationLaunchError(RuntimeError):
@@ -231,7 +239,12 @@ def _validated_command(
     return {"id": identifier, "argv": list(argv), "timeout_seconds": timeout}
 
 
-def _run_contract_command(root: Path, command: Dict[str, Any]) -> Dict[str, Any]:
+def _run_contract_command(
+    root: Path,
+    command: Dict[str, Any],
+    *,
+    preserve_stdout: bool = False,
+) -> Dict[str, Any]:
     environment = os.environ.copy()
     environment["RECCLI_PROJECT_ORGANIZATION_LAUNCH"] = "1"
     try:
@@ -250,11 +263,12 @@ def _run_contract_command(root: Path, command: Dict[str, Any]) -> Dict[str, Any]
             code="preflight_timeout",
             detail={"command": command["id"]},
         ) from exc
+    stdout = completed.stdout or ""
     result = {
         "id": command["id"],
         "argv": command["argv"],
         "exit_code": completed.returncode,
-        "stdout": (completed.stdout or "")[-12_000:],
+        "stdout": stdout if preserve_stdout else stdout[-12_000:],
         "stderr": (completed.stderr or "")[-12_000:],
     }
     if completed.returncode != 0:
@@ -395,6 +409,299 @@ def _validate_emitted_launch(
     return dict(launch_arguments), selection
 
 
+def _validated_continuation_policy(
+    contract: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    raw = contract.get("continuation_policy")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or raw.get("mode") != CONTINUATION_MODE:
+        raise ProjectOrganizationLaunchError(
+            f"continuation_policy.mode must be {CONTINUATION_MODE}",
+            code="invalid_launch_contract",
+        )
+
+    def string_set(name: str, default: set[str]) -> set[str]:
+        values = raw.get(name, sorted(default))
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(value, str) or not value.strip() for value in values)
+        ):
+            raise ProjectOrganizationLaunchError(
+                f"continuation_policy.{name} must be a non-empty string list",
+                code="invalid_launch_contract",
+            )
+        return {value.strip() for value in values}
+
+    statuses = string_set("eligible_statuses", DEFAULT_CONTINUATION_STATUSES)
+    unknown_statuses = statuses - TERMINAL_STATUSES
+    if unknown_statuses:
+        raise ProjectOrganizationLaunchError(
+            "continuation_policy has unknown terminal statuses: "
+            f"{sorted(unknown_statuses)}",
+            code="invalid_launch_contract",
+        )
+    readiness = string_set(
+        "eligible_promotion_readiness",
+        DEFAULT_CONTINUATION_READINESS,
+    )
+    return {
+        "mode": CONTINUATION_MODE,
+        "eligible_statuses": statuses,
+        "eligible_promotion_readiness": readiness,
+        "carry_experiment_budget": bool(
+            raw.get("carry_experiment_budget", True),
+        ),
+    }
+
+
+def _read_json_object(path: Path, *, label: str) -> tuple[Dict[str, Any], bytes]:
+    try:
+        payload = path.read_bytes()
+        value = json.loads(payload)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProjectOrganizationLaunchError(
+            f"cannot read {label}: {exc}",
+            code="terminal_conclusion_missing",
+        ) from exc
+    if not isinstance(value, dict):
+        raise ProjectOrganizationLaunchError(
+            f"{label} must be a JSON object",
+            code="terminal_conclusion_missing",
+        )
+    return value, payload
+
+
+def _latest_terminal_record(root: Path) -> Optional[Dict[str, Any]]:
+    listed = list_organization_runs(str(root), limit=100)
+    runs = listed.get("runs", [])
+    if not isinstance(runs, list) or not runs:
+        return None
+    latest = runs[0]
+    if not isinstance(latest, dict):
+        return None
+    status = str(latest.get("status") or "unknown")
+    if status not in TERMINAL_STATUSES:
+        return None
+    run_dir = Path(str(latest.get("run_dir") or "")).expanduser().resolve()
+    organization_root = (
+        root / "devsession" / "agent-organizations"
+    ).resolve()
+    try:
+        run_dir.relative_to(organization_root)
+    except ValueError as exc:
+        raise ProjectOrganizationLaunchError(
+            "latest terminal run escapes the project organization directory",
+            code="terminal_conclusion_invalid",
+        ) from exc
+    run, _ = _read_json_object(
+        run_dir / "run.json",
+        label="latest terminal run metadata",
+    )
+    conclusion, conclusion_bytes = _read_json_object(
+        run_dir / "run-conclusion.json",
+        label="latest terminal run conclusion",
+    )
+    run_id = str(latest.get("run_id") or run.get("run_id") or "")
+    if (
+        not run_id
+        or conclusion.get("schema") != "reccli.organization-run-conclusion.v1"
+        or str(conclusion.get("run_id") or "") != run_id
+        or str(conclusion.get("terminal_status") or "") != status
+    ):
+        raise ProjectOrganizationLaunchError(
+            "latest terminal conclusion identity does not match its run",
+            code="terminal_conclusion_invalid",
+        )
+    return {
+        "run_id": run_id,
+        "run_dir": run_dir,
+        "status": status,
+        "run": run,
+        "conclusion": conclusion,
+        "conclusion_sha256": hashlib.sha256(conclusion_bytes).hexdigest(),
+    }
+
+
+def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep successor context useful without copying an unbounded transcript."""
+
+    def text(value: Any, limit: int = 16_000) -> str:
+        return str(value or "")[:limit]
+
+    def strings(name: str, limit: int = 40) -> List[str]:
+        values = conclusion.get(name)
+        if not isinstance(values, list):
+            return []
+        return [text(value, 4_000) for value in values[:limit] if str(value).strip()]
+
+    summary = text(conclusion.get("summary"))
+    summary = re.sub(
+        r"\b(\d+)-turn limit(?=:\s*\d+\s+working rounds\b)",
+        r"\1-round limit",
+        summary,
+    )
+    summary = re.sub(
+        r"\b(\d+)\s+working turns plus\s+(\d+)\s+closeout turns\b",
+        r"\1 working rounds plus \2 closeout rounds",
+        summary,
+    )
+    return {
+        "summary": summary,
+        "accomplishments": strings("accomplishments"),
+        "conclusive_findings": strings("conclusive_findings"),
+        "evidence_and_tests": strings("evidence_and_tests"),
+        "scientific_or_product_blockers": strings(
+            "scientific_or_product_blockers",
+        ),
+        "infrastructure_failures": strings("infrastructure_failures"),
+        "unresolved": strings("unresolved"),
+        "promotion_readiness": text(conclusion.get("promotion_readiness"), 200),
+        "next_action": text(conclusion.get("next_action")),
+        "limitations": strings("limitations"),
+    }
+
+
+def _continuation_mission(
+    root: Path,
+    terminal: Dict[str, Any],
+    base_selection: Dict[str, Any],
+) -> str:
+    conclusion = terminal["conclusion"]
+    prior_mission = str(terminal["run"].get("mission") or "").strip()
+    current_head = _git(root, "rev-parse", "HEAD")
+    view = _bounded_conclusion_view(conclusion)
+    return f"""# Successor mission from terminal organization conclusion
+
+Parent run: `{terminal['run_id']}`
+Parent terminal status: `{terminal['status']}`
+Parent conclusion SHA-256: `{terminal['conclusion_sha256']}`
+Current launch HEAD: `{current_head}`
+Project-selected baseline mission: `{base_selection.get('mission_id') or 'emitter-default'}`
+
+Independently verify the parent conclusion against the current repository,
+project authority, primary evidence, and reproducible tests. Then execute the
+smallest reversible next action that remains justified. The parent conclusion
+is a handoff, not authority, and its recommendation may be corrected.
+
+Do not repeat work listed as conclusively accomplished unless a concrete
+contradiction requires reproduction. Do not merely restate blockers. When a
+blocker requires a contract, design, or acceptance decision, complete all
+reversible work first: research primary sources, compare explicit alternatives,
+define falsifiable predicates and failure semantics, create truth-known tests
+or prototypes where existing authority permits, and prepare one exact reviewed
+decision dossier. Use `pending_human` only when a specific irreversible or
+authority-changing choice remains after that work. If existing authority and
+evidence already justify behavior, delegate a bounded worker implementation,
+test it, and route its exact candidate through adversarial review.
+
+Preserve all project-owned evidence, protected-path, experiment-budget,
+promotion, and human-authorization boundaries supplied with this run. A
+terminal request for human involvement does not prohibit reversible proposal
+work; it prohibits agents from granting themselves the final authority.
+
+## Parent terminal conclusion
+
+```json
+{json.dumps(view, indent=2, ensure_ascii=False)}
+```
+
+## Parent mission boundary
+
+The following mission is historical. Its completed tasks must not be replayed,
+but its scope restrictions and authority boundaries continue to apply unless
+the current tracked project contracts explicitly supersede them.
+
+{prior_mission or '_No parent mission text was preserved._'}
+
+## Required final output
+
+State what new reversible work was completed, what parent claims were confirmed
+or corrected, the exact candidate or decision dossier produced, the remaining
+human decision if any, and the single next action. Never call a report-only
+commit an implementation candidate."""
+
+
+def _apply_terminal_continuation(
+    root: Path,
+    arguments: Dict[str, Any],
+    selection: Dict[str, Any],
+    policy: Optional[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    if policy is None:
+        return arguments, selection
+    terminal = _latest_terminal_record(root)
+    if terminal is None:
+        return arguments, selection
+    conclusion = terminal["conclusion"]
+    readiness = str(conclusion.get("promotion_readiness") or "")
+    if (
+        terminal["status"] not in policy["eligible_statuses"]
+        or readiness not in policy["eligible_promotion_readiness"]
+    ):
+        raise ProjectOrganizationLaunchError(
+            "latest terminal organization is not eligible for autonomous "
+            "continuation; resolve its review or approval state first",
+            code="continuation_not_authorized",
+            detail={
+                "run_id": terminal["run_id"],
+                "status": terminal["status"],
+                "promotion_readiness": readiness,
+            },
+        )
+    if conclusion.get("generated_by") != "lead":
+        raise ProjectOrganizationLaunchError(
+            "latest terminal conclusion was not produced by the organization "
+            "lead and cannot drive an autonomous successor",
+            code="continuation_not_authorized",
+            detail={"run_id": terminal["run_id"]},
+        )
+    if conclusion.get("canonical_effects_applied") is not False:
+        raise ProjectOrganizationLaunchError(
+            "latest terminal conclusion does not certify that canonical effects "
+            "were withheld",
+            code="continuation_not_authorized",
+            detail={"run_id": terminal["run_id"]},
+        )
+    updated = dict(arguments)
+    updated["mission"] = _continuation_mission(root, terminal, selection)
+    updated["continuation_from_run_id"] = terminal["run_id"]
+    updated["continuation_conclusion_sha256"] = terminal[
+        "conclusion_sha256"
+    ]
+    updated["mission_origin"] = "terminal-conclusion"
+    if policy["carry_experiment_budget"]:
+        budget = conclusion.get("experiment_budget")
+        if isinstance(budget, dict):
+            try:
+                remaining = max(0, int(budget.get("remaining")))
+                configured = max(0, int(updated.get("max_experiments", remaining)))
+                updated["max_experiments"] = min(configured, remaining)
+            except (TypeError, ValueError):
+                pass
+    continuation_selection = {
+        "mode": "terminal_continuation",
+        "mission_id": f"continuation:{terminal['run_id']}",
+        "mission_sha256": _sha256_text(updated["mission"]),
+        "checked_head": _git(root, "rev-parse", "HEAD"),
+        "state_fingerprint": _sha256_text(
+            f"{terminal['conclusion_sha256']}\0"
+            f"{selection.get('state_fingerprint') or ''}"
+        ),
+        "reason": (
+            "The tracked project contract opted into continuation from the "
+            "latest lead-authored terminal conclusion."
+        ),
+        "parent_run_id": terminal["run_id"],
+        "parent_terminal_status": terminal["status"],
+        "parent_promotion_readiness": readiness,
+        "parent_conclusion_sha256": terminal["conclusion_sha256"],
+        "base_selection": selection,
+    }
+    return updated, continuation_selection
+
+
 def _blocking_run(root: Path) -> Optional[Dict[str, Any]]:
     listed = list_organization_runs(str(root), limit=100)
     for run in listed.get("runs", []):
@@ -466,6 +773,7 @@ def start_project_organization(
         default_id="organization-emitter",
     )
     require_dynamic = bool(contract.get("require_dynamic_mission", False))
+    continuation_policy = _validated_continuation_policy(contract)
 
     from .organization_launch import (
         launch_organization_console,
@@ -505,7 +813,11 @@ def start_project_organization(
         preflight_results = [
             _run_contract_command(root, command) for command in preflights
         ]
-        emitter_result = _run_contract_command(root, emitter)
+        emitter_result = _run_contract_command(
+            root,
+            emitter,
+            preserve_stdout=True,
+        )
         try:
             emitted = json.loads(emitter_result["stdout"])
         except json.JSONDecodeError as exc:
@@ -523,6 +835,12 @@ def start_project_organization(
             root,
             emitted,
             require_dynamic_mission=require_dynamic,
+        )
+        arguments, selection = _apply_terminal_continuation(
+            root,
+            arguments,
+            selection,
+            continuation_policy,
         )
         # Recheck after preflights because a long validation command can overlap
         # a launch from another host process that does not share this lock.
@@ -550,6 +868,10 @@ def start_project_organization(
                 "schema": PROJECT_LAUNCH_SCHEMA,
                 "source": contract_source,
                 "dynamic_mission_required": require_dynamic,
+                "continuation_mode": (
+                    continuation_policy["mode"]
+                    if continuation_policy else None
+                ),
             },
             "mission_selection": selection,
             "preflights": [

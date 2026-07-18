@@ -514,6 +514,18 @@ def list_organization_runs(
                 "updated_at": status.get("updated_at"),
                 "created_at": run.get("created_at"),
                 "topology": run.get("topology") or status.get("topology"),
+                "mission_origin": (
+                    run.get("mission_origin")
+                    or status.get("mission_origin")
+                ),
+                "continuation_from_run_id": (
+                    run.get("continuation_from_run_id")
+                    or status.get("continuation_from_run_id")
+                ),
+                "continuation_conclusion_sha256": (
+                    run.get("continuation_conclusion_sha256")
+                    or status.get("continuation_conclusion_sha256")
+                ),
                 "provider": run.get("provider") or status.get("provider"),
                 "host_provider": run.get("host_provider") or status.get("host_provider"),
                 "human_promotion_required": bool(

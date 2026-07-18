@@ -1399,6 +1399,33 @@ def validate_run_conclusion(value: Any) -> Dict[str, Any]:
     return value
 
 
+def _normalize_round_language(
+    value: Dict[str, Any],
+    digest: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Correct the common model error that conflates rounds with turns."""
+    result = dict(value)
+    summary = str(result.get("summary") or "")
+    total_rounds = int(digest.get("rounds", 0) or 0)
+    working_rounds = int(digest.get("working_rounds", 0) or 0)
+    closeout_rounds = int(digest.get("closeout_rounds", 0) or 0)
+    replacements = {
+        f"{total_rounds}-turn limit": f"{total_rounds}-round limit",
+        f"{total_rounds} turn limit": f"{total_rounds} round limit",
+        (
+            f"{working_rounds} working turns plus "
+            f"{closeout_rounds} closeout turns"
+        ): (
+            f"{working_rounds} working rounds plus "
+            f"{closeout_rounds} closeout rounds"
+        ),
+    }
+    for old, new in replacements.items():
+        summary = summary.replace(old, new)
+    result["summary"] = summary
+    return result
+
+
 def _render_run_conclusion_markdown(conclusion: Dict[str, Any]) -> str:
     def section(title: str, values: List[str]) -> List[str]:
         lines = [f"## {title}", ""]
@@ -2262,6 +2289,9 @@ class OrganizationRunner:
         context_manifest: Optional[str] = None,
         max_experiments: int = 3,
         max_closeout_rounds: int = DEFAULT_CLOSEOUT_ROUNDS,
+        continuation_from_run_id: Optional[str] = None,
+        continuation_conclusion_sha256: Optional[str] = None,
+        mission_origin: str = "direct",
     ):
         self.project_root = project_root.resolve()
         self.mission = mission.strip()
@@ -2286,6 +2316,15 @@ class OrganizationRunner:
         self.evidence_paths = list(evidence_paths or [])
         self.protected_paths = list(protected_paths or [])
         self.context_manifest = context_manifest
+        self.continuation_from_run_id = (
+            str(continuation_from_run_id).strip()
+            if continuation_from_run_id else None
+        )
+        self.continuation_conclusion_sha256 = (
+            str(continuation_conclusion_sha256).strip()
+            if continuation_conclusion_sha256 else None
+        )
+        self.mission_origin = str(mission_origin or "direct").strip()
         self.evidence_manifest: Optional[Dict[str, Any]] = None
         self.evidence_verified_at: Optional[str] = None
         self.context_pack_manifest: Optional[Dict[str, Any]] = None
@@ -2386,6 +2425,11 @@ class OrganizationRunner:
             "provider_assignments": self.provider_by_agent,
             "blind_verifier_provider": self.blind_verifier_provider,
             "topology": self.topology.topology_id, "mission": self.mission,
+            "mission_origin": self.mission_origin,
+            "continuation_from_run_id": self.continuation_from_run_id,
+            "continuation_conclusion_sha256": (
+                self.continuation_conclusion_sha256
+            ),
             "scheduler": self.topology.scheduler,
             "delegation_gate": self.topology.delegation_gate,
             "coordination_cadence": (
@@ -4910,7 +4954,10 @@ product blockers from infrastructure failures. Never describe an artifact-only
 or identity-only commit as an implementation candidate. Treat the host-supplied
 promotion readiness, exact candidate identities, turn counts, and artifact
 paths as authoritative. State uncertainty plainly and recommend exactly one
-smallest next action.
+smallest next action. Rounds and agent turns are different units: this run used
+{digest['working_rounds']} working rounds and {digest['closeout_rounds']}
+closeout rounds, containing {digest['turn_counts']['completed']} completed agent
+turns. Never describe a round limit as a turn limit.
 
 ## Original mission
 
@@ -4984,6 +5031,7 @@ smallest next action.
                     reason=failure_reason,
                 )
 
+        value = _normalize_round_language(value, digest)
         readiness = self._authoritative_promotion_readiness(status, digest)
         value["promotion_readiness"] = readiness
         durable_failures = list(digest["infrastructure_failures"])
@@ -5012,6 +5060,11 @@ smallest next action.
                 "attempted": self.attempted_turns,
                 "completed": self.completed_turns,
                 "failed": self.failed_turns,
+            },
+            "round_counts": {
+                "total": rounds,
+                "working": digest["working_rounds"],
+                "closeout": digest["closeout_rounds"],
             },
             "experiment_budget": digest["experiment_budget"],
             "canonical_effects_applied": False,
@@ -5483,12 +5536,38 @@ def create_run_request(
     protected_paths: Optional[List[str]] = None,
     context_manifest: Optional[str] = None,
     max_experiments: int = 3,
+    continuation_from_run_id: Optional[str] = None,
+    continuation_conclusion_sha256: Optional[str] = None,
+    mission_origin: str = "direct",
 ) -> Dict[str, Any]:
     project_root = discover_project_root(Path(working_directory).expanduser().resolve())
     if project_root is None:
         raise FileNotFoundError(f"No RecCli/Git project found from {working_directory}")
     if not mission or not mission.strip():
         raise ValueError("mission must not be empty")
+    normalized_parent = (
+        str(continuation_from_run_id).strip()
+        if continuation_from_run_id else None
+    )
+    normalized_conclusion_sha = (
+        str(continuation_conclusion_sha256).strip()
+        if continuation_conclusion_sha256 else None
+    )
+    normalized_origin = str(mission_origin or "direct").strip()
+    if bool(normalized_parent) != bool(normalized_conclusion_sha):
+        raise ValueError(
+            "continuation run id and conclusion SHA-256 must be supplied together"
+        )
+    if normalized_conclusion_sha and not re.fullmatch(
+        r"[0-9a-f]{64}", normalized_conclusion_sha,
+    ):
+        raise ValueError("continuation conclusion SHA-256 is invalid")
+    if normalized_origin not in {
+        "direct",
+        "project-emitter",
+        "terminal-conclusion",
+    }:
+        raise ValueError("unsupported mission origin")
     _validate_clean_repository(project_root)
     resolved_evidence = resolve_evidence_paths(project_root, evidence_paths)
     resolved_protected = resolve_protected_paths(project_root, protected_paths)
@@ -5513,6 +5592,9 @@ def create_run_request(
         "blind_verifier_provider": provider_plan.blind_verifier_provider,
         "provider_authentication": provider_plan.authentication,
         "topology": topology, "max_rounds": max(1, int(max_rounds)),
+        "mission_origin": normalized_origin,
+        "continuation_from_run_id": normalized_parent,
+        "continuation_conclusion_sha256": normalized_conclusion_sha,
         "scheduler": topology_config.scheduler,
         "delegation_gate": topology_config.delegation_gate,
         "human_promotion_required": topology_config.human_promotion_required,
@@ -5540,6 +5622,9 @@ def create_run_request(
         "provider_assignments": provider_plan.provider_assignments,
         "blind_verifier_provider": provider_plan.blind_verifier_provider,
         "topology": topology,
+        "mission_origin": normalized_origin,
+        "continuation_from_run_id": normalized_parent,
+        "continuation_conclusion_sha256": normalized_conclusion_sha,
         "human_promotion_required": topology_config.human_promotion_required,
         "evidence_paths": [str(path) for path in resolved_evidence],
         "protected_paths": resolved_protected,
@@ -5574,6 +5659,11 @@ def run_request(request: Dict[str, Any]) -> Dict[str, Any]:
         protected_paths=request.get("protected_paths"),
         context_manifest=request.get("context_manifest"),
         max_experiments=request.get("max_experiments", 3),
+        continuation_from_run_id=request.get("continuation_from_run_id"),
+        continuation_conclusion_sha256=request.get(
+            "continuation_conclusion_sha256",
+        ),
+        mission_origin=request.get("mission_origin", "direct"),
     )
     return runner.run()
 

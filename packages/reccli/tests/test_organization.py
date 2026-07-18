@@ -614,6 +614,57 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertNotIn("api_key", request)
             self.assertTrue(Path(request["run_dir"], "status.json").exists())
 
+    def test_continuation_identity_is_validated_and_persisted(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            conclusion_sha = "a" * 64
+            with patch(
+                "reccli.organization.shutil.which",
+                return_value="/fake/claude",
+            ):
+                request = create_run_request(
+                    str(root),
+                    "Continue from the exact terminal conclusion.",
+                    provider="claude",
+                    continuation_from_run_id="parent-run",
+                    continuation_conclusion_sha256=conclusion_sha,
+                    mission_origin="terminal-conclusion",
+                )
+            self.assertEqual(
+                request["continuation_from_run_id"],
+                "parent-run",
+            )
+            self.assertEqual(
+                request["continuation_conclusion_sha256"],
+                conclusion_sha,
+            )
+            self.assertEqual(
+                request["mission_origin"],
+                "terminal-conclusion",
+            )
+            persisted = json.loads(
+                Path(request["run_dir"], "request.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(
+                persisted["continuation_from_run_id"],
+                "parent-run",
+            )
+
+    def test_partial_continuation_identity_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            with self.assertRaisesRegex(ValueError, "supplied together"):
+                create_run_request(
+                    str(root),
+                    "Continue.",
+                    provider="claude",
+                    continuation_from_run_id="parent-run",
+                )
+
     def test_start_request_rejects_tracked_uncommitted_changes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1456,7 +1507,10 @@ class OrganizationProjectTests(unittest.TestCase):
             session = Mock()
             session.provider = "claude"
             session.run.return_value = {
-                "value": _conclusion(),
+                "value": _conclusion(
+                    "The run ended at its 8-turn limit: 8 working turns plus "
+                    "0 closeout turns."
+                ),
                 "session_id": "lead-session",
                 "usage": {
                     "input_tokens": 10,
@@ -1479,12 +1533,19 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(conclusion["promotion_readiness"], "no_candidate")
             self.assertEqual(conclusion["turn_counts"]["attempted"], 9)
             self.assertEqual(
+                conclusion["round_counts"],
+                {"total": 8, "working": 8, "closeout": 0},
+            )
+            self.assertEqual(
                 json.loads(
                     (run_dir / "run-conclusion.json").read_text(
                         encoding="utf-8",
                     )
                 )["summary"],
-                _conclusion()["summary"],
+                (
+                    "The run ended at its 8-round limit: 8 working rounds plus "
+                    "0 closeout rounds."
+                ),
             )
             markdown = (run_dir / "run-conclusion.md").read_text(
                 encoding="utf-8",
@@ -1494,6 +1555,11 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertIs(
                 session.run.call_args.args[1],
                 RUN_CONCLUSION_SCHEMA,
+            )
+            conclusion_prompt = session.run.call_args.args[0]
+            self.assertIn(
+                "Never describe a round limit as a turn limit",
+                conclusion_prompt,
             )
 
     def test_cancelled_run_writes_fallback_without_another_model_turn(self):

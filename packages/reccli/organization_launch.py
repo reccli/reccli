@@ -113,6 +113,13 @@ def start_organization_from_arguments(arguments: Dict[str, Any]) -> Dict[str, An
         "provider_assignments": request["provider_assignments"],
         "blind_verifier_provider": request["blind_verifier_provider"],
         "topology": request["topology"],
+        "mission_origin": request.get("mission_origin", "direct"),
+        "continuation_from_run_id": request.get(
+            "continuation_from_run_id",
+        ),
+        "continuation_conclusion_sha256": request.get(
+            "continuation_conclusion_sha256",
+        ),
         "human_promotion_required": request["human_promotion_required"],
         "evidence_paths": request["evidence_paths"],
         "protected_paths": request["protected_paths"],

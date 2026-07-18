@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -38,9 +39,17 @@ def _init_project(root: Path) -> None:
     )
 
 
-def _write_dynamic_contract(root: Path, *, stale_head: bool = False) -> None:
+def _write_dynamic_contract(
+    root: Path,
+    *,
+    stale_head: bool = False,
+    continuation: bool = False,
+    mission_text: str = (
+        "Audit the current project state and ship only a verified candidate.\n"
+    ),
+) -> None:
     (root / "mission.md").write_text(
-        "Audit the current project state and ship only a verified candidate.\n",
+        mission_text,
         encoding="utf-8",
     )
     (root / "emit.py").write_text(
@@ -88,31 +97,128 @@ def _write_dynamic_contract(root: Path, *, stale_head: bool = False) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / PROJECT_LAUNCH_FILENAME).write_text(
-        json.dumps(
+    contract = {
+        "schema": "reccli.project-organization-launch.v1",
+        "preflight_commands": [
             {
-                "schema": "reccli.project-organization-launch.v1",
-                "preflight_commands": [
-                    {
-                        "id": "unit-preflight",
-                        "argv": ["python3", "-c", "print('preflight ok')"],
-                        "timeout_seconds": 10,
-                    }
-                ],
-                "emitter_command": {
-                    "id": "unit-emitter",
-                    "argv": ["python3", "emit.py"],
-                    "timeout_seconds": 10,
-                },
-                "require_dynamic_mission": True,
-            },
-            indent=2,
-        )
+                "id": "unit-preflight",
+                "argv": ["python3", "-c", "print('preflight ok')"],
+                "timeout_seconds": 10,
+            }
+        ],
+        "emitter_command": {
+            "id": "unit-emitter",
+            "argv": ["python3", "emit.py"],
+            "timeout_seconds": 10,
+        },
+        "require_dynamic_mission": True,
+    }
+    if continuation:
+        contract["continuation_policy"] = {
+            "mode": "latest-terminal-conclusion",
+            "eligible_statuses": [
+                "completed_no_promotion",
+                "round_limit",
+                "stalled",
+            ],
+            "eligible_promotion_readiness": ["not_ready", "no_candidate"],
+            "carry_experiment_budget": True,
+        }
+    (root / PROJECT_LAUNCH_FILENAME).write_text(
+        json.dumps(contract, indent=2)
         + "\n",
         encoding="utf-8",
     )
     _git(root, "add", "mission.md", "emit.py", PROJECT_LAUNCH_FILENAME)
     _git(root, "commit", "-qm", "add dynamic organization launch")
+
+
+def _write_terminal_run(
+    root: Path,
+    *,
+    run_id: str = "terminal-parent",
+    status: str = "round_limit",
+    readiness: str = "not_ready",
+    generated_by: str = "lead",
+) -> Path:
+    run_dir = root / "devsession" / "agent-organizations" / run_id
+    run_dir.mkdir(parents=True)
+    run = {
+        "run_id": run_id,
+        "project_root": str(root),
+        "mission": (
+            "Investigate the original defect. Do not modify production data "
+            "or grant canonical acceptance."
+        ),
+        "status": status,
+        "created_at": "2026-07-18T00:00:00Z",
+        "topology": "scientific",
+    }
+    (run_dir / "run.json").write_text(
+        json.dumps(run, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "status.json").write_text(
+        json.dumps({
+            **run,
+            "round": 12,
+            "max_rounds": 8,
+            "completed_turns": 71,
+            "failed_turns": 0,
+            "updated_at": "2026-07-18T01:00:00Z",
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    conclusion = {
+        "schema": "reccli.organization-run-conclusion.v1",
+        "run_id": run_id,
+        "terminal_status": status,
+        "generated_at": "2026-07-18T01:00:00Z",
+        "generated_by": generated_by,
+        "lead_agent_id": "lead",
+        "lead_provider": "codex",
+        "summary": (
+            "The old candidate was rejected after a deeper defect emerged. "
+            "The run ended at its 12-turn limit: 8 working rounds plus 4 "
+            "closeout rounds."
+        ),
+        "accomplishments": [
+            "Rejected the obsolete candidate.",
+            "Reproduced the deeper failure.",
+        ],
+        "conclusive_findings": [
+            "Low residual does not prove parameter identifiability.",
+        ],
+        "evidence_and_tests": ["17 focused controls passed."],
+        "scientific_or_product_blockers": [
+            "The project lacks an identifiability contract.",
+        ],
+        "infrastructure_failures": [],
+        "unresolved": ["Define ambiguity semantics before implementation."],
+        "promotion_readiness": readiness,
+        "next_action": (
+            "Specify a falsifiable identifiability contract and stage the "
+            "remaining authority choice."
+        ),
+        "limitations": ["No production change was authorized."],
+        "candidates": [],
+        "integrated_candidates": {},
+        "verified_candidate": None,
+        "promotion_candidate": None,
+        "promotion_request": None,
+        "no_promotion_report": None,
+        "pending_human_report": None,
+        "artifacts": [],
+        "turn_counts": {"attempted": 71, "completed": 71, "failed": 0},
+        "round_counts": {"total": 12, "working": 8, "closeout": 4},
+        "experiment_budget": {"maximum": 3, "used": 1, "remaining": 2},
+        "canonical_effects_applied": False,
+    }
+    (run_dir / "run-conclusion.json").write_text(
+        json.dumps(conclusion, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return run_dir
 
 
 class ProjectOrganizationLaunchTests(unittest.TestCase):
@@ -201,6 +307,198 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                     start_project_organization(str(root), open_console=False)
             self.assertEqual(raised.exception.code, "stale_dynamic_mission")
             start.assert_not_called()
+
+    def test_terminal_conclusion_drives_bounded_successor_mission(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(root, continuation=True)
+            parent_dir = _write_terminal_run(root)
+            captured = {}
+
+            def fake_start(arguments):
+                captured.update(arguments)
+                return {
+                    "status": "starting",
+                    "run_id": "successor-run",
+                    "run_dir": str(
+                        root / "devsession" / "agent-organizations"
+                        / "successor-run"
+                    ),
+                    "pid": 1234,
+                }
+
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                side_effect=fake_start,
+            ):
+                result = start_project_organization(
+                    str(root),
+                    open_console=False,
+                )
+
+            conclusion_bytes = (
+                parent_dir / "run-conclusion.json"
+            ).read_bytes()
+            expected_sha = hashlib.sha256(
+                conclusion_bytes,
+            ).hexdigest()
+            self.assertEqual(
+                result["mission_selection"]["mode"],
+                "terminal_continuation",
+            )
+            self.assertEqual(
+                result["mission_selection"]["parent_run_id"],
+                "terminal-parent",
+            )
+            self.assertEqual(
+                result["mission_selection"]["parent_conclusion_sha256"],
+                expected_sha,
+            )
+            self.assertEqual(
+                result["launch_contract"]["continuation_mode"],
+                "latest-terminal-conclusion",
+            )
+            self.assertEqual(
+                captured["continuation_from_run_id"],
+                "terminal-parent",
+            )
+            self.assertEqual(
+                captured["continuation_conclusion_sha256"],
+                expected_sha,
+            )
+            self.assertEqual(captured["mission_origin"], "terminal-conclusion")
+            self.assertEqual(captured["max_experiments"], 1)
+            self.assertIn(
+                "Do not merely restate blockers", captured["mission"],
+            )
+            self.assertIn(
+                "complete all", captured["mission"],
+            )
+            self.assertIn(
+                "reversible work first", captured["mission"],
+            )
+            self.assertIn(
+                "delegate a bounded worker implementation",
+                captured["mission"],
+            )
+            self.assertIn(
+                "parent conclusion",
+                captured["mission"],
+            )
+            self.assertIn(
+                "is a handoff, not authority",
+                captured["mission"],
+            )
+            self.assertIn(
+                "Investigate the original defect", captured["mission"],
+            )
+            self.assertIn("12-round limit", captured["mission"])
+            self.assertNotIn("12-turn limit", captured["mission"])
+            self.assertNotEqual(
+                captured["mission"],
+                (root / "mission.md").read_text(encoding="utf-8").strip(),
+            )
+
+    def test_ineligible_terminal_result_blocks_instead_of_replaying_base_mission(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(root, continuation=True)
+            _write_terminal_run(
+                root,
+                status="completed",
+                readiness="ready_for_human_review",
+            )
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+            ) as start:
+                with self.assertRaises(ProjectOrganizationLaunchError) as raised:
+                    start_project_organization(
+                        str(root),
+                        open_console=False,
+                    )
+            self.assertEqual(
+                raised.exception.code,
+                "continuation_not_authorized",
+            )
+            start.assert_not_called()
+
+    def test_host_fallback_conclusion_cannot_drive_autonomous_successor(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(root, continuation=True)
+            _write_terminal_run(root, generated_by="host-fallback")
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+            ) as start:
+                with self.assertRaises(ProjectOrganizationLaunchError) as raised:
+                    start_project_organization(
+                        str(root),
+                        open_console=False,
+                    )
+            self.assertEqual(
+                raised.exception.code,
+                "continuation_not_authorized",
+            )
+            start.assert_not_called()
+
+    def test_terminal_status_mismatch_cannot_drive_successor(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(root, continuation=True)
+            run_dir = _write_terminal_run(root)
+            conclusion_path = run_dir / "run-conclusion.json"
+            conclusion = json.loads(conclusion_path.read_text(encoding="utf-8"))
+            conclusion["terminal_status"] = "completed_no_promotion"
+            conclusion_path.write_text(
+                json.dumps(conclusion, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+            ) as start:
+                with self.assertRaises(ProjectOrganizationLaunchError) as raised:
+                    start_project_organization(
+                        str(root),
+                        open_console=False,
+                    )
+            self.assertEqual(
+                raised.exception.code,
+                "terminal_conclusion_invalid",
+            )
+            start.assert_not_called()
+
+    def test_large_dynamic_mission_is_not_truncated_before_launch(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            mission = "Inspect this bounded item.\n" * 800
+            _write_dynamic_contract(root, mission_text=mission)
+            captured = {}
+
+            def fake_start(arguments):
+                captured.update(arguments)
+                return {
+                    "status": "starting",
+                    "run_id": "large-mission-run",
+                    "run_dir": str(root / "large-mission-run"),
+                    "pid": 1234,
+                }
+
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                side_effect=fake_start,
+            ):
+                result = start_project_organization(
+                    str(root),
+                    open_console=False,
+                )
+
+            self.assertEqual(result["status"], "starting")
+            self.assertEqual(captured["mission"], mission.strip())
 
     def test_existing_live_run_is_returned_instead_of_duplicate_launch(self):
         with tempfile.TemporaryDirectory() as td:

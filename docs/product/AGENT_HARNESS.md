@@ -211,8 +211,26 @@ start_project_organization(
 This preferred one-line path requires a tracked project contract. RecCli runs
 its shell-free preflights, verifies the emitter's dynamic tracked mission
 against current HEAD, refuses duplicate or pending-approval runs, and launches
-the emitted payload unchanged. Projects that intentionally supply an ad hoc
-mission can use the lower-level surface:
+the emitted payload unchanged unless that same tracked contract explicitly
+opts into terminal-conclusion continuation. In that mode, the latest eligible
+lead-authored conclusion replaces the initial mission with a hash-bound
+successor handoff and carries the remaining experiment budget. Projects that
+intentionally supply an ad hoc mission can use the lower-level surface:
+
+```json
+{
+  "continuation_policy": {
+    "mode": "latest-terminal-conclusion",
+    "eligible_statuses": [
+      "completed_no_promotion",
+      "round_limit",
+      "stalled"
+    ],
+    "eligible_promotion_readiness": ["not_ready", "no_candidate"],
+    "carry_experiment_budget": true
+  }
+}
+```
 
 ```python
 start_organization(

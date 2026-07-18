@@ -121,6 +121,11 @@ export interface RunConclusion {
     completed?: number;
     failed?: number;
   };
+  round_counts?: {
+    total?: number;
+    working?: number;
+    closeout?: number;
+  };
 }
 
 export interface ApprovalRequest {

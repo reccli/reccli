@@ -22,6 +22,15 @@ For projects with a tracked launch contract, `start_project_organization`
 performs preflight, dynamic mission selection, organization launch, and console
 open/reuse in one MCP call.
 
+Projects may opt into `latest-terminal-conclusion` continuation in that tracked
+contract. After the first reviewed mission, the one-line launcher then derives
+the next bounded mission from the newest lead-authored terminal conclusion
+instead of replaying the project's initial mission. The successor must verify
+the handoff, avoid repeating conclusive work, exhaust reversible
+research/design/test/prototype work, and stage a specific human decision only
+when an irreversible authority seam remains. Host-fallback conclusions and
+promotion-ready or approval-pending runs cannot trigger this continuation.
+
 ## Layout
 
 - The top rail contains the lead and eight team members. Selecting a person
@@ -75,6 +84,9 @@ report separates accomplishments, conclusive findings, evidence, scientific or
 product blockers, infrastructure failures, unresolved work, exact candidates,
 the exact no-promotion dossier when present, promotion readiness, and the
 smallest recommended next action.
+
+Round counts and agent-turn counts are separate durable fields. A scheduling
+round may execute several agent turns in parallel.
 
 Cancellation never starts another model turn after the stop request. A
 supervisor crash may also prevent the lead pass. In either case RecCli writes a

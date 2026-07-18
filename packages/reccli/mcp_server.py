@@ -1172,9 +1172,14 @@ def start_project_organization(
 
     A dynamic contract must bind its selected tracked mission, current Git
     HEAD, mission SHA-256, and state fingerprint. RecCli refuses stale or
-    fabricated selections. It also refuses duplicate live runs and unresolved
-    human-approval checkpoints; in those cases it returns the existing run and
-    opens its console instead of launching another organization.
+    fabricated selections. A project may explicitly opt into deriving a
+    bounded successor mission from its latest eligible lead-authored terminal
+    conclusion, so callers do not need to rewrite the prior run's next action
+    into a launch prompt. Host-fallback and promotion-ready conclusions cannot
+    authorize continuation. RecCli also refuses duplicate live runs and
+    unresolved human-approval checkpoints; in those cases it returns the
+    existing run and opens its console instead of launching another
+    organization.
 
     Args:
         working_directory: Project root or any path inside the project.
