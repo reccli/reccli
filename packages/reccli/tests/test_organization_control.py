@@ -222,6 +222,22 @@ class OrganizationControlTests(unittest.TestCase):
                 }) + "\n",
                 encoding="utf-8",
             )
+            (run_dir / "run-conclusion.json").write_text(
+                json.dumps({
+                    "schema": "reccli.organization-run-conclusion.v1",
+                    "summary": "The organization qualified the fixture.",
+                    "promotion_readiness": "not_ready",
+                    "accomplishments": ["Fixture reproduced."],
+                    "conclusive_findings": [],
+                    "evidence_and_tests": [],
+                    "scientific_or_product_blockers": [],
+                    "infrastructure_failures": [],
+                    "unresolved": [],
+                    "next_action": "Review the receipt.",
+                    "limitations": [],
+                }) + "\n",
+                encoding="utf-8",
+            )
 
             snapshot = organization_snapshot(str(root), "control-run")
             self.assertEqual(snapshot["status"], "running")
@@ -237,6 +253,10 @@ class OrganizationControlTests(unittest.TestCase):
             self.assertEqual(len(snapshot["activities"]), 3)
             self.assertEqual(snapshot["telemetry"][0]["activity_type"], "telemetry")
             self.assertEqual(snapshot["telemetry"][0]["agent_id"], "worker-a")
+            self.assertEqual(
+                snapshot["conclusion"]["summary"],
+                "The organization qualified the fixture.",
+            )
 
             listed = list_organization_runs(str(root))
             self.assertEqual(listed["runs"][0]["run_id"], "control-run")

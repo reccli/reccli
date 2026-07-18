@@ -1790,6 +1790,8 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
             self.assertEqual(started["protected_paths"], ["app.py"])
             self.assertEqual(started["context_manifest"], "context-packs.json")
             self.assertEqual(started["max_experiments"], 2)
+            self.assertIn("Poll organization_status", started["next"])
+            self.assertIn("run-conclusion.json", started["terminal_output"])
             registry = _bg_tasks_file(project_root)
             records = [json.loads(line) for line in registry.read_text().splitlines()]
             self.assertEqual(records[-1]["pid"], 424242)

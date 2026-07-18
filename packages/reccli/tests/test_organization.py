@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from reccli.organization import (
     AGENT_REPLY_SCHEMA,
     HOST_CANDIDATE,
+    RUN_CONCLUSION_SCHEMA,
     AgentSpec,
     Governance,
     OrganizationRunner,
@@ -32,6 +33,7 @@ from reccli.organization import (
     verify_evidence_sources_unchanged,
     verify_evidence_snapshot,
 )
+from reccli.organization_worker import main as organization_worker_main
 
 
 def _reply(summary="ok"):
@@ -43,6 +45,21 @@ def _reply(summary="ok"):
         "candidate": None,
         "risk": None,
         "final": False,
+    }
+
+
+def _conclusion(summary="The bounded run produced a useful result."):
+    return {
+        "summary": summary,
+        "accomplishments": ["Reproduced the declared control."],
+        "conclusive_findings": ["The earliest failing layer is deterministic."],
+        "evidence_and_tests": ["T1000 passed on the exact candidate."],
+        "scientific_or_product_blockers": ["T1001 remains unresolved."],
+        "infrastructure_failures": [],
+        "unresolved": ["The candidate still needs human review."],
+        "promotion_readiness": "not_ready",
+        "next_action": "Review the exact failing receipt.",
+        "limitations": ["No canonical effects were applied."],
     }
 
 
@@ -487,6 +504,58 @@ print(json.dumps({{'type': 'thread.started', 'thread_id': 'fresh-thread'}}))
 
 
 class OrganizationProjectTests(unittest.TestCase):
+    def test_supervisor_failure_writes_emergency_conclusion(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "failed-run"
+            run_dir.mkdir(parents=True)
+            request_path = run_dir / "request.json"
+            request_path.write_text(json.dumps({
+                "run_id": "failed-run",
+                "run_dir": str(run_dir),
+                "project_root": str(root),
+                "provider": "claude",
+                "provider_assignments": {"lead": "claude"},
+                "topology": "scientific",
+                "max_experiments": 3,
+            }), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "run_id": "failed-run",
+                "status": "starting",
+                "round": 0,
+                "completed_turns": 0,
+                "attempted_turns": 0,
+                "failed_turns": 0,
+            }), encoding="utf-8")
+            with patch.object(
+                sys,
+                "argv",
+                ["reccli.organization_worker", str(request_path)],
+            ), patch(
+                "reccli.organization_worker.run_request",
+                side_effect=RuntimeError("mechanical failure"),
+            ):
+                exit_code = organization_worker_main()
+
+            self.assertEqual(exit_code, 1)
+            conclusion = json.loads(
+                (run_dir / "run-conclusion.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(conclusion["terminal_status"], "failed")
+            self.assertEqual(conclusion["generated_by"], "host-fallback")
+            self.assertIn(
+                "mechanical failure",
+                conclusion["infrastructure_failures"][0],
+            )
+            status = json.loads(
+                (run_dir / "status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                status["conclusion"]["summary"],
+                conclusion["summary"],
+            )
+
     def test_project_memory_and_request_are_built_without_api_keys(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1202,6 +1271,105 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(dropped[-1]["status"], "dropped")
             self.assertIn("not an implementation candidate", dropped[-1]["reason"])
 
+    def test_terminal_lead_conclusion_is_durable_and_outside_work_rounds(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            run_dir = root / "devsession" / "agent-organizations" / "conclusion"
+            run_dir.mkdir(parents=True)
+            runner = OrganizationRunner(
+                root, "Qualify the bounded system.", "claude",
+                "scientific", "conclusion", run_dir,
+            )
+            runner.workspaces["lead"] = Workspace(
+                root, "lead", "main", root, [], base,
+            )
+            runner.attempted_turns = 9
+            runner.completed_turns = 8
+            runner.failed_turns = 1
+            session = Mock()
+            session.provider = "claude"
+            session.run.return_value = {
+                "value": _conclusion(),
+                "session_id": "lead-session",
+                "usage": {
+                    "input_tokens": 10,
+                    "cached_input_tokens": 2,
+                    "output_tokens": 3,
+                },
+            }
+            runner.sessions["lead"] = session
+
+            conclusion = runner._write_terminal_lead_conclusion(
+                "round_limit",
+                8,
+                verified_candidate=None,
+                promotion_candidate=None,
+                promotion_request=None,
+            )
+
+            self.assertEqual(conclusion["generated_by"], "lead")
+            self.assertEqual(conclusion["terminal_status"], "round_limit")
+            self.assertEqual(conclusion["promotion_readiness"], "no_candidate")
+            self.assertEqual(conclusion["turn_counts"]["attempted"], 9)
+            self.assertEqual(
+                json.loads(
+                    (run_dir / "run-conclusion.json").read_text(
+                        encoding="utf-8",
+                    )
+                )["summary"],
+                _conclusion()["summary"],
+            )
+            markdown = (run_dir / "run-conclusion.md").read_text(
+                encoding="utf-8",
+            )
+            self.assertIn("What was accomplished", markdown)
+            self.assertIn("Recommended next action", markdown)
+            self.assertIs(
+                session.run.call_args.args[1],
+                RUN_CONCLUSION_SCHEMA,
+            )
+
+    def test_cancelled_run_writes_fallback_without_another_model_turn(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            run_dir = root / "devsession" / "agent-organizations" / "cancelled"
+            run_dir.mkdir(parents=True)
+            runner = OrganizationRunner(
+                root, "Qualify the bounded system.", "claude",
+                "scientific", "cancelled", run_dir,
+            )
+            runner.workspaces["lead"] = Workspace(
+                root, "lead", "main", root, [], base,
+            )
+            session = Mock()
+            session.provider = "claude"
+            runner.sessions["lead"] = session
+
+            conclusion = runner._write_terminal_lead_conclusion(
+                "cancelled",
+                3,
+                verified_candidate=None,
+                promotion_candidate=None,
+                promotion_request=None,
+            )
+
+            session.run.assert_not_called()
+            self.assertEqual(conclusion["generated_by"], "host-fallback")
+            self.assertEqual(conclusion["promotion_readiness"], "cancelled")
+            self.assertTrue((run_dir / "run-conclusion.json").is_file())
+
     def test_integration_scope_accepts_only_a_reviewed_non_vetoed_patch_identity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1585,6 +1753,15 @@ class OrganizationRunnerTests(unittest.TestCase):
             def fake_run(session, prompt, schema, timeout_seconds):
                 session.turn += 1
                 agent_id = session.session_key
+                if schema is RUN_CONCLUSION_SCHEMA:
+                    return {
+                        "value": _conclusion(
+                            "The scientific organization produced a "
+                            "human-reviewable promotion proposal."
+                        ),
+                        "session_id": f"session-{agent_id}",
+                        "usage": {},
+                    }
                 reply = response()
                 if agent_id == "lead":
                     if session.turn == 1:
@@ -1708,6 +1885,10 @@ class OrganizationRunnerTests(unittest.TestCase):
                 self.assertEqual(result["status"], "completed")
                 self.assertTrue(result["human_promotion_required"])
                 self.assertFalse(result["canonical_effects_applied"])
+                self.assertIn("conclusion", result)
+                self.assertEqual(result["conclusion"]["generated_by"], "lead")
+                self.assertTrue(Path(result["conclusion_json"]).is_file())
+                self.assertTrue(Path(result["conclusion_markdown"]).is_file())
                 self.assertEqual(result["blind_review"], None)
                 self.assertEqual(result["experiment_budget"]["used"], 1)
                 promotion = json.loads(Path(result["promotion_request"]).read_text())
@@ -1764,6 +1945,15 @@ class OrganizationRunnerTests(unittest.TestCase):
                 session.turn += 1
                 agent_id = session.session_key
                 seen_providers[agent_id] = session.provider
+                if schema is RUN_CONCLUSION_SCHEMA:
+                    return {
+                        "value": _conclusion(
+                            "The organization shipped the exact reviewed "
+                            "candidate."
+                        ),
+                        "session_id": f"session-{agent_id}",
+                        "usage": {},
+                    }
                 if agent_id.startswith("blind-verifier-"):
                     return {
                         "value": {

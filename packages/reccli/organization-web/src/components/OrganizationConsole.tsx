@@ -10,6 +10,7 @@ import {
 import type {
   ActivityRecord,
   AgentRecord,
+  RunConclusion,
   RunSnapshot,
   RunSummary,
 } from "@/lib/types";
@@ -60,6 +61,9 @@ function roundLabel(
   > | null,
 ): string {
   if (!run) return "Round 0";
+  if (run.phase === "conclusion") {
+    return "Lead conclusion";
+  }
   if (
     run.phase === "closeout" ||
     (run.max_rounds !== undefined && run.round > run.max_rounds)
@@ -338,6 +342,67 @@ function AgentStream({
         </span>
       </div>
     </section>
+  );
+}
+
+function ConclusionPanel({ conclusion }: { conclusion: RunConclusion }) {
+  const evidenceCount = conclusion.evidence_and_tests?.length || 0;
+  const blockerCount =
+    (conclusion.scientific_or_product_blockers?.length || 0) +
+    (conclusion.infrastructure_failures?.length || 0);
+  return (
+    <details className="conclusion-panel" open>
+      <summary>
+        <div>
+          <span className="eyebrow">Lead after-action report</span>
+          <strong>What this organization accomplished</strong>
+        </div>
+        <div className="conclusion-summary-facts">
+          <span>{titleCase(conclusion.promotion_readiness)}</span>
+          <span>{evidenceCount} evidence items</span>
+          <span>{blockerCount} blockers</span>
+        </div>
+      </summary>
+      <div className="conclusion-body">
+        <div className="conclusion-outcome">
+          <p>{conclusion.summary}</p>
+          <div className="conclusion-meta">
+            <span>{conclusion.lead_agent_id || "lead"}</span>
+            <span>{providerLabel(conclusion.lead_provider)}</span>
+            <span>{titleCase(conclusion.generated_by)}</span>
+          </div>
+        </div>
+        <div className="conclusion-columns">
+          <div>
+            <h3>Accomplished</h3>
+            <ul>
+              {(conclusion.accomplishments || []).map((item, index) => (
+                <li key={`accomplishment-${index}`}>{item}</li>
+              ))}
+              {!conclusion.accomplishments?.length && (
+                <li>No completed deliverable was recorded.</li>
+              )}
+            </ul>
+          </div>
+          <div>
+            <h3>Still blocking</h3>
+            <ul>
+              {[
+                ...(conclusion.scientific_or_product_blockers || []),
+                ...(conclusion.infrastructure_failures || []),
+              ].map((item, index) => (
+                <li key={`blocker-${index}`}>{item}</li>
+              ))}
+              {!blockerCount && <li>No terminal blocker was recorded.</li>}
+            </ul>
+          </div>
+          <div>
+            <h3>Next action</h3>
+            <p>{conclusion.next_action}</p>
+          </div>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -739,6 +804,10 @@ export default function OrganizationConsole() {
             ))}
           </div>
         </section>
+
+        {snapshot?.conclusion && (
+          <ConclusionPanel conclusion={snapshot.conclusion} />
+        )}
 
         <div className="workspace-grid">
           {snapshot ? (

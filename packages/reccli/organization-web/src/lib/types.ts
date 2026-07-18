@@ -89,6 +89,39 @@ export interface ControlRecord {
   };
 }
 
+export interface RunConclusion {
+  schema?: string;
+  run_id?: string;
+  terminal_status?: string;
+  generated_at?: string;
+  generated_by?: "lead" | "host-fallback" | string;
+  lead_agent_id?: string;
+  lead_provider?: string;
+  summary: string;
+  accomplishments: string[];
+  conclusive_findings: string[];
+  evidence_and_tests: string[];
+  scientific_or_product_blockers: string[];
+  infrastructure_failures: string[];
+  unresolved: string[];
+  promotion_readiness: string;
+  next_action: string;
+  limitations: string[];
+  candidates?: Array<{
+    candidate?: string;
+    kind?: string;
+    agent_id?: string;
+    round?: number;
+    paths?: string[];
+  }>;
+  artifacts?: string[];
+  turn_counts?: {
+    attempted?: number;
+    completed?: number;
+    failed?: number;
+  };
+}
+
 export interface RunSnapshot {
   run_id: string;
   run_dir: string;
@@ -147,4 +180,5 @@ export interface RunSnapshot {
   human_promotion_required?: boolean;
   promotion_request?: Record<string, unknown> | null;
   artifact_manifest?: Record<string, unknown> | null;
+  conclusion?: RunConclusion | null;
 }

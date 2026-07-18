@@ -425,6 +425,105 @@ select:disabled {
   background: rgba(11, 21, 24, 0.72);
 }
 
+.conclusion-panel {
+  margin: 14px 24px 0;
+  overflow: hidden;
+  border: 1px solid rgba(105, 239, 197, 0.22);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(105, 239, 197, 0.08), rgba(19, 33, 37, 0.92));
+  box-shadow: var(--shadow);
+}
+
+.conclusion-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.conclusion-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.conclusion-panel summary strong {
+  font-size: 13px;
+}
+
+.conclusion-summary-facts,
+.conclusion-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.conclusion-summary-facts span,
+.conclusion-meta span {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.conclusion-body {
+  max-height: 310px;
+  overflow-y: auto;
+  padding: 0 16px 15px;
+  border-top: 1px solid var(--line);
+}
+
+.conclusion-outcome {
+  padding: 13px 0;
+}
+
+.conclusion-outcome p,
+.conclusion-columns p {
+  margin: 0 0 9px;
+  color: #d7e2e0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.conclusion-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.conclusion-columns > div {
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.conclusion-columns h3 {
+  margin: 0 0 8px;
+  color: var(--mint);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.conclusion-columns ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.conclusion-columns li {
+  margin: 5px 0;
+  color: #c8d4d2;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .team-scroller {
   min-width: 0;
   display: flex;
@@ -1208,6 +1307,19 @@ select:disabled {
 
   .team-rail {
     padding: 12px;
+  }
+
+  .conclusion-panel {
+    margin: 12px 12px 0;
+  }
+
+  .conclusion-panel summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .conclusion-columns {
+    grid-template-columns: 1fr;
   }
 
   .workspace-grid {

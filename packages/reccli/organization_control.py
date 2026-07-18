@@ -304,6 +304,7 @@ def organization_snapshot(
 
     promotion = _read_json(run_dir / "promotion-request.json", None)
     artifact_manifest = _read_json(run_dir / "deliverables" / "manifest.json", None)
+    conclusion = _read_json(run_dir / "run-conclusion.json", None)
     topology = _topology_snapshot(run, status)
     live, active_agent_ids = process_group_activity(
         pid,
@@ -428,6 +429,7 @@ def organization_snapshot(
         },
         "promotion_request": promotion,
         "artifact_manifest": artifact_manifest,
+        "conclusion": conclusion,
     }
 
 

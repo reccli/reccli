@@ -8,7 +8,12 @@ import sys
 import traceback
 from pathlib import Path
 
-from .organization import _utc_now, run_request
+from .organization import (
+    _utc_now,
+    _write_run_conclusion_files,
+    get_topology,
+    run_request,
+)
 
 
 def _write_status(path: Path, value: dict) -> None:
@@ -37,6 +42,93 @@ def main() -> int:
             current = json.loads(status_path.read_text(encoding="utf-8"))
         except Exception:
             current = {}
+        candidate_records = []
+        candidate_path = run_dir / "candidates.jsonl"
+        if candidate_path.exists():
+            for raw in candidate_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    candidate_records.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    continue
+        try:
+            lead_id = get_topology(
+                str(request.get("topology") or "google-rotating")
+            ).leader_id
+        except Exception:
+            lead_id = "lead"
+        failure_detail = f"{type(exc).__name__}: {str(exc)}"
+        conclusion = {
+            "schema": "reccli.organization-run-conclusion.v1",
+            "run_id": request.get("run_id"),
+            "terminal_status": "failed",
+            "generated_at": _utc_now(),
+            "generated_by": "host-fallback",
+            "lead_agent_id": lead_id,
+            "lead_provider": (
+                request.get("provider_assignments") or {}
+            ).get(lead_id),
+            "summary": (
+                "The organization supervisor failed before a terminal lead "
+                "conclusion could complete."
+            ),
+            "accomplishments": [
+                (
+                    f"Recorded {int(current.get('completed_turns', 0) or 0)} "
+                    "completed turn(s) before the supervisor failure."
+                ),
+            ],
+            "conclusive_findings": [],
+            "evidence_and_tests": [],
+            "scientific_or_product_blockers": [],
+            "infrastructure_failures": [failure_detail],
+            "unresolved": [
+                "The partial durable record requires inspection before retry.",
+            ],
+            "promotion_readiness": (
+                "not_ready"
+                if any(
+                    record.get("kind") == "implementation"
+                    for record in candidate_records
+                )
+                else "no_candidate"
+            ),
+            "next_action": (
+                "Inspect worker_traceback.txt and the partial run artifacts, "
+                "repair the supervisor failure, and retry from a clean "
+                "checkpoint."
+            ),
+            "limitations": [
+                (
+                    "This is a conservative host fallback; the lead could not "
+                    "perform terminal synthesis."
+                ),
+            ],
+            "candidates": candidate_records,
+            "integrated_candidates": {},
+            "verified_candidate": None,
+            "promotion_candidate": None,
+            "promotion_request": None,
+            "artifacts": [],
+            "turn_counts": {
+                "attempted": int(current.get("attempted_turns", 0) or 0),
+                "completed": int(current.get("completed_turns", 0) or 0),
+                "failed": int(current.get("failed_turns", 0) or 0) + 1,
+            },
+            "experiment_budget": {
+                "maximum": int(request.get("max_experiments", 0) or 0),
+                "used": int(current.get("candidate_artifact_bundles", 0) or 0),
+                "remaining": max(
+                    0,
+                    int(request.get("max_experiments", 0) or 0)
+                    - int(current.get("candidate_artifact_bundles", 0) or 0),
+                ),
+            },
+            "canonical_effects_applied": False,
+        }
+        try:
+            _write_run_conclusion_files(run_dir, conclusion)
+        except Exception:
+            pass
         failure = {
             **current,
             "run_id": request.get("run_id"), "status": "failed",
@@ -47,6 +139,7 @@ def main() -> int:
             "provider_assignments": request.get("provider_assignments"),
             "blind_verifier_provider": request.get("blind_verifier_provider"),
             "control_protocol": request.get("control_protocol"),
+            "conclusion": conclusion,
             "updated_at": _utc_now(), "run_dir": str(run_dir),
         }
         _write_status(status_path, failure)

@@ -1077,7 +1077,13 @@ def start_organization(
     administrative state: the RecCli supervisor validates scopes, materializes
     commits, and applies reviewed candidates. Remote push and hosting
     credentials are outside this tool. Poll with
-    `organization_status`; stop a live run with `cancel_organization`.
+    `organization_status`; stop a live run with `cancel_organization`. Every
+    terminal run writes a lead-owned `run-conclusion.json` and
+    `run-conclusion.md` describing accomplishments, evidence, blockers,
+    infrastructure failures, promotion readiness, and the smallest next
+    action. `organization_status` returns that conclusion prominently once it
+    exists. MCP is pull-based, so callers must continue polling; RecCli cannot
+    inject an unsolicited message into a launch turn that has already ended.
 
     `evidence_paths` selects ignored or external files/directories that every
     agent must see (for example sealed experiment receipts or a related
@@ -1194,7 +1200,15 @@ def start_organization(
             "protected_paths": request["protected_paths"],
             "context_manifest": request["context_manifest"],
             "max_experiments": request["max_experiments"],
-            "next": "Call organization_status with this run_id.",
+            "next": (
+                "Poll organization_status with this run_id until terminal, "
+                "then report its conclusion verbatim before adding your own "
+                "interpretation."
+            ),
+            "terminal_output": (
+                "run-conclusion.json and run-conclusion.md; returned as "
+                "organization_status.conclusion"
+            ),
         }, indent=2)
     except Exception as exc:
         return json.dumps({"status": "failed_to_start", "error": str(exc)}, indent=2)
@@ -1209,7 +1223,10 @@ def organization_status(
     """Read durable status for a multi-agent organization run.
 
     This is safe to call after an MCP restart because status is read from the
-    project's run directory rather than process memory.
+    project's run directory rather than process memory. Terminal runs include
+    a top-level `conclusion` authored by the organization lead, or a
+    conservative host fallback when cancellation or infrastructure failure
+    prevented that final read-only synthesis.
 
     Args:
         working_directory: Project root or any path inside the project.

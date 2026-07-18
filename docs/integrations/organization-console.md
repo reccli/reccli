@@ -30,6 +30,33 @@ Claude Code and Codex can also call `open_organization_console`.
 - Hidden model reasoning is never exposed. Only durable operational records are
   displayed.
 
+## Terminal lead conclusion
+
+Every run that reaches a terminal state publishes:
+
+```text
+devsession/agent-organizations/<run-id>/run-conclusion.json
+devsession/agent-organizations/<run-id>/run-conclusion.md
+```
+
+For normal completion, round-limit, and stalled outcomes, RecCli gives the
+organization lead one final read-only synthesis pass outside the configured
+working-round and closeout budgets. The report separates accomplishments,
+conclusive findings, evidence, scientific or product blockers, infrastructure
+failures, unresolved work, exact candidates, promotion readiness, and the
+smallest recommended next action.
+
+Cancellation never starts another model turn after the stop request. A
+supervisor crash may also prevent the lead pass. In either case RecCli writes a
+conservative `host-fallback` conclusion from durable mechanics and the last
+available lead summary without inferring scientific or product truth.
+
+`organization_status` returns the document as its top-level `conclusion`, and
+the console renders it as the lead after-action report. MCP is pull-based:
+launching agents must poll `organization_status` until the run is terminal;
+RecCli cannot inject an unsolicited reply into an agent turn that has already
+ended.
+
 ## Live activity telemetry
 
 Native Claude Code and Codex JSON events are consumed while a turn is running.
