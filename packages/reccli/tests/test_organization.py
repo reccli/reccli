@@ -2489,6 +2489,59 @@ class OrganizationProjectTests(unittest.TestCase):
                     runner.topology.agent("worker-d"), reply, 3,
                 )
 
+    def test_tracked_report_artifact_does_not_discard_delegation_turn(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "report-run"
+            run_dir.mkdir(parents=True)
+            runner = OrganizationRunner(
+                root, "Delegate bounded work.", "claude",
+                "scientific", "report-run", run_dir, max_experiments=3,
+            )
+            runner.candidate_artifact_root.mkdir()
+            runner.candidate_artifact_root.chmod(0o555)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-b"] = Workspace(
+                root, "manager-b", "main", root, [], base,
+            )
+            report = (
+                root / runner.artifact_staging_prefix / "manager-b" /
+                "r2" / "delegation.md"
+            )
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "# Delegation\n\nWorker B owns the bounded implementation.\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", "-f", report.relative_to(root).as_posix()],
+                cwd=root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "record delegation"],
+                cwd=root, check=True,
+            )
+            reply = _reply()
+            reply["artifacts"] = [report.relative_to(root).as_posix()]
+            reply["messages"] = [{
+                "to": "worker-b", "tag": "plan",
+                "content": "Implement the bounded two-file change.",
+                "candidate": None,
+                "workItem": "B-R1-CLEAN-SUCCESSOR",
+                "risk": "high",
+            }]
+
+            bundle = runner._seal_reported_artifacts(
+                runner.topology.agent("manager-b"), reply, 2,
+            )
+
+            self.assertIsNone(bundle)
+            self.assertEqual(runner._experiment_used(), 0)
+
     def test_scientific_git_backed_probe_consumes_budget_but_report_does_not(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

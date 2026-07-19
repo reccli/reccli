@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import textwrap
@@ -492,6 +493,77 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 result["launch_contract"]["experiment_budget_scope"],
                 "per_run",
             )
+
+    def test_retryable_host_failure_does_not_block_prior_lead_continuation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(
+                root,
+                continuation=True,
+                carry_experiment_budget=False,
+                max_experiments=3,
+            )
+            parent_dir = _write_terminal_run(
+                root,
+                run_id="eligible-parent",
+            )
+            failed_dir = _write_terminal_run(
+                root,
+                run_id="failed-supervisor",
+                status="failed",
+                readiness="no_candidate",
+                generated_by="host-fallback",
+            )
+            failed_conclusion_path = failed_dir / "run-conclusion.json"
+            failed_conclusion = json.loads(
+                failed_conclusion_path.read_text(encoding="utf-8"),
+            )
+            failed_conclusion["infrastructure_failures"] = [
+                "delegation barrier failed after a rejected manager turn",
+            ]
+            failed_conclusion["verified_candidate"] = None
+            failed_conclusion["promotion_candidate"] = None
+            failed_conclusion["promotion_request"] = None
+            failed_conclusion_path.write_text(
+                json.dumps(failed_conclusion, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.utime(parent_dir, (1, 1))
+            os.utime(failed_dir, (2, 2))
+            captured = {}
+
+            def fake_start(arguments):
+                captured.update(arguments)
+                return {
+                    "status": "starting",
+                    "run_id": "successor-run",
+                    "run_dir": str(
+                        root / "devsession" / "agent-organizations"
+                        / "successor-run"
+                    ),
+                    "pid": 1234,
+                }
+
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                side_effect=fake_start,
+            ):
+                result = start_project_organization(
+                    str(root),
+                    open_console=False,
+                )
+
+            self.assertEqual(
+                result["mission_selection"]["parent_run_id"],
+                "eligible-parent",
+            )
+            self.assertEqual(
+                result["mission_selection"]["skipped_retryable_run_ids"],
+                ["failed-supervisor"],
+            )
+            self.assertIn("eligible-parent", captured["mission"])
+            self.assertEqual(captured["max_experiments"], 3)
 
     def test_ineligible_terminal_result_blocks_instead_of_replaying_base_mission(self):
         with tempfile.TemporaryDirectory() as td:

@@ -3652,32 +3652,14 @@ class OrganizationRunner:
 
     def _seal_reported_artifacts(
         self, agent: AgentSpec, reply: Dict[str, Any], round_number: int,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Seal explicitly reported ignored/generated outputs outside Git.
 
         The Git candidate remains the source-change identity. This bundle binds
         its generated evidence to that exact commit without retaining large
         experiment outputs in Git object storage.
         """
-        handoffs = [
-            message for message in reply["messages"]
-            if message.get("tag") == "handoff" and message.get("candidate")
-        ]
-        identities = {
-            (message["candidate"], message.get("workItem"), message.get("risk"))
-            for message in handoffs
-        }
-        if len(identities) != 1:
-            raise RuntimeError(
-                "reported generated artifacts require exactly one candidate handoff"
-            )
-        candidate, work_item, risk = next(iter(identities))
         workspace = self.workspaces[agent.agent_id]
-        head = _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
-        if candidate != head:
-            raise RuntimeError(
-                f"generated artifacts must bind to current HEAD {head}, got {candidate}"
-            )
         sources: List[Tuple[str, Path]] = []
         seen: Set[Path] = set()
         for raw in reply["artifacts"]:
@@ -3696,20 +3678,38 @@ class OrganizationRunner:
                 raise RuntimeError(f"reported generated artifact does not exist: {source}")
             relative = source.relative_to(workspace.cwd.resolve()).as_posix()
             if self._artifact_path(relative):
-                raise RuntimeError(
-                    f"{relative} already uses Git-backed artifact staging; do not bundle it twice"
-                )
+                # Native agents commonly cite their durable tracked report in
+                # the reply's artifact list. It is already bound to the Git
+                # candidate and must not be treated as generated experiment
+                # output or invalidate otherwise useful delegation messages.
+                continue
             tracked = _git(workspace.cwd, ["ls-files", "--", relative]).strip()
             if tracked:
-                raise RuntimeError(
-                    f"tracked path {relative} belongs in the Git candidate, not a generated-output bundle"
-                )
+                continue
             _assert_snapshot_source_has_no_symlinks(source)
             if source not in seen:
                 seen.add(source)
                 sources.append((relative, source))
         if not sources:
-            raise RuntimeError("no generated artifact paths remained after validation")
+            return None
+        handoffs = [
+            message for message in reply["messages"]
+            if message.get("tag") == "handoff" and message.get("candidate")
+        ]
+        identities = {
+            (message["candidate"], message.get("workItem"), message.get("risk"))
+            for message in handoffs
+        }
+        if len(identities) != 1:
+            raise RuntimeError(
+                "reported generated artifacts require exactly one candidate handoff"
+            )
+        candidate, work_item, risk = next(iter(identities))
+        head = _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
+        if candidate != head:
+            raise RuntimeError(
+                f"generated artifacts must bind to current HEAD {head}, got {candidate}"
+            )
         self._claim_experiment_slot(
             agent,
             round_number,

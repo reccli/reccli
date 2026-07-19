@@ -474,13 +474,25 @@ def _read_json_object(path: Path, *, label: str) -> tuple[Dict[str, Any], bytes]
     return value, payload
 
 
-def _latest_terminal_record(root: Path) -> Optional[Dict[str, Any]]:
+def _latest_terminal_record(
+    root: Path,
+    *,
+    excluded_run_ids: Optional[set[str]] = None,
+) -> Optional[Dict[str, Any]]:
     listed = list_organization_runs(str(root), limit=100)
     runs = listed.get("runs", [])
     if not isinstance(runs, list) or not runs:
         return None
-    latest = runs[0]
-    if not isinstance(latest, dict):
+    excluded = excluded_run_ids or set()
+    latest = next(
+        (
+            run for run in runs
+            if isinstance(run, dict)
+            and str(run.get("run_id") or "") not in excluded
+        ),
+        None,
+    )
+    if latest is None:
         return None
     status = str(latest.get("status") or "unknown")
     if status not in TERMINAL_STATUSES:
@@ -523,6 +535,23 @@ def _latest_terminal_record(root: Path) -> Optional[Dict[str, Any]]:
         "conclusion": conclusion,
         "conclusion_sha256": hashlib.sha256(conclusion_bytes).hexdigest(),
     }
+
+
+def _retryable_infrastructure_failure(terminal: Dict[str, Any]) -> bool:
+    """Identify a failed supervisor run that cannot author a successor mission."""
+    conclusion = terminal.get("conclusion")
+    if not isinstance(conclusion, dict):
+        return False
+    return bool(
+        terminal.get("status") == "failed"
+        and conclusion.get("generated_by") == "host-fallback"
+        and conclusion.get("canonical_effects_applied") is False
+        and conclusion.get("promotion_readiness") == "no_candidate"
+        and not conclusion.get("verified_candidate")
+        and not conclusion.get("promotion_candidate")
+        and not conclusion.get("promotion_request")
+        and conclusion.get("infrastructure_failures")
+    )
 
 
 def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
@@ -633,8 +662,21 @@ def _apply_terminal_continuation(
     if policy is None:
         return arguments, selection
     terminal = _latest_terminal_record(root)
+    skipped_retryable_runs: List[str] = []
+    while (
+        terminal is not None
+        and _retryable_infrastructure_failure(terminal)
+    ):
+        skipped_retryable_runs.append(terminal["run_id"])
+        terminal = _latest_terminal_record(
+            root,
+            excluded_run_ids=set(skipped_retryable_runs),
+        )
     if terminal is None:
-        return arguments, selection
+        return arguments, {
+            **selection,
+            "skipped_retryable_run_ids": skipped_retryable_runs,
+        }
     conclusion = terminal["conclusion"]
     readiness = str(conclusion.get("promotion_readiness") or "")
     if (
@@ -699,6 +741,7 @@ def _apply_terminal_continuation(
         "parent_promotion_readiness": readiness,
         "parent_conclusion_sha256": terminal["conclusion_sha256"],
         "base_selection": selection,
+        "skipped_retryable_run_ids": skipped_retryable_runs,
     }
     return updated, continuation_selection
 
