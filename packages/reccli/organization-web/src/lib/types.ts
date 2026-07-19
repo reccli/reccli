@@ -29,6 +29,7 @@ export interface AgentRecord {
   is_lead: boolean;
   is_finalizer: boolean;
   is_integrator: boolean;
+  goal?: WorkerGoal | null;
   assignment?: {
     from?: string;
     content?: string;
@@ -43,6 +44,35 @@ export interface AgentRecord {
     summary?: string;
     usage?: Record<string, number>;
   };
+}
+
+export interface WorkerGoal {
+  worker_id: string;
+  manager_id?: string;
+  work_item: string;
+  objective: string;
+  risk?: string;
+  source?: "manager" | "human" | string;
+  status: string;
+  created_round?: number;
+  updated_round?: number;
+  completed_round?: number;
+  candidate?: string | null;
+}
+
+export interface OffGoalFlag {
+  flag_id: string;
+  worker_id: string;
+  manager_id?: string;
+  work_item: string;
+  content: string;
+  risk?: string;
+  status: string;
+  created_round?: number;
+  consulted_manager_id?: string | null;
+  consult_round?: number | null;
+  validation?: string | null;
+  validation_round?: number | null;
 }
 
 export interface ActivityRecord {
@@ -308,6 +338,8 @@ export interface RunSnapshot {
       tags?: string[] | null;
     }>;
   };
+  worker_goals?: Record<string, WorkerGoal>;
+  off_goal_flags?: OffGoalFlag[];
   activities: ActivityRecord[];
   messages: ActivityRecord[];
   telemetry?: ActivityRecord[];

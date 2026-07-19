@@ -84,9 +84,13 @@ dependencies and progress upward, while the lead wakes on new macro information
 instead of churning as another worker.
 
 The default `google-rotating` structure has one mission lead, four engineering
-managers, and four workers. Workers read the mission, code, tests, RecCli
-project memory, and task-relevant repository documentation. Routine traffic
-stays at the manager layer; immutable worker candidates receive rotating
+managers, and four workers. RecCli binds one visible problem-solving goal to
+each worker; only its primary manager or an explicit human `plan` may replace
+it. Workers read the mission, code, tests, RecCli project memory, and
+task-relevant repository documentation. Unrelated issues and contradictory
+context are flagged without becoming worker scope; one peer-manager
+consultation validates a redirect. Routine traffic stays at the manager layer;
+immutable worker candidates receive rotating
 alternate-manager review before the release manager can integrate them. A
 fresh read-only agent independently verifies the exact final commit.
 

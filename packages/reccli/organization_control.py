@@ -349,6 +349,17 @@ def organization_snapshot(
     run = _read_json(run_dir / "run.json", {}) or {}
     if not run:
         run = _read_json(run_dir / "request.json", {}) or {}
+    goal_state = _read_json(run_dir / "goal-state.json", {}) or {}
+    worker_goals = (
+        status.get("worker_goals")
+        or goal_state.get("worker_goals")
+        or {}
+    )
+    off_goal_flags = (
+        status.get("off_goal_flags")
+        or goal_state.get("off_goal_flags")
+        or []
+    )
     supervisor = _read_json(run_dir / "supervisor.json", {}) or {}
     pid = _supervisor_pid(run_dir, status)
     count = max(0, min(int(include_recent), 500))
@@ -448,6 +459,8 @@ def organization_snapshot(
                 else:
                     agent["state"] = "idle"
         if agent["id"] in topology.get("worker_ids", []):
+            goal = worker_goals.get(agent["id"])
+            agent["goal"] = goal if isinstance(goal, dict) else None
             primary = topology.get("primary_manager_by_worker", {}).get(agent["id"])
             assignments = [
                 message for message in all_messages
@@ -459,8 +472,8 @@ def organization_snapshot(
                 and message.get("risk") in {"routine", "high", "release"}
             ]
             agent["assignment"] = assignments[-1] if assignments else None
-            if not assignments and not last:
-                agent["state"] = "awaiting_assignment"
+            if not goal and not assignments and not last:
+                agent["state"] = "awaiting_goal"
         if agent["id"] in topology.get("research_specialist_ids", []):
             director = topology.get("research_director_id")
             assignments = [
@@ -480,7 +493,9 @@ def organization_snapshot(
             status.get("experiment_loop_halted_workers") or []
         ):
             agent["state"] = "blocked"
-        elif agent.get("state") not in {"awaiting_assignment", "blocked", "done"}:
+        elif agent.get("state") not in {
+            "awaiting_assignment", "awaiting_goal", "blocked", "done",
+        }:
             # A model returning "working" means it wants another scheduled
             # turn; it does not mean a provider subprocess is still executing.
             agent["state"] = "idle"
@@ -561,6 +576,8 @@ def organization_snapshot(
                 status.get("experiment_loop_halted_workers") or []
             ),
         },
+        "worker_goals": worker_goals,
+        "off_goal_flags": off_goal_flags,
         "messages": messages,
         "events": events,
         "telemetry": telemetry,

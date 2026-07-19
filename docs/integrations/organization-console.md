@@ -169,26 +169,34 @@ The hierarchy is an assignment dependency, not a ban on parallel execution:
 1. The lead performs macro reconnaissance and delegates bounded outcomes to
    managers.
 2. Managers refine those outcomes using their specialist context.
-3. A worker's first turn requires a primary-manager `plan` or `handoff` with a
-   named `workItem` and risk.
-4. Once assigned, workers run in parallel and report through managers.
+3. A worker's first turn requires exactly one primary-manager goal with a named
+   `workItem`, observable problem-solving outcome, and risk.
+4. Once assigned, workers run in parallel on that goal and report only through
+   their primary manager.
 5. The lead wakes on manager research, manager-summarized worker progress,
    promotion decisions, or operator steering.
 
 The runner verifies the complete lead-to-manager map after round one and the
 complete manager-to-worker map after round two. A lane with no implementation
-work still receives an explicit research, review, or standby work item. Missing
-delegations fail the run before parallel execution instead of leaving agents to
-invent overlapping scopes.
+work remains management state; RecCli rejects standby, monitoring-only, and
+no-action worker goals rather than manufacturing paper work. Missing goals fail
+the run before parallel execution instead of leaving agents to invent
+overlapping scopes.
 
 After that gate, lead and manager roles are event-driven: saying
 `state=working` does not schedule another turn without a new inbox event.
-Workers may continue their bounded assigned lane. Veto auditors wake only for
-an exact candidate or release dossier, and release closeout stops early when
-its structural progress fingerprint is unchanged.
+Workers may continue their one active goal. When a worker notices an unrelated
+issue or a contradiction between context sources, it sends one `flag` without
+changing scope. The primary manager asks exactly one peer manager for
+validation, waits for the answer, and only then keeps or replaces the worker
+goal. Veto auditors wake only for an exact candidate or release dossier, and
+release closeout stops early when its structural progress fingerprint is
+unchanged.
 
-Advisory traffic from alternate managers remains visible to workers, but it
-cannot activate an unassigned worker.
+Alternate managers consult the primary manager; they cannot directly activate
+or redirect a worker. `goal-state.json` records the visible active goals,
+history, flags, and consultations. In the console, a `plan` steering message to
+a worker is an explicit human goal replacement.
 
 ## Control protocol
 

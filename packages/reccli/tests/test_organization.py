@@ -2219,7 +2219,7 @@ class OrganizationProjectTests(unittest.TestCase):
             result = runner._run_turn(artifact_agent, 1)
             self.assertEqual(result["reply"]["summary"], "ok")
 
-    def test_artifact_only_commit_is_not_rewritten_or_routed_as_code_candidate(self):
+    def test_artifact_only_commit_is_not_routed_by_an_unassigned_worker(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -2298,11 +2298,8 @@ class OrganizationProjectTests(unittest.TestCase):
                 json.loads(line)
                 for line in (run_dir / "messages.jsonl").read_text().splitlines()
             ]
-            self.assertEqual(routed[-1]["status"], "delivered")
-            self.assertEqual(
-                routed[-1]["workItem"],
-                "L8-EXACT-BLOCKED-CLOSEOUT",
-            )
+            self.assertEqual(routed[-1]["status"], "dropped")
+            self.assertIn("without one active goal", routed[-1]["reason"])
 
             runner._deliver_message("lead", {
                 "to": "organization", "tag": "status",
@@ -3076,6 +3073,189 @@ class OrganizationProjectTests(unittest.TestCase):
                 set(runner.topology.worker_ids),
             )
 
+    def test_worker_has_one_host_owned_problem_solving_goal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Fix the delivery pipeline.", "claude",
+                "scientific", "one-goal", run_dir,
+            )
+            goal = {
+                "to": "worker-a",
+                "tag": "plan",
+                "content": "Fix the radius qualifier and pass its focused test.",
+                "candidate": None,
+                "workItem": "radius-qualifier",
+                "risk": "high",
+            }
+
+            runner._deliver_message("manager-b", goal, 2)
+            self.assertEqual(runner.inboxes["worker-a"], [])
+            runner._deliver_message("manager-a", goal, 2)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"],
+                "radius-qualifier",
+            )
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["status"],
+                "active",
+            )
+
+            runner._deliver_message("manager-a", {
+                **goal,
+                "content": "Standby and monitor the repository.",
+                "workItem": "standby-lane",
+            }, 3)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"],
+                "radius-qualifier",
+            )
+            runner._deliver_message("manager-a", {
+                **goal,
+                "content": "Also refactor unrelated documentation.",
+                "workItem": "unrelated-docs",
+            }, 3)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"],
+                "radius-qualifier",
+            )
+            goal_state = json.loads(
+                (run_dir / "goal-state.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                goal_state["worker_goals"]["worker-a"]["objective"],
+                "Fix the radius qualifier and pass its focused test.",
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [], base,
+            )
+            prompt = runner._build_prompt(
+                runner.topology.agent("worker-a"),
+                runner.inboxes["worker-a"],
+                3,
+                True,
+            )
+            self.assertIn("## Active execution goal", prompt)
+            self.assertIn("ONE ACTIVE GOAL", prompt)
+            self.assertIn(
+                "Fix the radius qualifier and pass its focused test.",
+                prompt,
+            )
+            self.assertNotIn(
+                "Own the single semantic reconciliation",
+                prompt,
+            )
+            records = [
+                json.loads(line)
+                for line in (run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            self.assertIn("primary manager", records[0]["reason"])
+            self.assertIn("problem-solving outcome", records[-2]["reason"])
+            self.assertIn("already has active goal", records[-1]["reason"])
+
+    def test_off_goal_flag_requires_exactly_one_peer_manager_consult(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Fix the delivery pipeline.", "claude",
+                "scientific", "off-goal-consult", run_dir,
+            )
+            runner._deliver_message("manager-a", {
+                "to": "worker-a",
+                "tag": "plan",
+                "content": "Fix the primitive qualifier and run its tests.",
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "high",
+            }, 2)
+            runner._deliver_message("worker-a", {
+                "to": "manager-a",
+                "tag": "flag",
+                "content": (
+                    "docs/a.md contradicts docs/b.md about an unrelated "
+                    "release naming rule; no code was changed for it."
+                ),
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "high",
+            }, 3)
+            flag = next(iter(runner.off_goal_flags.values()))
+            self.assertEqual(flag["status"], "needs_consult")
+
+            runner._deliver_message("manager-a", {
+                "to": "worker-a",
+                "tag": "plan",
+                "content": "Switch to fixing the naming rule.",
+                "candidate": None,
+                "workItem": "naming-rule",
+                "risk": "routine",
+            }, 3)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"],
+                "primitive-qualifier",
+            )
+
+            runner._deliver_message("manager-a", {
+                "to": "manager-c",
+                "tag": "question",
+                "content": "Validate whether the naming contradiction is real.",
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "routine",
+            }, 4)
+            self.assertEqual(flag["status"], "consulting")
+            self.assertEqual(flag["consulted_manager_id"], "manager-c")
+            runner._deliver_message("manager-a", {
+                "to": "manager-b",
+                "tag": "question",
+                "content": "Provide a second validation too.",
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "routine",
+            }, 4)
+            self.assertFalse(any(
+                message.get("content") == "Provide a second validation too."
+                for message in runner.inboxes["manager-b"]
+            ))
+
+            runner._deliver_message("manager-c", {
+                "to": "manager-a",
+                "tag": "answer",
+                "content": "Confirmed, but it does not affect the active fix.",
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "routine",
+            }, 5)
+            self.assertEqual(flag["status"], "validated")
+            runner._deliver_message("manager-a", {
+                "to": "worker-a",
+                "tag": "plan",
+                "content": "Fix the validated release naming contradiction.",
+                "candidate": None,
+                "workItem": "naming-rule",
+                "risk": "routine",
+            }, 5)
+            self.assertEqual(flag["status"], "acted")
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"],
+                "naming-rule",
+            )
+            self.assertEqual(
+                runner.worker_goal_history[-1]["work_item"],
+                "primitive-qualifier",
+            )
+
     def test_event_scheduler_keeps_managers_inbox_driven(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -3667,7 +3847,7 @@ class OrganizationRunnerTests(unittest.TestCase):
                             message(
                                 "worker-a", "plan",
                                 "Implement and commit the app.py change.",
-                                None, "app-py-delivery", "routine",
+                                None, "app-change", "routine",
                             ),
                         ])
                     elif worker_candidate["sha"] and "APPROVED:" in prompt:
@@ -3717,7 +3897,7 @@ class OrganizationRunnerTests(unittest.TestCase):
                         reply = response([
                             message(
                                 "worker-d", "plan",
-                                "Prepare the release validation checklist and remain available for integration evidence.",
+                                "Run composed release validation tests against the integration path.",
                                 None, "release/worker-d", "routine",
                             ),
                         ])

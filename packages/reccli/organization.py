@@ -34,18 +34,22 @@ from .project.devproject import DevProjectManager, discover_project_root
 
 MESSAGE_TAGS = {
     "plan", "question", "answer", "handoff", "review",
-    "decision", "status", "blocker",
+    "decision", "status", "blocker", "flag",
 }
 DELEGATION_TAGS = {"plan", "handoff", "review"}
 RISKS = {"routine", "high", "release"}
 STATES = {"working", "idle", "blocked", "done"}
 DISPOSITIONS = {"continue", "promote", "no_promotion", "pending_human"}
+WORKER_GOAL_TERMINAL_STATES = {
+    "candidate_ready", "completed", "superseded", "cancelled",
+}
 ARTIFACT_STAGING_ROOT = ".reccli-org-artifacts"
 CONTEXT_PACK_SCHEMA = "reccli.organization-context-packs.v1"
 HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
 DEFAULT_CLOSEOUT_ROUNDS = 4
 ACTIVITY_SCHEMA = "reccli.organization-activity.v1"
 HOST_STATE_SCHEMA = "reccli.organization-host-state.v1"
+GOAL_STATE_SCHEMA = "reccli.organization-goals.v1"
 EXPERIMENT_RECORD_SCHEMA = "reccli.organization-experiment-record.v1"
 EXPERIMENT_POLICY_SCHEMA = "reccli.organization-experiment-policy.v1"
 EXPERIMENT_CONTRACT_SCHEMA = "reccli.organization-experiment-contract.v1"
@@ -400,17 +404,17 @@ def get_topology(name: str = "google-rotating") -> Topology:
         agents = [
             AgentSpec(
                 "lead", "scientific mission lead",
-                "Own the scientific question and hard resource budget. Treat RecCli's host-owned state brief as authoritative for mechanical Git identity, ancestry, launch HEAD, and candidate-kind facts; do not ask multiple lanes to re-establish them. Use the first turn for macro reconnaissance and send every manager a falsifiable plan or handoff with a named work item and risk; never task workers directly. A non-implementation lane receives an explicit research or standby assignment, not a duplicate repository census. Thereafter synthesize specialist research from managers and worker progress summarized through managers, intervening only on scope, priority, dependencies, or promotion readiness. Before the working-round cap, if no implementation can advance, send manager-d one explicit risk=release plan to assemble a no-promotion or pending-human dossier; do not leave release closeout to infer this from routine chatter. Let the organization choose reversible experiments, keep canonical promotion outside the org, and approve only the exact sandbox candidate as a complete promotion proposal.",
+                "Own the scientific question and hard resource budget. Treat RecCli's host-owned state brief as authoritative for mechanical Git identity, ancestry, launch HEAD, and candidate-kind facts; do not ask multiple lanes to re-establish them. Use the first turn for macro reconnaissance and send every manager a falsifiable outcome and risk; never task workers directly. Managers A and B must turn that map into exactly one active problem-solving goal per worker. Do not manufacture standby, status, repository-census, or paper-only work. Thereafter synthesize specialist research and concrete worker results through managers, intervening only on scope, priority, dependencies, or promotion readiness. Before the working-round cap, if no implementation can advance, send manager-d one explicit risk=release plan to assemble a no-promotion or pending-human dossier; do not leave release closeout to infer this from routine chatter. Let the organization choose reversible experiments, keep canonical promotion outside the org, and approve only the exact sandbox candidate as a complete promotion proposal.",
                 False, "high", "none", True,
             ),
             AgentSpec(
                 "manager-a", "evidence and novelty manager",
-                "Own the single semantic reconciliation of authority documents against primary receipts and the experiment ledger. Accept RecCli's host state brief for mechanical commit identity and ancestry; publish one correction only if primary evidence contradicts it, so other lanes do not repeat Git archaeology. On your first turn, refine the lead map into explicit plan or handoff assignments with named work items and risks for worker-a and worker-c. When a bounded question has an adequate immutable evaluator, you may author one experiment-loop contract for exactly one worker and one mutable tracked file. Surface the nearest prior attempts and contradictions as advice; do not pretend novelty or scientific merit is machine-decidable.",
+                "Own the single semantic reconciliation of authority documents against primary receipts and the experiment ledger. Accept RecCli's host state brief for mechanical commit identity and ancestry; publish one correction only if primary evidence contradicts it, so other lanes do not repeat Git archaeology. On your first turn, give worker-a and worker-c exactly one concrete problem-solving goal each, tied to an observable source, test, evaluator, experiment, or product outcome. Do not assign standby, administrative reporting, or a documentation census as worker work. When a bounded question has an adequate immutable evaluator, you may author one experiment-loop contract for exactly one worker and one mutable tracked file. Surface the nearest prior attempts and contradictions as advice; do not pretend novelty or scientific merit is machine-decidable.",
                 True, "high", "artifacts", True,
             ),
             AgentSpec(
                 "manager-b", "hypothesis and model manager",
-                "Act as research director for load-bearing technical claims. Coordinate competing hypotheses, model choices, assumptions, and evidence needed to distinguish them. On your first turn, refine the lead map into explicit plan or handoff assignments with named work items and risks for worker-b and worker-d. When repository authority and evidence do not settle a material model, method, standard, identifiability, uncertainty, or numerical question, commission both research-scout and math-auditor on the same neutral work item before authorizing dependent implementation. Synthesize their independent records into one validated research decision packet; do not forward raw literature as a coding instruction. Once the claim is bounded and an adequate immutable evaluator exists, author an experiment-loop contract for exactly one worker and one mutable tracked file. Allocate the bounded experiment budget by expected information gain, not by ceremony.",
+                "Act as research director for load-bearing technical claims. Coordinate competing hypotheses, model choices, assumptions, and evidence needed to distinguish them. On your first turn, give worker-b and worker-d exactly one concrete problem-solving goal each, tied to an observable source, test, evaluator, experiment, or product outcome. Do not assign standby, administrative reporting, or a documentation census as worker work. When repository authority and evidence do not settle a material model, method, standard, identifiability, uncertainty, or numerical question, commission both research-scout and math-auditor on the same neutral work item before authorizing dependent implementation. Synthesize their independent records into one validated research decision packet; do not forward raw literature as a coding instruction. Once the claim is bounded and an adequate immutable evaluator exists, author an experiment-loop contract for exactly one worker and one mutable tracked file. Allocate the bounded experiment budget by expected information gain, not by ceremony.",
                 True, "high", "artifacts", True,
             ),
             AgentSpec(
@@ -425,22 +429,22 @@ def get_topology(name: str = "google-rotating") -> Topology:
             ),
             AgentSpec(
                 "worker-a", "reproduction experimenter",
-                "Choose and run reversible baseline or receipt-reproduction experiments in this disposable worktree. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Use temporary run-local identifiers, preserve primary outputs through the artifacts channel, and hand off host-materialized exact candidates without claiming canonical acceptance.",
+                "Solve the one active goal shown by RecCli. Work directly on the source, tests, evaluator, experiment, or product path that produces its observable outcome; rule summaries and status reports are not substitutes. Run reversible baseline or receipt-reproduction work in this disposable worktree. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Flag unrelated or contradictory findings to your primary manager without changing code for them, then continue all unaffected goal work.",
                 True, "medium", "workspace",
             ),
             AgentSpec(
                 "worker-b", "hypothesis and model experimenter",
-                "Choose and run reversible hypothesis or model-comparison experiments in your project-owned lane. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Make assumptions and discriminators explicit, compare alternatives against the selected evidence, seal generated outputs, and do not mint canonical attempt IDs.",
+                "Solve the one active goal shown by RecCli. Work directly on the source, tests, evaluator, experiment, or product path that produces its observable outcome; rule summaries and status reports are not substitutes. Run reversible hypothesis or model-comparison work in your project-owned lane. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Flag unrelated or contradictory findings to your primary manager without changing code for them, then continue all unaffected goal work.",
                 True, "high", "workspace",
             ),
             AgentSpec(
                 "worker-c", "structural and integration validator",
-                "Choose and run reversible structural, interface, integration, or measurement experiments in your project-owned lane. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Try to falsify candidate claims using the project's declared invariants, end-to-end checks, quantitative evidence, and direct review; preserve outputs without declaring canonical acceptance.",
+                "Solve the one active goal shown by RecCli. Work directly on the source, tests, evaluator, experiment, or product path that produces its observable outcome; rule summaries and status reports are not substitutes. Run reversible structural, interface, integration, or measurement work in your project-owned lane. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Flag unrelated or contradictory findings to your primary manager without changing code for them, then continue all unaffected goal work.",
                 True, "high", "workspace",
             ),
             AgentSpec(
                 "worker-d", "uncertainty and alternative-explanation experimenter",
-                "Choose and run reversible uncertainty, missing-information, or alternative-explanation experiments within the mission's existing authority. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Use temporary run-local identifiers and seal evidence. Escalate any request to mutate immutable evidence, introduce new authoritative inputs, invent unsupported facts, or expand the acceptance standard.",
+                "Solve the one active goal shown by RecCli. Work directly on the source, tests, evaluator, experiment, or product path that produces its observable outcome; rule summaries and status reports are not substitutes. Run reversible uncertainty, missing-information, or alternative-explanation work within the mission's existing authority. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Flag unrelated or contradictory findings to your primary manager without changing code for them, then continue all unaffected goal work.",
                 True, "high", "workspace",
             ),
             AgentSpec(
@@ -511,7 +515,7 @@ def get_topology(name: str = "google-rotating") -> Topology:
     agents = [
         AgentSpec(
             "lead", "mission leader",
-            "Own scope, priorities, budget, and risk acceptance. Use the first turn to map the landscape and send every manager a plan or handoff with a named work item and risk, never delegating directly to workers. A lane that should not implement still receives an explicit standby, research, or review assignment. Thereafter synthesize manager research and manager-summarized worker progress, waking on new information or an operator steering message. Approve the exact final candidate for scope only; do not implement or merge.",
+            "Own scope, priorities, budget, and risk acceptance. Use the first turn to map the landscape and give every manager a named outcome and risk, never delegating directly to workers. Every worker must receive exactly one concrete problem-solving goal; do not create standby, reporting, repository-census, or paper-only work to fill a lane. Thereafter synthesize manager research and concrete worker results, waking on new information or an operator steering message. Approve the exact final candidate for scope only; do not implement or merge.",
             False, "high", web_research=True,
         ),
         *[
@@ -519,7 +523,7 @@ def get_topology(name: str = "google-rotating") -> Topology:
                 manager,
                 "engineering manager and release integrator" if manager == release else "engineering manager and integrator",
                 (
-                    f"Primary manager for worker-{manager[-1]}. On your first turn, refine the lead's assignment and send your worker a plan or handoff with a named work item and risk; use an explicit research, review, or standby task when implementation is not yet justified. Publish concise design decisions, answer routine questions, coordinate with peer managers, and inspect evidence. "
+                    f"Primary manager for worker-{manager[-1]}. On your first turn, refine the lead's assignment into exactly one concrete problem-solving goal tied to an observable source, test, evaluator, experiment, or product outcome. Do not assign standby, administrative reporting, or a documentation census as worker work. Publish only decisions needed to unblock execution, answer routine questions, coordinate with peer managers, and inspect evidence. "
                     + ("Own the integration decision, let RecCli apply only independently approved candidates, run composed checks, and finalize after release gates pass."
                        if manager == release else
                        "Wait for alternate-manager approval before forwarding your worker's immutable candidate to manager-d.")
@@ -530,7 +534,7 @@ def get_topology(name: str = "google-rotating") -> Topology:
         *[
             AgentSpec(
                 worker, "implementation worker",
-                "Stay inside the bounded assignment. Read the brief, acceptance criteria, task-relevant repository docs, published design decisions, and interfaces. Make cohesive changes and hand the host-materialized immutable candidate to your primary manager.",
+                "Solve the one active goal shown by RecCli. Work directly on the source, tests, evaluator, experiment, or product path that produces its observable outcome; rule summaries and status reports are not substitutes. Read only task-relevant repository material, make cohesive changes, and hand the host-materialized immutable candidate to your primary manager. Flag unrelated or contradictory findings without changing code for them, then continue all unaffected goal work.",
                 True, "medium",
             ) for worker in worker_ids
         ],
@@ -2827,6 +2831,9 @@ class OrganizationRunner:
             agent.agent_id: [] for agent in self.topology.agents
         }
         self.states = {agent.agent_id: "idle" for agent in self.topology.agents}
+        self.worker_goals: Dict[str, Dict[str, Any]] = {}
+        self.worker_goal_history: List[Dict[str, Any]] = []
+        self.off_goal_flags: Dict[str, Dict[str, Any]] = {}
         self.sessions: Dict[str, SubscriptionSession] = {}
         self.turned: Set[str] = set()
         self.prompt_bootstrapped: Set[str] = set()
@@ -3176,6 +3183,12 @@ class OrganizationRunner:
                 })
                 for message in reply["messages"]:
                     self._deliver_message(agent.agent_id, message, round_number)
+                if agent.agent_id in self.topology.worker_ids:
+                    self._update_worker_goal_after_reply(
+                        agent.agent_id,
+                        reply,
+                        round_number,
+                    )
                 bundle = item.get("candidate_artifact_bundle")
                 if bundle:
                     recipient = self.topology.primary_manager_by_worker.get(
@@ -4498,6 +4511,8 @@ class OrganizationRunner:
             "known_candidates": candidates,
             "integrated_candidates": dict(self.integrated_candidates),
             "governance": self.governance.snapshot(),
+            "worker_goals": dict(self.worker_goals),
+            "off_goal_flags": list(self.off_goal_flags.values()),
             "workspaces": workspace_state,
             "experiment_budget": {
                 "maximum": self.max_experiments,
@@ -6853,7 +6868,7 @@ class OrganizationRunner:
         self, agent: AgentSpec, inbox: List[Dict[str, Any]], round_number: int, first_turn: bool,
     ) -> str:
         team = "\n".join(
-            f"- {member.agent_id} [{member.role}]: {member.instructions}"
+            f"- {member.agent_id} [{member.role}]"
             for member in self.topology.agents
         )
         routes = "\n".join(
@@ -7284,6 +7299,7 @@ Culture: {self.topology.culture}
 {team}
 """
         host_state_context = self._host_state_prompt(agent.agent_id)
+        goal_context = self._goal_prompt(agent.agent_id)
         if first_turn:
             artifact_policy = f"""Repository source, tests, and permanent product documentation belong at their normal tracked paths. Run-scoped reports, plans, generated deliverables, and design-decision artifacts belong under:
 
@@ -7439,6 +7455,10 @@ This is a hard resource limit, not a judgment of novelty or scientific value. A 
 
 {self.governance.render(agent.agent_id)}
 
+## Active execution goal
+
+{goal_context}
+
 ## Inbox
 
 {inbox_text}
@@ -7457,6 +7477,513 @@ candidate; NO_VETO means only that no blocking falsification was established,
 never that the scientific claim is true. Other approval decisions begin with
 APPROVED or BLOCKED.
 """
+
+    @staticmethod
+    def _goal_is_active(goal: Optional[Dict[str, Any]]) -> bool:
+        return bool(
+            goal
+            and goal.get("status") not in WORKER_GOAL_TERMINAL_STATES
+        )
+
+    def _latest_off_goal_flag(
+        self,
+        *,
+        worker_id: Optional[str] = None,
+        manager_id: Optional[str] = None,
+        work_item: Optional[str] = None,
+        statuses: Optional[Set[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        for flag in reversed(list(self.off_goal_flags.values())):
+            if worker_id is not None and flag["worker_id"] != worker_id:
+                continue
+            if manager_id is not None and flag["manager_id"] != manager_id:
+                continue
+            if work_item is not None and flag["work_item"] != work_item:
+                continue
+            if statuses is not None and flag["status"] not in statuses:
+                continue
+            return flag
+        return None
+
+    def _persist_goal_state(self) -> None:
+        self._write_json("goal-state.json", {
+            "schema": GOAL_STATE_SCHEMA,
+            "run_id": self.run_id,
+            "updated_at": _utc_now(),
+            "worker_goals": self.worker_goals,
+            "goal_history": self.worker_goal_history,
+            "off_goal_flags": list(self.off_goal_flags.values()),
+        })
+
+    @staticmethod
+    def _problem_solving_goal_error(content: str) -> Optional[str]:
+        normalized = " ".join(content.lower().split())
+        non_work_patterns = (
+            r"\bstandby\b",
+            r"\bstand by\b",
+            r"\bwait for (?:further|more|another) (?:work|instructions?|tasks?)\b",
+            r"\bmonitor only\b",
+            r"\bno action\b",
+            r"\brepository census\b",
+            r"\bdocumentation census\b",
+            r"\bprepare (?:a |the )?(?:status |release )?(?:report|checklist|dossier)\b",
+            r"\bwrite (?:a |the )?(?:status |progress )?(?:report|summary)\b",
+        )
+        if any(re.search(pattern, normalized) for pattern in non_work_patterns):
+            return (
+                "worker goals must name a concrete problem-solving outcome; "
+                "standby, waiting, monitoring-only, and no-action assignments "
+                "are management state, not worker goals"
+            )
+        return None
+
+    def _bind_worker_goal(
+        self,
+        *,
+        worker_id: str,
+        manager_id: str,
+        work_item: str,
+        objective: str,
+        risk: str,
+        round_number: int,
+        source: str = "manager",
+        force: bool = False,
+    ) -> Tuple[bool, str]:
+        primary = self.topology.primary_manager_by_worker.get(worker_id)
+        if not force and manager_id != primary:
+            return (
+                False,
+                f"worker goals may be assigned only by primary manager {primary}",
+            )
+        goal_error = self._problem_solving_goal_error(objective)
+        if goal_error:
+            return False, goal_error
+
+        current = self.worker_goals.get(worker_id)
+        same_goal = bool(current and current.get("work_item") == work_item)
+        outstanding_flag = self._latest_off_goal_flag(
+            worker_id=worker_id,
+            work_item=current.get("work_item") if current else None,
+            statuses={"needs_consult", "consulting"},
+        )
+        if outstanding_flag and not force:
+            return (
+                False,
+                "an off-goal flag is awaiting its one peer-manager "
+                "consultation; the primary manager must obtain the answer "
+                "before changing or replacing this worker goal",
+            )
+
+        validated_flag = self._latest_off_goal_flag(
+            worker_id=worker_id,
+            work_item=current.get("work_item") if current else None,
+            statuses={"validated"},
+        )
+        if (
+            self._goal_is_active(current)
+            and not same_goal
+            and not force
+            and validated_flag is None
+        ):
+            return (
+                False,
+                f"{worker_id} already has active goal "
+                f"{current.get('work_item')}; finish it or complete the "
+                "off-goal consultation before assigning another",
+            )
+
+        if current and not same_goal:
+            archived = dict(current)
+            archived["status"] = "superseded"
+            archived["superseded_round"] = round_number
+            archived["superseded_by"] = work_item
+            self.worker_goal_history.append(archived)
+            current["status"] = "superseded"
+            if validated_flag:
+                validated_flag["status"] = "acted"
+                validated_flag["decision_round"] = round_number
+                validated_flag["decision"] = f"Replaced goal with {work_item}"
+
+        created_round = (
+            current.get("created_round", round_number)
+            if same_goal and current else round_number
+        )
+        goal = {
+            "schema": "reccli.organization-worker-goal.v1",
+            "worker_id": worker_id,
+            "manager_id": primary or manager_id,
+            "work_item": work_item,
+            "objective": objective.strip(),
+            "risk": risk,
+            "source": source,
+            "status": "active",
+            "created_round": created_round,
+            "updated_round": round_number,
+            "candidate": None,
+        }
+        self.worker_goals[worker_id] = goal
+        if validated_flag and same_goal:
+            validated_flag["status"] = "acted"
+            validated_flag["decision_round"] = round_number
+            validated_flag["decision"] = "Kept and refined the active goal"
+        self._persist_goal_state()
+        self._event(
+            "worker.goal.bound",
+            round_number,
+            worker_id=worker_id,
+            manager_id=manager_id,
+            work_item=work_item,
+            source=source,
+        )
+        return True, ""
+
+    def _record_off_goal_flag(
+        self,
+        *,
+        worker_id: str,
+        content: str,
+        work_item: str,
+        risk: str,
+        round_number: int,
+    ) -> Tuple[bool, str]:
+        primary = self.topology.primary_manager_by_worker.get(worker_id)
+        goal = self.worker_goals.get(worker_id)
+        if not self._goal_is_active(goal):
+            return False, f"{worker_id} has no active goal to preserve"
+        if work_item != goal.get("work_item"):
+            return (
+                False,
+                "off-goal flags must retain the active goal workItem so the "
+                "worker does not silently switch scope",
+            )
+        if risk != goal.get("risk"):
+            return (
+                False,
+                "off-goal flags must retain the active goal risk so they "
+                "cannot silently reprioritize the worker",
+            )
+        existing = self._latest_off_goal_flag(
+            worker_id=worker_id,
+            work_item=work_item,
+            statuses={"needs_consult", "consulting", "validated"},
+        )
+        if existing:
+            return (
+                False,
+                f"off-goal flag {existing['flag_id']} is already open for "
+                f"{worker_id}; continue the active goal while it is resolved",
+            )
+        canonical = json.dumps(
+            {
+                "run_id": self.run_id,
+                "worker_id": worker_id,
+                "work_item": work_item,
+                "round": round_number,
+                "content": content.strip(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        flag_id = hashlib.sha256(canonical).hexdigest()
+        flag = {
+            "schema": "reccli.organization-off-goal-flag.v1",
+            "flag_id": flag_id,
+            "worker_id": worker_id,
+            "manager_id": primary,
+            "work_item": work_item,
+            "content": content.strip(),
+            "risk": risk,
+            "status": "needs_consult",
+            "created_round": round_number,
+            "consulted_manager_id": None,
+            "consult_round": None,
+            "validation": None,
+            "validation_round": None,
+        }
+        self.off_goal_flags[flag_id] = flag
+        self._persist_goal_state()
+        self._event(
+            "worker.off_goal.flagged",
+            round_number,
+            flag_id=flag_id,
+            worker_id=worker_id,
+            manager_id=primary,
+            work_item=work_item,
+        )
+        return True, ""
+
+    def _process_goal_protocol_message(
+        self,
+        sender: str,
+        message: Dict[str, Any],
+        round_number: int,
+    ) -> Tuple[bool, str]:
+        recipient = str(message.get("to") or "")
+        tag = str(message.get("tag") or "")
+        work_item = str(message.get("workItem") or "")
+
+        if sender in self.topology.worker_ids:
+            primary = self.topology.primary_manager_by_worker.get(sender)
+            if recipient != primary:
+                return (
+                    False,
+                    f"worker traffic must go through primary manager {primary}",
+                )
+            goal = self.worker_goals.get(sender)
+            if not goal:
+                return (
+                    False,
+                    f"{sender} cannot produce organization traffic without "
+                    "one active goal",
+                )
+            if (
+                goal.get("status") in WORKER_GOAL_TERMINAL_STATES
+                and tag not in {"answer", "status"}
+            ):
+                return (
+                    False,
+                    f"{sender} goal {goal.get('work_item')} is "
+                    f"{goal.get('status')}; only a same-goal answer or status "
+                    "is allowed until the primary manager binds another goal",
+                )
+            if (
+                message.get("workItem")
+                and work_item != goal.get("work_item")
+            ):
+                return (
+                    False,
+                    "worker messages must retain the one active goal workItem",
+                )
+            if tag == "flag":
+                if message.get("candidate"):
+                    return False, "off-goal flags cannot carry a candidate"
+                return self._record_off_goal_flag(
+                    worker_id=sender,
+                    content=str(message.get("content") or ""),
+                    work_item=work_item,
+                    risk=str(message.get("risk") or "routine"),
+                    round_number=round_number,
+                )
+
+        if (
+            sender in self.topology.manager_ids
+            and recipient in self.topology.manager_ids
+            and sender != recipient
+            and tag == "question"
+            and work_item
+        ):
+            flag = self._latest_off_goal_flag(
+                manager_id=sender,
+                work_item=work_item,
+                statuses={"needs_consult", "consulting", "validated"},
+            )
+            if flag:
+                if flag["status"] != "needs_consult":
+                    return (
+                        False,
+                        "exactly one peer-manager consultation is allowed for "
+                        f"off-goal flag {flag['flag_id']}",
+                    )
+                flag["status"] = "consulting"
+                flag["consulted_manager_id"] = recipient
+                flag["consult_round"] = round_number
+                self._persist_goal_state()
+                self._event(
+                    "worker.off_goal.consulted",
+                    round_number,
+                    flag_id=flag["flag_id"],
+                    manager_id=sender,
+                    consulted_manager_id=recipient,
+                )
+
+        if (
+            sender in self.topology.manager_ids
+            and recipient in self.topology.manager_ids
+            and tag == "answer"
+            and work_item
+        ):
+            flag = next(
+                (
+                    item
+                    for item in reversed(list(self.off_goal_flags.values()))
+                    if item["manager_id"] == recipient
+                    and item["consulted_manager_id"] == sender
+                    and item["work_item"] == work_item
+                    and item["status"] == "consulting"
+                ),
+                None,
+            )
+            if flag:
+                flag["status"] = "validated"
+                flag["validation"] = str(message.get("content") or "").strip()
+                flag["validation_round"] = round_number
+                self._persist_goal_state()
+                self._event(
+                    "worker.off_goal.validated",
+                    round_number,
+                    flag_id=flag["flag_id"],
+                    manager_id=recipient,
+                    consulted_manager_id=sender,
+                )
+        if (
+            sender in self.topology.manager_ids
+            and recipient in self.topology.worker_ids
+            and tag == "decision"
+            and work_item
+        ):
+            flag = self._latest_off_goal_flag(
+                worker_id=recipient,
+                manager_id=sender,
+                work_item=work_item,
+                statuses={"needs_consult", "consulting", "validated"},
+            )
+            if flag and flag["status"] != "validated":
+                return (
+                    False,
+                    "the primary manager must receive the one peer-manager "
+                    "validation answer before acting on this off-goal flag",
+                )
+            if flag:
+                flag["status"] = "acted"
+                flag["decision"] = str(message.get("content") or "").strip()
+                flag["decision_round"] = round_number
+                self._persist_goal_state()
+                self._event(
+                    "worker.off_goal.decided",
+                    round_number,
+                    flag_id=flag["flag_id"],
+                    manager_id=sender,
+                    worker_id=recipient,
+                )
+        return True, ""
+
+    def _update_worker_goal_after_reply(
+        self,
+        worker_id: str,
+        reply: Dict[str, Any],
+        round_number: int,
+    ) -> None:
+        goal = self.worker_goals.get(worker_id)
+        if not self._goal_is_active(goal):
+            return
+        matching = [
+            message
+            for message in reply.get("messages", [])
+            if message.get("workItem") == goal.get("work_item")
+        ]
+        primary = self.topology.primary_manager_by_worker.get(worker_id)
+        handoff = next(
+            (
+                message
+                for message in self.inboxes.get(primary or "", [])
+                if message.get("from") == worker_id
+                and message.get("workItem") == goal.get("work_item")
+                if message.get("tag") == "handoff"
+                and message.get("candidate")
+            ),
+            None,
+        )
+        if handoff:
+            goal["status"] = "candidate_ready"
+            goal["candidate"] = handoff.get("candidate")
+            goal["completed_round"] = round_number
+        elif reply.get("state") == "done":
+            goal["status"] = "completed"
+            goal["completed_round"] = round_number
+        elif any(message.get("tag") == "blocker" for message in matching):
+            goal["status"] = "blocked"
+            goal["updated_round"] = round_number
+        else:
+            return
+        self._persist_goal_state()
+        self._event(
+            "worker.goal.status",
+            round_number,
+            worker_id=worker_id,
+            work_item=goal.get("work_item"),
+            status=goal["status"],
+            candidate=goal.get("candidate"),
+        )
+
+    def _goal_prompt(self, agent_id: str) -> str:
+        if agent_id in self.topology.worker_ids:
+            goal = self.worker_goals.get(agent_id)
+            if not self._goal_is_active(goal):
+                return (
+                    "No active goal is bound. Do not perform substantive work, "
+                    "invent a task, audit the repository, or write a report. "
+                    "Wait for one concrete goal from your primary manager or "
+                    "the human operator."
+                )
+            primary = self.topology.primary_manager_by_worker.get(agent_id)
+            return f"""ONE ACTIVE GOAL
+Work item: {goal['work_item']}
+Objective: {goal['objective']}
+Risk: {goal['risk']}
+Primary manager: {primary}
+Status: {goal['status']}
+
+Spend this turn changing, testing, evaluating, or directly advancing the
+project execution path that produces this objective. Administrative prose is
+not progress. Do not solve unrelated findings. If an unrelated defect or a
+contradiction between retrieved context sources matters, send exactly one
+tag=flag message to {primary} with candidate=null, this same workItem and risk,
+name the conflicting paths or observation, and continue every unaffected part
+of this goal."""
+
+        if agent_id in self.topology.manager_ids:
+            owned = [
+                goal
+                for worker_id, goal in self.worker_goals.items()
+                if self.topology.primary_manager_by_worker.get(worker_id)
+                == agent_id
+            ]
+            open_flags = [
+                flag
+                for flag in self.off_goal_flags.values()
+                if flag["manager_id"] == agent_id
+                and flag["status"] in {
+                    "needs_consult", "consulting", "validated",
+                }
+            ]
+            goal_lines = [
+                f"- {goal['worker_id']}: {goal['work_item']} "
+                f"[{goal['status']}] — {goal['objective']}"
+                for goal in owned
+            ] or ["- No worker goal is bound yet."]
+            flag_lines = [
+                f"- {flag['flag_id'][:12]} for {flag['worker_id']} "
+                f"[{flag['status']}]: {flag['content']}"
+                for flag in open_flags
+            ] or ["- No off-goal flag requires action."]
+            return "\n".join([
+                "OWNED WORKER GOALS",
+                *goal_lines,
+                "",
+                "OFF-GOAL FLAGS",
+                *flag_lines,
+                "",
+                "A worker gets one goal, not a task stack. Keep routine "
+                "management dormant. For an off-goal flag, ask exactly one "
+                "other manager one validation question using the same "
+                "workItem, wait for that manager's answer, then decide whether "
+                "to keep or replace the goal. Do not turn the flag into worker "
+                "scope before that consultation.",
+            ])
+
+        active = [
+            f"- {worker_id}: {goal['work_item']} [{goal['status']}]"
+            for worker_id, goal in sorted(self.worker_goals.items())
+        ] or ["- Worker goals have not been delegated yet."]
+        return "\n".join([
+            "WORKER EXECUTION GOALS",
+            *active,
+            "",
+            "Workers own execution, not organizational paperwork. Managers "
+            "receive flags and validate off-goal scope through one peer "
+            "consultation before redirecting a worker.",
+        ])
 
     def _control_targets(self, target: str) -> List[str]:
         if target == "all":
@@ -7483,6 +8010,28 @@ APPROVED or BLOCKED.
         control_id: str,
         requested_by: str,
     ) -> None:
+        work_item = f"operator-control/{control_id}"
+        if recipient in self.topology.worker_ids:
+            current = self.worker_goals.get(recipient)
+            if tag == "plan":
+                work_item = f"operator-goal/{control_id}"
+                primary = self.topology.primary_manager_by_worker.get(
+                    recipient,
+                ) or requested_by
+                accepted, reason = self._bind_worker_goal(
+                    worker_id=recipient,
+                    manager_id=primary,
+                    work_item=work_item,
+                    objective=content,
+                    risk="routine",
+                    round_number=round_number,
+                    source="human",
+                    force=True,
+                )
+                if not accepted:
+                    raise ValueError(reason)
+            elif self._goal_is_active(current):
+                work_item = str(current["work_item"])
         message = {
             "runId": self.run_id,
             "round": round_number,
@@ -7491,7 +8040,7 @@ APPROVED or BLOCKED.
             "tag": tag,
             "content": content,
             "candidate": None,
-            "workItem": f"operator-control/{control_id}",
+            "workItem": work_item,
             "risk": "routine",
             "deliveredAt": _utc_now(),
             "status": "delivered",
@@ -7920,9 +8469,29 @@ APPROVED or BLOCKED.
         if (
             recipient in self.topology.worker_ids
             and sender in self.topology.manager_ids
-            and tag in DELEGATION_TAGS
         ):
-            if not message.get("workItem") or message.get("risk") not in RISKS:
+            primary = self.topology.primary_manager_by_worker.get(recipient)
+            if sender != primary:
+                self.dropped_messages += 1
+                self._append_jsonl("messages.jsonl", {
+                    "round": round_number,
+                    "from": sender,
+                    **message,
+                    "status": "dropped",
+                    "reason": (
+                        "worker goals must come through primary manager "
+                        f"{primary}; peer managers consult the primary manager"
+                    ),
+                    "ts": _utc_now(),
+                })
+                return
+            if (
+                tag in DELEGATION_TAGS
+                and (
+                    not message.get("workItem")
+                    or message.get("risk") not in RISKS
+                )
+            ):
                 self.dropped_messages += 1
                 self._append_jsonl("messages.jsonl", {
                     "round": round_number,
@@ -7954,11 +8523,51 @@ APPROVED or BLOCKED.
                 "ts": _utc_now(),
             })
             return
+        accepted, reason = self._process_goal_protocol_message(
+            sender,
+            message,
+            round_number,
+        )
+        if not accepted:
+            self.dropped_messages += 1
+            self._append_jsonl("messages.jsonl", {
+                "round": round_number,
+                "from": sender,
+                **message,
+                "status": "dropped",
+                "reason": reason,
+                "ts": _utc_now(),
+            })
+            return
         accepted, reason, system_message = self.governance.process_message(sender, message, round_number)
         if not accepted:
             self.dropped_messages += 1
             self._append_jsonl("messages.jsonl", {"round": round_number, "from": sender, **message, "status": "dropped", "reason": reason, "ts": _utc_now()})
             return
+        if (
+            recipient in self.topology.worker_ids
+            and sender in self.topology.manager_ids
+            and tag in DELEGATION_TAGS
+        ):
+            accepted, reason = self._bind_worker_goal(
+                worker_id=recipient,
+                manager_id=sender,
+                work_item=str(message["workItem"]),
+                objective=content,
+                risk=str(message["risk"]),
+                round_number=round_number,
+            )
+            if not accepted:
+                self.dropped_messages += 1
+                self._append_jsonl("messages.jsonl", {
+                    "round": round_number,
+                    "from": sender,
+                    **message,
+                    "status": "dropped",
+                    "reason": reason,
+                    "ts": _utc_now(),
+                })
+                return
         if (
             recipient in self.topology.worker_ids
             and sender in self.topology.manager_ids
@@ -8152,6 +8761,8 @@ APPROVED or BLOCKED.
             artifacts.add(str(self.experiment_loop_root / "contracts.jsonl"))
         if (self.experiment_loop_root / "trials.jsonl").is_file():
             artifacts.add(str(self.experiment_loop_root / "trials.jsonl"))
+        if (self.run_dir / "goal-state.json").is_file():
+            artifacts.add(str(self.run_dir / "goal-state.json"))
 
         return {
             "terminal_status": status,
@@ -8160,6 +8771,8 @@ APPROVED or BLOCKED.
             "closeout_rounds": max(0, rounds - self.max_rounds),
             "mission": self.mission,
             "agent_states": dict(self.states),
+            "worker_goals": dict(self.worker_goals),
+            "off_goal_flags": list(self.off_goal_flags.values()),
             "turn_counts": {
                 "attempted": self.attempted_turns,
                 "completed": self.completed_turns,
@@ -8570,6 +9183,8 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         return review
 
     def _has_initial_worker_assignment(self, worker_id: str) -> bool:
+        if self._goal_is_active(self.worker_goals.get(worker_id)):
+            return True
         primary = self.topology.primary_manager_by_worker.get(worker_id)
         if not primary:
             return True
@@ -8600,8 +9215,9 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
 
         The barrier does not serialize implementation. It ensures every lane
         has a bounded instruction before round three fans workers out in
-        parallel. A deliberate no-code lane is represented by an explicit
-        research, review, or standby work item rather than silence.
+        parallel. Each worker receives one concrete problem-solving goal;
+        standby and administrative state stay with managers rather than being
+        turned into worker work.
         """
         if not self.topology.delegation_gate:
             return
@@ -8831,6 +9447,8 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "topology": self.topology.topology_id, "updated_at": _utc_now(),
             "pid": os.getpid(), "run_dir": str(self.run_dir),
             "agent_states": self.states,
+            "worker_goals": self.worker_goals,
+            "off_goal_flags": list(self.off_goal_flags.values()),
             "usage": self.usage,
             "usage_by_provider": self.usage_by_provider,
             "delivered_messages": self.delivered_messages,
@@ -9225,6 +9843,8 @@ def create_run_request(
         "agent_states": {
             agent.agent_id: "idle" for agent in topology_config.agents
         },
+        "worker_goals": {},
+        "off_goal_flags": [],
         "updated_at": _utc_now(), "run_dir": str(run_dir),
     }, indent=2) + "\n", encoding="utf-8")
     return request

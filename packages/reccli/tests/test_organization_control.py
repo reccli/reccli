@@ -450,6 +450,25 @@ class OrganizationControlTests(unittest.TestCase):
                 }) + "\n",
                 encoding="utf-8",
             )
+            (run_dir / "goal-state.json").write_text(
+                json.dumps({
+                    "schema": "reccli.organization-goals.v1",
+                    "worker_goals": {
+                        "worker-a": {
+                            "worker_id": "worker-a",
+                            "manager_id": "manager-a",
+                            "work_item": "primitive-qualifier",
+                            "objective": (
+                                "Fix the primitive qualifier and pass its test."
+                            ),
+                            "risk": "high",
+                            "status": "active",
+                        },
+                    },
+                    "off_goal_flags": [],
+                }) + "\n",
+                encoding="utf-8",
+            )
             turns = run_dir / "turns"
             turns.mkdir()
             (turns / "worker-a.jsonl").write_text(
@@ -488,6 +507,13 @@ class OrganizationControlTests(unittest.TestCase):
                     if agent["id"] == "worker-a"
                 )["last_turn"]["summary"],
                 "Reproduced the fixture.",
+            )
+            self.assertEqual(
+                next(
+                    agent for agent in snapshot["topology_graph"]["agents"]
+                    if agent["id"] == "worker-a"
+                )["goal"]["work_item"],
+                "primitive-qualifier",
             )
             self.assertEqual(len(snapshot["messages"]), 1)
             self.assertEqual(len(snapshot["activities"]), 3)
@@ -595,7 +621,7 @@ class OrganizationControlTests(unittest.TestCase):
                 "risk": "high",
             }
             runner._deliver_message("manager-b", base, 2)
-            self.assertEqual(len(runner.inboxes["worker-a"]), 1)
+            self.assertEqual(len(runner.inboxes["worker-a"]), 0)
             self.assertNotIn(
                 "worker-a",
                 {agent.agent_id for agent in runner._select_agents(3)},
@@ -605,9 +631,9 @@ class OrganizationControlTests(unittest.TestCase):
                 {**base, "workItem": None},
                 2,
             )
-            self.assertEqual(len(runner.inboxes["worker-a"]), 1)
+            self.assertEqual(len(runner.inboxes["worker-a"]), 0)
             runner._deliver_message("manager-a", base, 2)
-            self.assertEqual(len(runner.inboxes["worker-a"]), 2)
+            self.assertEqual(len(runner.inboxes["worker-a"]), 1)
             scheduled = {
                 agent.agent_id for agent in runner._select_agents(3)
             }
@@ -616,7 +642,8 @@ class OrganizationControlTests(unittest.TestCase):
                 json.loads(line)
                 for line in (run_dir / "messages.jsonl").read_text().splitlines()
             ]
-            self.assertEqual(records[0]["status"], "delivered")
+            self.assertEqual(records[0]["status"], "dropped")
+            self.assertIn("primary manager", records[0]["reason"])
             self.assertEqual(records[1]["status"], "dropped")
             self.assertIn("workItem", records[1]["reason"])
             self.assertEqual(records[2]["status"], "delivered")

@@ -436,9 +436,13 @@ reproduction and receipt integrity, hypothesis/model evaluation, structural
 and integration validation, uncertainty/alternative explanations, and an
 on-demand source-scout/mathematical-auditor research cell. The
 project's tracked context manifest specializes those slots with domain-specific
-lane purposes and documents. Its four workers may choose hypotheses, modify
-disposable branches, and run sandbox experiments immediately after the
-lead/manager delegation gate opens. `max_experiments` is one atomic scientific
+lane purposes and documents. RecCli binds exactly one active problem-solving
+goal to each worker after the lead/manager delegation gate opens. A goal must
+name an observable source, test, evaluator, experiment, product, or other
+project outcome; standby and no-action assignments are rejected. Only the
+worker's primary manager may bind or refine it. Workers may then choose
+hypotheses, modify disposable branches, and run sandbox experiments in service
+of that goal. `max_experiments` is one atomic scientific
 work-bundle budget across both persistence channels: Git-backed probes,
 fixtures, measurements, result data, or other non-report evidence beneath the
 run artifact prefix, and explicitly reported ignored/generated outputs. A
@@ -465,8 +469,12 @@ Lead and manager roles are inbox-driven after delegation. A prior
 `review`/`decision` traffic only when it names an exact candidate or
 release-dossier identity; candidate-less coordination uses `plan`, `question`,
 `answer`, or `blocker`. Manager D wakes for an exact candidate or an explicit
-release-risk dossier instruction. Workers remain able to continue a bounded
-assigned implementation lane.
+release-risk dossier instruction. Workers remain able to continue their one
+host-recorded goal. An unrelated defect or contradiction between retrieved
+context sources is sent as a `flag` to the primary manager without becoming
+worker scope. The manager must obtain exactly one peer-manager answer before
+keeping or replacing the goal. Goal state and that consultation are durable in
+`goal-state.json`.
 
 Review intent and routing tags cannot disagree at the final gate. When a final
 reviewer begins a `review` message with the topology's decision marker

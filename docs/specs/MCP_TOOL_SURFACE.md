@@ -191,13 +191,18 @@ worktree:
   terminal supervisor.
 
   Event-driven topologies enforce lead reconnaissance followed by a manager
-  delegation barrier. A worker's first turn requires a primary-manager
-  `plan`/`handoff` with a named `workItem` and risk; assigned workers may then
-  run concurrently. RecCli fails the run before execution if the lead did not
+  delegation barrier. A worker's first turn requires exactly one
+  primary-manager problem-solving goal with a named `workItem` and risk;
+  assigned workers may then run concurrently. Standby/no-action goals and
+  competing goals are rejected. RecCli fails the run before execution if the lead did not
   explicitly brief every manager after round one or every worker did not
   receive an explicit primary-manager work item after round two. Operator
   steering, pause, and resume are written as
-  immutable control requests and applied only at synchronized boundaries.
+  immutable control requests and applied only at synchronized boundaries. A
+  `plan` steering message to a worker explicitly replaces its active goal.
+  Unrelated worker findings use `tag=flag`; the primary manager must obtain one
+  peer-manager answer before redirecting the worker. Durable goal state is
+  exposed through `goal-state.json`, `status.json`, and the console snapshot.
   After the barrier, lead and managers require new inbox traffic rather than
   self-waking from `state=working`; workers may continue their assigned lane.
   Veto-review `review`/`decision` messages require an exact candidate or

@@ -312,16 +312,29 @@ function AgentStream({
         </div>
       </button>
       <div className="stream-body" ref={scrollRef}>
-        {agent.assignment && (
+        {agent.goal ? (
+          <article className="goal-card">
+            <div className="activity-kicker">
+              <span>One active goal</span>
+              <span>{titleCase(agent.goal.status)}</span>
+            </div>
+            <strong>{agent.goal.work_item}</strong>
+            <p>{agent.goal.objective}</p>
+            <div className="goal-meta">
+              <span>{titleCase(agent.goal.risk)}</span>
+              <span>{agent.goal.manager_id || "human operator"}</span>
+            </div>
+          </article>
+        ) : agent.assignment ? (
           <article className="assignment-card">
             <div className="activity-kicker">
-              <span>Assigned work</span>
+              <span>Legacy assignment</span>
               <span>R{agent.assignment.round ?? "?"}</span>
             </div>
             <strong>{agent.assignment.workItem}</strong>
             <p>{agent.assignment.content}</p>
           </article>
-        )}
+        ) : null}
         {activities.slice(-12).map((activity, index) => (
           <ActivityCard
             activity={activity}
@@ -330,8 +343,8 @@ function AgentStream({
         ))}
         {!activities.length && (
           <div className="stream-empty">
-            {agent.state === "awaiting_assignment"
-              ? "Waiting for a specific primary-manager assignment."
+            {["awaiting_assignment", "awaiting_goal"].includes(agent.state)
+              ? "Waiting for one concrete primary-manager goal."
               : "Waiting for this agent’s first durable turn."}
           </div>
         )}
@@ -1085,11 +1098,16 @@ function OperatorChat({
             disabled={!controlEnabled}
             aria-label="Message tag"
           >
-            <option value="plan">Plan</option>
+            <option value="plan">
+              {selectedAgent?.id.startsWith("worker-")
+                ? "Set / replace goal"
+                : "Plan"}
+            </option>
             <option value="question">Question</option>
             <option value="answer">Answer</option>
             <option value="status">Status</option>
             <option value="blocker">Blocker</option>
+            <option value="flag">Off-goal flag</option>
             <option value="decision">Decision</option>
           </select>
           <button
