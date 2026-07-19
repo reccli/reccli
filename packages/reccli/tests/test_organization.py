@@ -1,5 +1,6 @@
 """Offline tests for the subscription-backed organization MCP engine."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -242,9 +243,20 @@ class OrganizationTopologyTests(unittest.TestCase):
             {agent_id for agent_id, scope in scopes.items() if scope == "workspace"},
             {"worker-a", "worker-b", "worker-c", "worker-d"},
         )
+        self.assertEqual(scopes["manager-b"], "artifacts")
+        self.assertEqual(scopes["research-scout"], "artifacts")
+        self.assertEqual(scopes["math-auditor"], "artifacts")
         self.assertEqual(
             web_research,
-            {"lead", "manager-a", "manager-b", "manager-c", "manager-d"},
+            {
+                "lead",
+                "manager-a",
+                "manager-b",
+                "manager-c",
+                "manager-d",
+                "research-scout",
+                "math-auditor",
+            },
         )
         self.assertFalse(topology.can_route("worker-a", "lead", "question")[0])
         self.assertTrue(topology.can_route("manager-a", "manager-c", "review")[0])
@@ -252,6 +264,24 @@ class OrganizationTopologyTests(unittest.TestCase):
         self.assertTrue(topology.human_promotion_required)
         self.assertFalse(topology.blind_final_review)
         self.assertNotIn("manager-c", topology.primary_manager_by_worker.values())
+        self.assertEqual(topology.research_director_id, "manager-b")
+        self.assertEqual(
+            topology.research_specialist_ids,
+            ["research-scout", "math-auditor"],
+        )
+        self.assertTrue(topology.agent("research-scout").fresh_session)
+        self.assertTrue(topology.agent("math-auditor").fresh_session)
+        self.assertTrue(
+            topology.can_route(
+                "manager-b", "research-scout", "question",
+            )[0]
+        )
+        self.assertFalse(
+            topology.can_route("lead", "research-scout", "question")[0]
+        )
+        self.assertFalse(
+            topology.can_route("research-scout", "math-auditor", "answer")[0]
+        )
 
     def test_engineering_topologies_give_lead_and_managers_web_research_not_workers(self):
         for topology_name in ("google", "google-rotating"):
@@ -275,6 +305,14 @@ class OrganizationTopologyTests(unittest.TestCase):
             roles["worker-d"],
             "uncertainty and alternative-explanation experimenter",
         )
+        self.assertEqual(
+            roles["research-scout"],
+            "primary-source research scout",
+        )
+        self.assertEqual(
+            roles["math-auditor"],
+            "independent mathematical auditor",
+        )
         role_contract = "\n".join(
             f"{agent.role}\n{agent.instructions}" for agent in topology.agents
         ).lower()
@@ -293,6 +331,14 @@ class OrganizationTopologyTests(unittest.TestCase):
         assignments = build_provider_assignments(topology, "claude", "codex")
         self.assertEqual(assignments["manager-d"], "claude")
         self.assertEqual(assignments["manager-c"], "codex")
+        self.assertEqual(
+            assignments["research-scout"],
+            assignments["manager-b"],
+        )
+        self.assertNotEqual(
+            assignments["math-auditor"],
+            assignments["research-scout"],
+        )
         for worker, primary in topology.primary_manager_by_worker.items():
             self.assertEqual(assignments[worker], assignments[primary])
 
@@ -1223,6 +1269,12 @@ class OrganizationProjectTests(unittest.TestCase):
             runner.workspaces["worker-b"] = Workspace(
                 root, "worker-b", "integration", root, [],
             )
+            runner.workspaces["research-scout"] = Workspace(
+                root, "research-scout", "integration", root, [],
+            )
+            runner.workspaces["math-auditor"] = Workspace(
+                root, "math-auditor", "integration", root, [],
+            )
 
             lead_prompt = runner._build_prompt(
                 runner.topology.agent("lead"), [], 1, True,
@@ -1270,6 +1322,15 @@ class OrganizationProjectTests(unittest.TestCase):
                 "what remains a human or project-policy choice",
                 manager_prompt,
             )
+            self.assertIn("You are the research director", manager_prompt)
+            self.assertIn(
+                "source_fragment_sha256",
+                manager_prompt,
+            )
+            self.assertIn(
+                "authorized_bounded_change",
+                manager_prompt,
+            )
             resumed_manager_prompt = runner._build_prompt(
                 runner.topology.agent("manager-b"), [], 2, False,
             )
@@ -1291,6 +1352,45 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertIn(
                 "Route a specific unresolved external-research question",
                 worker_prompt,
+            )
+
+            scout_prompt = runner._build_prompt(
+                runner.topology.agent("research-scout"), [{
+                    "from": "manager-b",
+                    "to": "research-scout",
+                    "tag": "question",
+                    "content": "What observation model supports this claim?",
+                    "candidate": None,
+                    "workItem": "research/observation-model",
+                    "risk": "high",
+                }], 3, True,
+            )
+            self.assertIn(
+                "reccli.organization-research-fragment.v1",
+                scout_prompt,
+            )
+            self.assertIn(
+                "source_search_outcome",
+                scout_prompt,
+            )
+            auditor_prompt = runner._build_prompt(
+                runner.topology.agent("math-auditor"), [{
+                    "from": "manager-b",
+                    "to": "math-auditor",
+                    "tag": "question",
+                    "content": "What observation model supports this claim?",
+                    "candidate": None,
+                    "workItem": "research/observation-model",
+                    "risk": "high",
+                }], 3, True,
+            )
+            self.assertIn(
+                "peer_conclusion_seen_before_derivation=false",
+                auditor_prompt,
+            )
+            self.assertIn(
+                "Do not read the run research-cell directory",
+                auditor_prompt,
             )
 
     def test_prompt_injects_assigned_context_without_hard_read_isolation(self):
@@ -1323,6 +1423,186 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertNotIn("docs/library-b.md", prompt)
             self.assertIn("Do not ingest every indexed library record", prompt)
             self.assertIn("not a deny-read boundary", prompt)
+
+    def test_research_cell_requires_two_fragments_before_dependent_delegation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root,
+                "Resolve one load-bearing mathematical question.",
+                "claude",
+                "scientific",
+                "research-run",
+                run_dir,
+            )
+            runner.research_cell_root.mkdir(parents=True)
+            work_item = "research/identifiability"
+            for specialist in ("research-scout", "math-auditor"):
+                runner._deliver_message(
+                    "manager-b",
+                    {
+                        "to": specialist,
+                        "tag": "question",
+                        "content": (
+                            "Determine the observation-model requirements for "
+                            "this identifiability claim."
+                        ),
+                        "candidate": None,
+                        "workItem": work_item,
+                        "risk": "high",
+                    },
+                    2,
+                )
+            self.assertEqual(
+                set(runner.research_commissions[work_item]["specialists"]),
+                {"research-scout", "math-auditor"},
+            )
+
+            runner._deliver_message(
+                "manager-b",
+                {
+                    "to": "worker-b",
+                    "tag": "plan",
+                    "content": "Implement the estimator now.",
+                    "candidate": None,
+                    "workItem": work_item,
+                    "risk": "high",
+                },
+                2,
+            )
+            self.assertFalse(runner.inboxes["worker-b"])
+            self.assertEqual(runner.dropped_messages, 1)
+
+            fragment_hashes = []
+            for specialist in ("research-scout", "math-auditor"):
+                fragment_path = root / f"{specialist}.json"
+                payload = {
+                    "schema": "reccli.organization-research-fragment.v1",
+                    "run_id": "research-run",
+                    "work_item": work_item,
+                    "specialist_id": specialist,
+                    "question": "What observation model is required?",
+                    "method": "Primary-source review and independent derivation.",
+                    "findings": ["The observation model must be explicit."],
+                    "sources": [{
+                        "title": "Primary metrology standard",
+                        "url_or_doi": "https://example.test/standard",
+                        "accessed_at": "2026-07-18",
+                        "locator": "Section 4",
+                        "supported_claim": "Define the measurand and model.",
+                        "source_kind": "official_standard",
+                    }],
+                    "assumptions": ["Finite measurement variance."],
+                    "counterexamples": ["Residual-only acceptance."],
+                    "unresolved": [],
+                    "recommendation": "Require an explicit model.",
+                    "source_search_outcome": "sources_found",
+                    "independent_analysis": True,
+                    "peer_conclusion_seen_before_derivation": False,
+                }
+                fragment_path.write_text(
+                    json.dumps(payload),
+                    encoding="utf-8",
+                )
+                record = runner._validate_research_fragment(
+                    runner.topology.agent(specialist),
+                    fragment_path,
+                )
+                runner._register_research_artifacts(
+                    [record],
+                    candidate=f"{specialist}-artifact",
+                    round_number=3,
+                )
+                persisted_path = Path(
+                    runner.research_fragments[record["sha256"]][
+                        "persisted_path"
+                    ]
+                )
+                self.assertEqual(
+                    hashlib.sha256(persisted_path.read_bytes()).hexdigest(),
+                    record["sha256"],
+                )
+                fragment_hashes.append(record["sha256"])
+
+            decision_path = root / "decision.json"
+            decision_path.write_text(json.dumps({
+                "schema": "reccli.organization-research-decision.v1",
+                "run_id": "research-run",
+                "work_item": work_item,
+                "question": "What observation model is required?",
+                "decision_to_unlock": "Bound one estimator change.",
+                "created_by": "manager-b",
+                "disposition": "adopt",
+                "source_basis": "mixed",
+                "source_fragment_sha256": fragment_hashes,
+                "sources": [{
+                    "title": "Primary metrology standard",
+                    "url_or_doi": "https://example.test/standard",
+                    "accessed_at": "2026-07-18",
+                    "locator": "Section 4",
+                    "supported_claim": "Define the measurand and model.",
+                    "source_kind": "official_standard",
+                }],
+                "claim": {
+                    "statement": "Identifiability is conditional on observations.",
+                    "equation": "y = h(theta) + epsilon",
+                    "units": "project-declared units",
+                    "coordinate_conventions": "project frame",
+                },
+                "measurement_model": {
+                    "applicability": "required",
+                    "measurand": "theta",
+                    "observation_process": "sample h(theta)",
+                    "noise_or_covariance": "Sigma",
+                    "correlations": "declared in Sigma",
+                    "registration_uncertainty": "separate pose covariance",
+                    "model_discrepancy": "typed unresolved",
+                },
+                "assumptions": ["Differentiable observation function."],
+                "validity_domain": ["Declared support only."],
+                "alternatives": ["Return not_evaluated."],
+                "degeneracies": ["Rank-deficient Jacobian."],
+                "project_evidence": ["Existing exact fixture."],
+                "external_evidence": ["Cited standard."],
+                "policy_choices": ["Human acceptance remains required."],
+                "falsifier": {
+                    "fixture_or_test": "Exact rank-deficient fixture.",
+                    "expected_observation": "Typed ambiguous result.",
+                    "falsifies_if": "The estimator certifies the fit.",
+                },
+                "implementation_readiness": "authorized_bounded_change",
+                "authorized_work_items": [work_item],
+                "code_implications": ["Add typed ambiguity handling."],
+                "prohibited_inferences": ["Residual alone proves identity."],
+                "unresolved": [],
+            }), encoding="utf-8")
+            decision = runner._validate_research_decision(
+                runner.topology.agent("manager-b"),
+                decision_path,
+            )
+            runner._register_research_artifacts(
+                [decision],
+                candidate="manager-b-artifact",
+                round_number=4,
+            )
+            runner._deliver_message(
+                "manager-b",
+                {
+                    "to": "worker-b",
+                    "tag": "plan",
+                    "content": "Implement only the authorized typed state.",
+                    "candidate": None,
+                    "workItem": work_item,
+                    "risk": "high",
+                },
+                4,
+            )
+            self.assertEqual(
+                runner.inboxes["worker-b"][-1]["workItem"],
+                work_item,
+            )
 
     def test_artifact_only_scope_rejects_source_changes(self):
         with tempfile.TemporaryDirectory() as td:

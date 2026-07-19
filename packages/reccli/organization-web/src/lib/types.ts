@@ -128,6 +128,32 @@ export interface RunConclusion {
   };
 }
 
+export interface ResearchCellRecord {
+  work_item?: string;
+  question?: string;
+  risk?: string;
+  specialists?: string[];
+  assigned_specialist?: string;
+  specialist_id?: string;
+  sha256?: string;
+  candidate?: string;
+  persisted_path?: string;
+  implementation_readiness?: string;
+  authorized_work_items?: string[];
+  payload?: {
+    disposition?: string;
+    decision_to_unlock?: string;
+    recommendation?: string;
+    unresolved?: string[];
+    sources?: Array<{
+      title?: string;
+      locator?: string;
+      supported_claim?: string;
+      url_or_doi?: string;
+    }>;
+  };
+}
+
 export interface ApprovalRequest {
   schema?: string;
   version?: number;
@@ -213,6 +239,8 @@ export interface RunSnapshot {
     finalizer_id?: string;
     manager_ids?: string[];
     worker_ids?: string[];
+    research_director_id?: string | null;
+    research_specialist_ids?: string[];
     agents: AgentRecord[];
     routes?: Array<{
       from: string;
@@ -246,4 +274,11 @@ export interface RunSnapshot {
   };
   artifact_manifest?: Record<string, unknown> | null;
   conclusion?: RunConclusion | null;
+  research_cell?: {
+    director_id?: string | null;
+    specialist_ids?: string[];
+    commissions?: ResearchCellRecord[];
+    fragments?: ResearchCellRecord[];
+    decisions?: ResearchCellRecord[];
+  };
 }

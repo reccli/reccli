@@ -524,6 +524,110 @@ select:disabled {
   line-height: 1.45;
 }
 
+.research-cell-panel {
+  margin: 14px 24px 0;
+  overflow: hidden;
+  border: 1px solid rgba(101, 199, 232, 0.25);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(101, 199, 232, 0.08), rgba(16, 27, 30, 0.95));
+  box-shadow: var(--shadow);
+}
+
+.research-cell-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.research-cell-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.research-cell-panel summary strong {
+  font-size: 13px;
+}
+
+.research-summary-facts,
+.research-roster,
+.research-authorizations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.research-summary-facts span,
+.research-roster span,
+.research-authorizations span {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.research-cell-body {
+  padding: 13px 16px 15px;
+  border-top: 1px solid var(--line);
+}
+
+.research-roster {
+  margin-bottom: 10px;
+}
+
+.research-empty {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.research-question-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.research-question-card {
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.research-question-card p {
+  margin: 8px 0;
+  color: #d2dedd;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.research-decision-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.research-decision-line strong {
+  color: var(--cyan);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.research-decision-line code {
+  color: var(--quiet);
+  font-size: 9px;
+}
+
 .approval-panel {
   margin: 14px 24px 0;
   overflow: hidden;
@@ -1553,6 +1657,10 @@ select:disabled {
     margin: 12px 12px 0;
   }
 
+  .research-cell-panel {
+    margin: 12px 12px 0;
+  }
+
   .approval-panel {
     margin: 12px 12px 0;
   }
@@ -1567,6 +1675,11 @@ select:disabled {
   }
 
   .conclusion-panel summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .research-cell-panel summary {
     align-items: flex-start;
     flex-direction: column;
   }

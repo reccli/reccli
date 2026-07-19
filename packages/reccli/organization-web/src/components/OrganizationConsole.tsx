@@ -10,6 +10,7 @@ import {
 import type {
   ActivityRecord,
   AgentRecord,
+  ResearchCellRecord,
   RunConclusion,
   RunSnapshot,
   RunSummary,
@@ -401,6 +402,118 @@ function ConclusionPanel({ conclusion }: { conclusion: RunConclusion }) {
             <p>{conclusion.next_action}</p>
           </div>
         </div>
+      </div>
+    </details>
+  );
+}
+
+function ResearchCellPanel({
+  snapshot,
+}: {
+  snapshot: RunSnapshot;
+}) {
+  const cell = snapshot.research_cell;
+  if (!cell?.director_id || !cell.specialist_ids?.length) return null;
+  const latestCommissions = new Map<string, ResearchCellRecord>();
+  for (const commission of cell.commissions || []) {
+    if (commission.work_item) {
+      latestCommissions.set(commission.work_item, commission);
+    }
+  }
+  const latestDecisions = new Map<string, ResearchCellRecord>();
+  for (const decision of cell.decisions || []) {
+    if (decision.work_item) {
+      latestDecisions.set(decision.work_item, decision);
+    }
+  }
+  const commissioned = [...latestCommissions.values()];
+  const decisions = [...latestDecisions.values()];
+  const fragments = cell.fragments || [];
+  return (
+    <details className="research-cell-panel" open>
+      <summary>
+        <div>
+          <span className="eyebrow">On-demand research cell</span>
+          <strong>Primary sources → independent math audit → decision</strong>
+        </div>
+        <div className="research-summary-facts">
+          <span>{cell.director_id} directs</span>
+          <span>{commissioned.length} questions</span>
+          <span>{decisions.length} decisions</span>
+        </div>
+      </summary>
+      <div className="research-cell-body">
+        <div className="research-roster">
+          <span>Director: {cell.director_id}</span>
+          {cell.specialist_ids.map((agentId) => {
+            const agent = snapshot.topology_graph.agents.find(
+              (candidate) => candidate.id === agentId,
+            );
+            return (
+              <span key={agentId}>
+                {agentId}: {providerLabel(agent?.provider)}
+              </span>
+            );
+          })}
+        </div>
+        {!commissioned.length ? (
+          <p className="research-empty">
+            Dormant. Manager B will wake both specialists only when a
+            load-bearing technical question is unresolved.
+          </p>
+        ) : (
+          <div className="research-question-grid">
+            {commissioned.map((commission) => {
+              const decision = latestDecisions.get(
+                commission.work_item || "",
+              );
+              const questionFragments = fragments.filter(
+                (fragment) =>
+                  fragment.work_item === commission.work_item,
+              );
+              return (
+                <article
+                  className="research-question-card"
+                  key={commission.work_item}
+                >
+                  <div className="activity-kicker">
+                    <span>{commission.work_item}</span>
+                    <span>
+                      {decision
+                        ? titleCase(
+                            decision.implementation_readiness ||
+                              decision.payload?.disposition,
+                          )
+                        : `${questionFragments.length}/${cell.specialist_ids?.length || 2} fragments`}
+                    </span>
+                  </div>
+                  <p>
+                    {decision?.payload?.decision_to_unlock ||
+                      commission.question ||
+                      "Research question commissioned."}
+                  </p>
+                  {decision && (
+                    <>
+                      <div className="research-decision-line">
+                        <strong>
+                          {titleCase(decision.payload?.disposition)}
+                        </strong>
+                        <code>{decision.sha256?.slice(0, 12)}</code>
+                      </div>
+                      {!!decision.authorized_work_items?.length && (
+                        <div className="research-authorizations">
+                          {decision.authorized_work_items.map((workItem) => (
+                            <span key={workItem}>{workItem}</span>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
       </div>
     </details>
   );
@@ -1036,6 +1149,7 @@ export default function OrganizationConsole() {
             onSuccessor={setSelectedRun}
           />
         )}
+        {snapshot && <ResearchCellPanel snapshot={snapshot} />}
         {snapshot?.conclusion && (
           <ConclusionPanel conclusion={snapshot.conclusion} />
         )}

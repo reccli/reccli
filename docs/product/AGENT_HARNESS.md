@@ -298,6 +298,8 @@ The default mixed assignment is relative to the MCP host provider:
 | Mission lead | Host |
 | Manager/worker lanes A and C | Opposite |
 | Manager/worker lanes B and D | Host |
+| Research scout | Research-director provider |
+| Mathematical auditor | Opposite research-scout provider |
 | Release manager (`manager-d`) | Host |
 | Rotating release reviewer | Prefer opposite |
 | Fresh final verifier | Opposite |
@@ -319,19 +321,25 @@ either is unavailable. Mixed runs currently require `model="auto"`, allowing
 each native CLI to use its own configured model rather than passing one
 provider-specific model name to both.
 
-Leads and managers have native external research available. Managers own the
-first bounded research pass for technical blockers in their lanes. Before a
-manager declares a blocker terminal because a model, algorithm, standard,
-numerical method, or scientific formulation is missing, it must consult primary
-sources once or explicitly record that research cannot reduce the uncertainty
-because only project authority or unavailable acquisition evidence remains.
+Leads and managers have native external research available. In the scientific
+topology, Manager B additionally directs two event-driven specialists:
+`research-scout` and `math-auditor`. A materially unsettled model, method,
+standard, identifiability, uncertainty, or numerical claim wakes both on the
+same neutral work item. Each specialist uses a fresh native session; the math
+auditor has no edge to the scout and derives the claim before seeing the
+scout's conclusion. Their validated fragments are synthesized into a
+`reccli.organization-research-decision.v1` packet. RecCli rejects dependent
+implementation on the commissioned work item until that packet explicitly
+authorizes a bounded change.
+
 The report separates literature findings, required assumptions, project-held
-evidence, and human policy choices. The lead enforces that trigger and searches
+evidence, and human policy choices. The lead enforces the trigger and searches
 directly only for macro reconnaissance, conflicting sourced conclusions,
 scope-changing standards, or terminal adjudication; it does not repeat a
-manager's completed search. External literature informs alternatives but never
+completed specialist pass. External literature informs alternatives but never
 overrides project authority, immutable evidence, reproduced tests, or human
-acceptance.
+acceptance. The specialists remain dormant when repository authority already
+settles the question.
 
 The default topology is deliberately close to Org-Bench's successful Google
 shape while adding two bounded controls:
@@ -407,7 +415,8 @@ lane union as an indexed library, avoiding needless up-front context ingestion.
 `topology="scientific"` is a single reversibility-based organization for
 evidence-heavy research and engineering. RecCli supplies generic role slots:
 reproduction and receipt integrity, hypothesis/model evaluation, structural
-and integration validation, and uncertainty/alternative explanations. The
+and integration validation, uncertainty/alternative explanations, and an
+on-demand source-scout/mathematical-auditor research cell. The
 project's tracked context manifest specializes those slots with domain-specific
 lane purposes and documents. Its four workers may choose hypotheses, modify
 disposable branches, and run sandbox experiments immediately after the
@@ -420,8 +429,9 @@ cannot collectively pass the cap. Markdown/text reports that only summarize
 existing evidence are free, while placing executable probes or result data
 inside a report directory does not evade accounting. Every claim and rejection
 is recorded in `experiments.jsonl`. The counter limits resources; it does not
-pretend to decide novelty or scientific merit. Managers A/B coordinate evidence
-and hypotheses, manager C is fully sighted and veto-only, and manager D may
+pretend to decide novelty or scientific merit. Manager A coordinates evidence;
+Manager B coordinates hypotheses and owns research synthesis; manager C is
+fully sighted and veto-only; and manager D may
 integrate only patch-identical candidates whose adversarial review completed
 without a veto. No agent can apply the resulting proposal to the canonical
 branch or archive.

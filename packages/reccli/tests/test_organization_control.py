@@ -481,7 +481,7 @@ class OrganizationControlTests(unittest.TestCase):
 
             snapshot = organization_snapshot(str(root), "control-run")
             self.assertEqual(snapshot["status"], "running")
-            self.assertEqual(len(snapshot["topology_graph"]["agents"]), 9)
+            self.assertEqual(len(snapshot["topology_graph"]["agents"]), 11)
             self.assertEqual(
                 next(
                     agent for agent in snapshot["topology_graph"]["agents"]

@@ -195,6 +195,16 @@ def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str,
         or {}
     )
     states = status.get("agent_states") or {}
+    configured_agents = list(topology.agents)
+    if provider_assignments:
+        # Historical runs persist their exact provider-assignment roster.
+        # Filter newly added topology slots so replaying an older dashboard
+        # does not make dormant agents appear retroactively.
+        configured_agents = [
+            agent for agent in configured_agents
+            if agent.agent_id in provider_assignments
+        ]
+    configured_ids = {agent.agent_id for agent in configured_agents}
     agents = [
         {
             "id": agent.agent_id,
@@ -206,7 +216,7 @@ def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str,
             "is_finalizer": agent.agent_id == topology.finalizer_id,
             "is_integrator": agent.agent_id in topology.integrator_ids,
         }
-        for agent in topology.agents
+        for agent in configured_agents
     ]
     routes = [
         {
@@ -215,6 +225,7 @@ def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str,
             "tags": sorted(tags) if tags is not None else None,
         }
         for (sender, recipient), tags in sorted(topology.routes.items())
+        if sender in configured_ids and recipient in configured_ids
     ]
     return {
         "id": topology.topology_id,
@@ -223,10 +234,32 @@ def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str,
         "culture": topology.culture,
         "leader_id": topology.leader_id,
         "finalizer_id": topology.finalizer_id,
-        "manager_ids": list(topology.manager_ids),
-        "worker_ids": list(topology.worker_ids),
-        "primary_manager_by_worker": dict(topology.primary_manager_by_worker),
-        "integrator_ids": sorted(topology.integrator_ids),
+        "manager_ids": [
+            agent_id for agent_id in topology.manager_ids
+            if agent_id in configured_ids
+        ],
+        "worker_ids": [
+            agent_id for agent_id in topology.worker_ids
+            if agent_id in configured_ids
+        ],
+        "primary_manager_by_worker": {
+            worker: manager
+            for worker, manager in topology.primary_manager_by_worker.items()
+            if worker in configured_ids and manager in configured_ids
+        },
+        "research_director_id": (
+            topology.research_director_id
+            if topology.research_director_id in configured_ids
+            else None
+        ),
+        "research_specialist_ids": [
+            agent_id for agent_id in topology.research_specialist_ids
+            if agent_id in configured_ids
+        ],
+        "integrator_ids": sorted(
+            agent_id for agent_id in topology.integrator_ids
+            if agent_id in configured_ids
+        ),
         "scheduler": topology.scheduler,
         "delegation_gate": topology.delegation_gate,
         "inbox_only_ids": sorted(topology.inbox_only_ids),
@@ -321,6 +354,18 @@ def organization_snapshot(
     )
     artifact_manifest = _read_json(run_dir / "deliverables" / "manifest.json", None)
     conclusion = _read_json(run_dir / "run-conclusion.json", None)
+    research_commissions = _tail_jsonl(
+        run_dir / "research-cell" / "commissions.jsonl",
+        max(count, 500),
+    )
+    research_fragments = _tail_jsonl(
+        run_dir / "research-cell" / "fragments.jsonl",
+        max(count, 500),
+    )
+    research_decisions = _tail_jsonl(
+        run_dir / "research-cell" / "decisions.jsonl",
+        max(count, 500),
+    )
     topology = _topology_snapshot(run, status)
     live, active_agent_ids = process_group_activity(
         pid,
@@ -356,6 +401,19 @@ def organization_snapshot(
                 and message.get("from") == primary
                 and message.get("to") == agent["id"]
                 and message.get("tag") in {"plan", "handoff", "review"}
+                and message.get("workItem")
+                and message.get("risk") in {"routine", "high", "release"}
+            ]
+            agent["assignment"] = assignments[-1] if assignments else None
+            if not assignments and not last:
+                agent["state"] = "awaiting_assignment"
+        if agent["id"] in topology.get("research_specialist_ids", []):
+            director = topology.get("research_director_id")
+            assignments = [
+                message for message in all_messages
+                if message.get("status", "delivered") == "delivered"
+                and message.get("from") == director
+                and message.get("to") == agent["id"]
                 and message.get("workItem")
                 and message.get("risk") in {"routine", "high", "release"}
             ]
@@ -419,6 +477,13 @@ def organization_snapshot(
             "supervisor": supervisor,
         },
         "topology_graph": topology,
+        "research_cell": {
+            "director_id": topology.get("research_director_id"),
+            "specialist_ids": topology.get("research_specialist_ids", []),
+            "commissions": research_commissions,
+            "fragments": research_fragments,
+            "decisions": research_decisions,
+        },
         "messages": messages,
         "events": events,
         "telemetry": telemetry,

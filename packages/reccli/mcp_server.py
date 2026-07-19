@@ -1095,8 +1095,12 @@ def start_organization(
 
     `topology="scientific"` cuts authority at reversibility rather than at a
     research/execution phase boundary. Workers may choose and run experiments
-    in disposable branches. `max_experiments` bounds sealed generated-output
-    bundles. `protected_paths` is a deny-write list for tracked immutable
+    in disposable branches. Manager B may wake two fresh, opposite-provider
+    research specialists for a load-bearing technical question; their
+    structured fragments must be synthesized into a validated decision packet
+    before dependent implementation is delegated. Dormant specialists consume
+    no agent turns. `max_experiments` bounds sealed generated-output bundles.
+    `protected_paths` is a deny-write list for tracked immutable
     evidence, authority records, ledgers, or standards. The adversarial auditor is fully
     evidence-sighted and veto-only. Completion emits a promotion request; it
     does not import outputs into the canonical archive, push, or merge the
