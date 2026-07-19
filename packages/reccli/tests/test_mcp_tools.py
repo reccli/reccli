@@ -1757,6 +1757,84 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
             console_port=9001,
         )
 
+    def test_unified_start_defaults_to_project_launch_without_a_mission(self):
+        from unittest import mock
+
+        expected = {
+            "status": "starting",
+            "run_id": "project-run",
+            "launch_contract": {"source": "reccli.organization-launch.json"},
+        }
+        with mock.patch(
+            "reccli.organization_project_launch.start_project_organization_result",
+            return_value=expected,
+        ) as launch:
+            result = json.loads(start_organization(
+                "/tmp/project",
+                open_console=False,
+                console_port=9002,
+            ))
+        self.assertEqual(result, expected)
+        launch.assert_called_once_with(
+            "/tmp/project",
+            open_console=False,
+            console_port=9002,
+        )
+
+    def test_unified_start_requires_explicit_custom_mode_for_contract_project(self):
+        with tempfile.TemporaryDirectory() as d:
+            project_root = self._make_git_project(Path(d))
+            (project_root / "reccli.organization-launch.json").write_text(
+                '{"schema":"reccli.project-organization-launch.v1"}\n',
+                encoding="utf-8",
+            )
+
+            blocked = json.loads(start_organization(
+                str(project_root),
+                "Bypass the tracked project mission.",
+                provider="codex",
+            ))
+
+        self.assertEqual(blocked["status"], "launch_blocked")
+        self.assertEqual(
+            blocked["code"],
+            "explicit_custom_mode_required",
+        )
+
+    def test_unified_start_allows_explicit_custom_mode_for_contract_project(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            project_root = self._make_git_project(Path(d))
+            (project_root / "reccli.organization-launch.json").write_text(
+                '{"schema":"reccli.project-organization-launch.v1"}\n',
+                encoding="utf-8",
+            )
+            expected = {
+                "status": "starting",
+                "run_id": "custom-run",
+            }
+            with mock.patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                return_value=expected,
+            ) as launch:
+                result = json.loads(start_organization(
+                    str(project_root),
+                    "Run the deliberate custom benchmark.",
+                    launch_mode="custom",
+                    provider="codex",
+                    max_rounds=2,
+                ))
+
+        self.assertEqual(result, expected)
+        arguments = launch.call_args.args[0]
+        self.assertEqual(
+            arguments["mission"],
+            "Run the deliberate custom benchmark.",
+        )
+        self.assertEqual(arguments["provider"], "codex")
+        self.assertEqual(arguments["max_rounds"], 2)
+
     def test_start_registers_detached_worker_and_status_is_durable(self):
         from unittest import mock
 

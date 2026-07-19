@@ -18,9 +18,11 @@ Claude Code and Codex can also call `open_organization_console`. The launcher
 reuses a matching running console and its valid token instead of starting a
 second server on the same port.
 
-For projects with a tracked launch contract, `start_project_organization`
-performs preflight, dynamic mission selection, organization launch, and console
-open/reuse in one MCP call.
+For projects with a tracked launch contract, call `start_organization` with only
+the project path. It performs preflight, dynamic mission selection,
+organization launch, and console open/reuse in one MCP call. Supplying a custom
+mission to a contract-owning project requires the explicit
+`launch_mode="custom"` escape hatch.
 
 Projects may opt into `latest-terminal-conclusion` continuation in that tracked
 contract. After the first reviewed mission, the one-line launcher then derives

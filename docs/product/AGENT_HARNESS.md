@@ -202,20 +202,19 @@ are not an always-on daemon and do not poll for work. Start one from any
 MCP-connected Claude Code or Codex session:
 
 ```python
-start_project_organization(
+start_organization(
     working_directory="/path/to/project",
-    open_console=True,
 )
 ```
 
-This preferred one-line path requires a tracked project contract. RecCli runs
-its shell-free preflights, verifies the emitter's dynamic tracked mission
-against current HEAD, refuses duplicate or pending-approval runs, and launches
-the emitted payload unchanged unless that same tracked contract explicitly
-opts into terminal-conclusion continuation. In that mode, the latest eligible
-lead-authored conclusion replaces the initial mission with a hash-bound
-successor handoff and carries the remaining experiment budget. Projects that
-intentionally supply an ad hoc mission can use the lower-level surface:
+This preferred one-line path requires a tracked project contract. With no
+caller-supplied mission, `start_organization` runs the contract's shell-free
+preflights, verifies the emitter's dynamic tracked mission against current
+HEAD, refuses duplicate or pending-approval runs, opens the console, and
+launches the emitted payload unchanged unless that same tracked contract
+explicitly opts into terminal-conclusion continuation. In that mode, the latest
+eligible lead-authored conclusion replaces the initial mission with a
+hash-bound successor handoff and carries the remaining experiment budget.
 
 ```json
 {
@@ -236,6 +235,7 @@ intentionally supply an ad hoc mission can use the lower-level surface:
 start_organization(
     working_directory="/path/to/project",
     mission="Implement the feature and satisfy these acceptance criteria: ...",
+    launch_mode="custom",
     provider="auto",
     topology="google-rotating",
     max_rounds=8,
@@ -243,6 +243,11 @@ start_organization(
     evidence_paths=["out/project-intelligence", "/path/to/reference-assets"],
 )
 ```
+
+`launch_mode="custom"` is required when a project launch contract exists. This
+makes bypassing the project's readiness checks and dynamic mission an explicit
+choice. On repositories without a project contract, a supplied mission uses
+the custom path automatically.
 
 The call returns immediately. Poll with:
 
@@ -464,6 +469,7 @@ and a binding decision without losing a valid decision to schema vocabulary.
 start_organization(
     working_directory="/path/to/scientific-project",
     mission="Autonomously investigate the objective and prepare a promotion proposal.",
+    launch_mode="custom",
     provider="auto",
     topology="scientific",
     max_rounds=8,

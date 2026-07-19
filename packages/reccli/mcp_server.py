@@ -1034,7 +1034,8 @@ def search_by_file(
 @mcp.tool()
 def start_organization(
     working_directory: str,
-    mission: str,
+    mission: Optional[str] = None,
+    launch_mode: str = "auto",
     provider: str = "auto",
     topology: str = "google-rotating",
     max_rounds: int = 8,
@@ -1046,8 +1047,24 @@ def start_organization(
     context_manifest: Optional[str] = None,
     experiment_policy: Optional[str] = None,
     max_experiments: int = 3,
+    open_console: Optional[bool] = None,
+    console_port: int = 8777,
 ) -> str:
-    """Start a durable, subscription-backed multi-agent organization run.
+    """Start the project's organization, or an explicitly custom organization.
+
+    This is the single public launch surface. With the default
+    ``launch_mode="auto"`` and no ``mission``, RecCli uses the repository's
+    tracked project launch contract: it runs declared preflights, validates the
+    dynamic mission and current HEAD, applies an eligible terminal-conclusion
+    continuation, prevents duplicate/pending-approval launches, and opens the
+    authenticated console.
+
+    For a repository without a project launch contract, supplying ``mission``
+    starts a custom organization using the remaining arguments. If a tracked
+    project contract exists, a caller-supplied mission/configuration requires
+    ``launch_mode="custom"`` so project safety policy cannot be bypassed by
+    accident. ``launch_mode="project"`` explicitly requires the project path
+    and rejects a caller-supplied mission.
 
     Returns immediately after launching a detached supervisor. Each organization
     member runs as a separate persistent Claude Code or Codex CLI session using
@@ -1124,7 +1141,9 @@ def start_organization(
 
     Args:
         working_directory: Project root or any path inside the project.
-        mission: Concrete product/engineering brief and acceptance criteria.
+        mission: Custom product/engineering brief. Omit for the normal tracked
+            project launch.
+        launch_mode: ``auto`` (recommended), ``project``, or ``custom``.
         provider: "auto", "mixed", "claude", or "codex". Uses installed native CLIs.
         topology: "google-rotating" (recommended), "google" (baseline), or
             "scientific" (autonomous reversible scientific exploration).
@@ -1147,13 +1166,87 @@ def start_organization(
             `reccli.organization-experiment-policy.v1` evaluator policy.
         max_experiments: Hard cap on autonomous challenger trials and sealed
             generated-output bundles (default 3).
+        open_console: In project mode, defaults to true. In custom mode,
+            defaults to false for backward compatibility.
+        console_port: Authenticated localhost console port (default 8777).
     """
     try:
-        from .organization_launch import start_organization_from_arguments
+        normalized_mode = str(launch_mode or "auto").strip().lower()
+        if normalized_mode not in {"auto", "project", "custom"}:
+            return json.dumps({
+                "status": "launch_blocked",
+                "code": "invalid_launch_mode",
+                "error": (
+                    "launch_mode must be auto, project, or custom"
+                ),
+            }, indent=2)
 
-        return json.dumps(start_organization_from_arguments({
+        project_root = _resolve_root(working_directory)
+        has_project_contract = False
+        if project_root is not None:
+            has_project_contract = (
+                (project_root / "reccli.organization-launch.json").exists()
+                or (
+                    project_root
+                    / "scripts"
+                    / "validate_organization_readiness.py"
+                ).is_file()
+            )
+
+        custom_mission = mission.strip() if isinstance(mission, str) else ""
+        use_project_launch = (
+            normalized_mode == "project"
+            or (normalized_mode == "auto" and not custom_mission)
+        )
+        if use_project_launch:
+            if custom_mission:
+                return json.dumps({
+                    "status": "launch_blocked",
+                    "code": "project_mode_rejects_custom_mission",
+                    "error": (
+                        "project launch mode selects the tracked mission; "
+                        "omit mission or explicitly use launch_mode='custom'"
+                    ),
+                }, indent=2)
+            from .organization_project_launch import (
+                start_project_organization_result,
+            )
+
+            return json.dumps(start_project_organization_result(
+                working_directory,
+                open_console=(
+                    True if open_console is None else bool(open_console)
+                ),
+                console_port=int(console_port),
+            ), indent=2, ensure_ascii=False)
+
+        if not custom_mission:
+            return json.dumps({
+                "status": "launch_blocked",
+                "code": "custom_mission_required",
+                "error": (
+                    "custom launch mode requires a non-empty mission"
+                ),
+            }, indent=2)
+        if normalized_mode == "auto" and has_project_contract:
+            return json.dumps({
+                "status": "launch_blocked",
+                "code": "explicit_custom_mode_required",
+                "error": (
+                    "this repository owns a project organization launch "
+                    "contract; omit mission to use it, or explicitly set "
+                    "launch_mode='custom' to bypass project launch policy"
+                ),
+            }, indent=2)
+
+        from .organization_launch import (
+            launch_organization_console,
+            start_organization_from_arguments,
+        )
+
+        started = start_organization_from_arguments({
             "working_directory": working_directory,
-            "mission": mission,
+            "mission": custom_mission,
             "provider": provider,
             "topology": topology,
             "max_rounds": max_rounds,
@@ -1165,49 +1258,32 @@ def start_organization(
             "context_manifest": context_manifest,
             "experiment_policy": experiment_policy,
             "max_experiments": max_experiments,
-        }), indent=2)
+        })
+        if open_console is True:
+            root = _resolve_root(working_directory)
+            if root is not None:
+                started["console"] = launch_organization_console(
+                    root,
+                    port=int(console_port),
+                    open_browser=True,
+                )
+        return json.dumps(started, indent=2, ensure_ascii=False)
     except Exception as exc:
         return json.dumps({"status": "failed_to_start", "error": str(exc)}, indent=2)
 
 
-@mcp.tool()
 def start_project_organization(
     working_directory: str,
     open_console: bool = True,
     console_port: int = 8777,
 ) -> str:
-    """Atomically launch the project's tracked default organization.
-
-    This is the one-line launch surface for projects that own their mission and
-    readiness policy. RecCli discovers a tracked
-    ``reccli.organization-launch.json`` contract (or the conventional tracked
-    ``scripts/validate_organization_readiness.py --emit-launch`` compatibility
-    emitter), runs every declared preflight without a shell, validates the
-    exact emitted ``start_organization`` arguments, and starts a detached run.
-
-    A dynamic contract must bind its selected tracked mission, current Git
-    HEAD, mission SHA-256, and state fingerprint. RecCli refuses stale or
-    fabricated selections. A project may explicitly opt into deriving a
-    bounded successor mission from its latest eligible lead-authored terminal
-    conclusion, so callers do not need to rewrite the prior run's next action
-    into a launch prompt. Host-fallback and promotion-ready conclusions cannot
-    authorize continuation. RecCli also refuses duplicate live runs and
-    unresolved human-approval checkpoints; in those cases it returns the
-    existing run and opens its console instead of launching another
-    organization.
-
-    Args:
-        working_directory: Project root or any path inside the project.
-        open_console: Open/reuse the authenticated localhost console.
-        console_port: Console port, default 8777.
-    """
-    from .organization_project_launch import start_project_organization_result
-
-    return json.dumps(start_project_organization_result(
+    """Deprecated compatibility alias; use ``start_organization``."""
+    return start_organization(
         working_directory,
+        launch_mode="project",
         open_console=open_console,
         console_port=console_port,
-    ), indent=2, ensure_ascii=False)
+    )
 
 
 @mcp.tool()
