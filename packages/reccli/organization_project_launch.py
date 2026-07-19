@@ -452,7 +452,7 @@ def _validated_continuation_policy(
         "eligible_statuses": statuses,
         "eligible_promotion_readiness": readiness,
         "carry_experiment_budget": bool(
-            raw.get("carry_experiment_budget", True),
+            raw.get("carry_experiment_budget", False),
         ),
     }
 
@@ -872,6 +872,15 @@ def start_project_organization(
                 "continuation_mode": (
                     continuation_policy["mode"]
                     if continuation_policy else None
+                ),
+                "experiment_budget_scope": (
+                    (
+                        "chain"
+                        if continuation_policy["carry_experiment_budget"]
+                        else "per_run"
+                    )
+                    if continuation_policy
+                    else None
                 ),
             },
             "mission_selection": selection,

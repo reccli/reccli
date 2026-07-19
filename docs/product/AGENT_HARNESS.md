@@ -214,7 +214,9 @@ HEAD, refuses duplicate or pending-approval runs, opens the console, and
 launches the emitted payload unchanged unless that same tracked contract
 explicitly opts into terminal-conclusion continuation. In that mode, the latest
 eligible lead-authored conclusion replaces the initial mission with a
-hash-bound successor handoff and carries the remaining experiment budget.
+hash-bound successor handoff. Experiment budgets renew to the project's
+configured per-run cap unless the contract explicitly makes the cap
+chain-wide.
 
 ```json
 {
@@ -226,10 +228,15 @@ hash-bound successor handoff and carries the remaining experiment budget.
       "stalled"
     ],
     "eligible_promotion_readiness": ["not_ready", "no_candidate"],
-    "carry_experiment_budget": true
+    "carry_experiment_budget": false
   }
 }
 ```
+
+Continuation budgets are per-run by default: the emitted
+`max_experiments` cap is renewed for each successor while every parent
+conclusion retains its prior usage. Set `carry_experiment_budget` to `true`
+only when the cap must apply across the complete continuation chain.
 
 ```python
 start_organization(

@@ -44,6 +44,8 @@ def _write_dynamic_contract(
     *,
     stale_head: bool = False,
     continuation: bool = False,
+    carry_experiment_budget: bool | None = True,
+    max_experiments: int = 1,
     mission_text: str = (
         "Audit the current project state and ship only a verified candidate.\n"
     ),
@@ -89,7 +91,7 @@ def _write_dynamic_contract(
                     "topology": "scientific",
                     "max_rounds": 4,
                     "max_concurrency": 3,
-                    "max_experiments": 1,
+                    "max_experiments": {max_experiments!r},
                 }},
             }}))
             """
@@ -122,8 +124,11 @@ def _write_dynamic_contract(
                 "stalled",
             ],
             "eligible_promotion_readiness": ["not_ready", "no_candidate"],
-            "carry_experiment_budget": True,
         }
+        if carry_experiment_budget is not None:
+            contract["continuation_policy"]["carry_experiment_budget"] = (
+                carry_experiment_budget
+            )
     (root / PROJECT_LAUNCH_FILENAME).write_text(
         json.dumps(contract, indent=2)
         + "\n",
@@ -312,7 +317,11 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
-            _write_dynamic_contract(root, continuation=True)
+            _write_dynamic_contract(
+                root,
+                continuation=True,
+                max_experiments=3,
+            )
             parent_dir = _write_terminal_run(root)
             captured = {}
 
@@ -360,6 +369,10 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 "latest-terminal-conclusion",
             )
             self.assertEqual(
+                result["launch_contract"]["experiment_budget_scope"],
+                "chain",
+            )
+            self.assertEqual(
                 captured["continuation_from_run_id"],
                 "terminal-parent",
             )
@@ -368,7 +381,7 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 expected_sha,
             )
             self.assertEqual(captured["mission_origin"], "terminal-conclusion")
-            self.assertEqual(captured["max_experiments"], 1)
+            self.assertEqual(captured["max_experiments"], 2)
             self.assertIn(
                 "Do not merely restate blockers", captured["mission"],
             )
@@ -398,6 +411,86 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
             self.assertNotEqual(
                 captured["mission"],
                 (root / "mission.md").read_text(encoding="utf-8").strip(),
+            )
+
+    def test_terminal_continuation_uses_fresh_per_run_experiment_budget(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(
+                root,
+                continuation=True,
+                carry_experiment_budget=False,
+                max_experiments=3,
+            )
+            _write_terminal_run(root)
+            captured = {}
+
+            def fake_start(arguments):
+                captured.update(arguments)
+                return {
+                    "status": "starting",
+                    "run_id": "successor-run",
+                    "run_dir": str(
+                        root / "devsession" / "agent-organizations"
+                        / "successor-run"
+                    ),
+                    "pid": 1234,
+                }
+
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                side_effect=fake_start,
+            ):
+                result = start_project_organization(
+                    str(root),
+                    open_console=False,
+                )
+
+            self.assertEqual(captured["max_experiments"], 3)
+            self.assertEqual(
+                result["launch_contract"]["experiment_budget_scope"],
+                "per_run",
+            )
+
+    def test_terminal_continuation_defaults_to_per_run_experiment_budget(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(
+                root,
+                continuation=True,
+                carry_experiment_budget=None,
+                max_experiments=3,
+            )
+            _write_terminal_run(root)
+            captured = {}
+
+            def fake_start(arguments):
+                captured.update(arguments)
+                return {
+                    "status": "starting",
+                    "run_id": "successor-run",
+                    "run_dir": str(
+                        root / "devsession" / "agent-organizations"
+                        / "successor-run"
+                    ),
+                    "pid": 1234,
+                }
+
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                side_effect=fake_start,
+            ):
+                result = start_project_organization(
+                    str(root),
+                    open_console=False,
+                )
+
+            self.assertEqual(captured["max_experiments"], 3)
+            self.assertEqual(
+                result["launch_contract"]["experiment_budget_scope"],
+                "per_run",
             )
 
     def test_ineligible_terminal_result_blocks_instead_of_replaying_base_mission(self):
