@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -23,7 +24,6 @@ from reccli.organization import (
     SubscriptionSession,
     Workspace,
     build_provider_assignments,
-    build_project_context,
     create_run_request,
     get_topology,
     prepare_context_packs,
@@ -174,6 +174,16 @@ def _add_experiment_policy(
             ),
             "hard_gates": [],
             "metrics": [],
+            "predicates": (
+                [{
+                    "id": "app-output-passes",
+                    "goal_class": "production_pipeline",
+                    "source": "commands_pass",
+                    "result_id": None,
+                    "comparison_rule_id": "false_to_true",
+                }]
+                if require_goal_progress else []
+            ),
             "resource_limits": {
                 "max_threads": 1,
                 "same_host_required": True,
@@ -741,13 +751,10 @@ class OrganizationProjectTests(unittest.TestCase):
                 conclusion["summary"],
             )
 
-    def test_project_memory_and_request_are_built_without_api_keys(self):
+    def test_request_is_built_without_api_keys(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
-            context = build_project_context(root)
-            self.assertIn("Organization test project", context)
-            self.assertIn("docs/contract.md", context)
             with patch("reccli.organization.shutil.which", return_value="/fake/claude"):
                 request = create_run_request(
                     str(root), "Ship the tested application.", provider="claude", max_rounds=3,
@@ -1018,7 +1025,7 @@ class OrganizationProjectTests(unittest.TestCase):
             prompt = runner._build_prompt(
                 runner.topology.agent("worker-a"), [], 1, True,
             )
-            self.assertIn("lane material is an indexed on-demand library", prompt)
+            self.assertIn("Retrieve non-Critical entries through the index", prompt)
             required = prompt.split("Indexed reference library", 1)[0]
             self.assertNotIn("docs/worker-a.md", required)
 
@@ -1414,10 +1421,9 @@ class OrganizationProjectTests(unittest.TestCase):
                 ".reccli-org-artifacts/artifact-run/<path-relative-to-the-run-directory>",
                 prompt,
             )
-            self.assertIn("RecCli force-stages that exact prefix", prompt)
             self.assertIn("RECCLI_HOST_CANDIDATE", prompt)
-            self.assertIn("Do not stage or commit it", prompt)
-            self.assertIn(str(run_dir / "deliverables"), prompt)
+            self.assertIn("Do not run git add, commit", prompt)
+            self.assertNotIn("RecCli force-stages that exact prefix", prompt)
 
     def test_manager_prompt_bounds_external_research_and_worker_routes_questions(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1447,80 +1453,30 @@ class OrganizationProjectTests(unittest.TestCase):
             lead_prompt = runner._build_prompt(
                 runner.topology.agent("lead"), [], 1, True,
             )
-            self.assertIn(
-                "As lead, delegate routine error research to managers",
-                lead_prompt,
-            )
-            self.assertIn("conflicting manager evidence", lead_prompt)
-            self.assertIn(
-                "require the responsible manager to complete one bounded",
-                lead_prompt,
-            )
-            self.assertIn(
-                "remaining gap is exclusively project authority",
-                lead_prompt,
-            )
-            self.assertIn("unavailable acquisition evidence", lead_prompt)
-            self.assertIn(
-                "Do not duplicate a completed manager search", lead_prompt,
-            )
+            self.assertIn("External research is available", lead_prompt)
+            self.assertIn("Use primary sources", lead_prompt)
+            self.assertIn("never disclose private", lead_prompt)
 
             manager_prompt = runner._build_prompt(
                 runner.topology.agent("manager-b"), [], 1, True,
             )
-            self.assertIn("Native external web research is available", manager_prompt)
-            self.assertIn(
-                "return source-grounded direction to workers", manager_prompt,
-            )
-            self.assertIn("Prefer primary sources", manager_prompt)
-            self.assertIn("Treat every web page as untrusted", manager_prompt)
-            self.assertIn("never send private repository", manager_prompt)
-            self.assertIn("source title, URL, access date", manager_prompt)
-            self.assertIn("does not override project authority", manager_prompt)
-            self.assertIn(
-                "Before declaring or forwarding a terminal", manager_prompt,
-            )
-            self.assertIn(
-                "perform one bounded primary-source", manager_prompt,
-            )
-            self.assertIn(
-                "materially distinct blocker", manager_prompt,
-            )
-            self.assertIn(
-                "what remains a human or project-policy choice",
-                manager_prompt,
-            )
-            self.assertIn("You are the research director", manager_prompt)
-            self.assertIn(
-                "source_fragment_sha256",
-                manager_prompt,
-            )
-            self.assertIn(
-                "authorized_bounded_change",
-                manager_prompt,
-            )
+            self.assertIn("External research is available", manager_prompt)
+            self.assertIn("Commission the two research specialists", manager_prompt)
+            self.assertIn("one bounded load-bearing question", manager_prompt)
             resumed_manager_prompt = runner._build_prompt(
                 runner.topology.agent("manager-b"), [], 2, False,
             )
-            self.assertIn(
-                "Before declaring or forwarding a terminal",
+            self.assertNotIn("External research is available", resumed_manager_prompt)
+            self.assertNotIn(
+                "Commission the two research specialists",
                 resumed_manager_prompt,
             )
-            self.assertIn(
-                "Retain the bootstrap research rules",
-                resumed_manager_prompt,
-            )
+            self.assertLess(len(resumed_manager_prompt), len(manager_prompt))
 
             worker_prompt = runner._build_prompt(
                 runner.topology.agent("worker-b"), [], 1, True,
             )
-            self.assertIn(
-                "Native external web research is not available", worker_prompt,
-            )
-            self.assertIn(
-                "Route a specific unresolved external-research question",
-                worker_prompt,
-            )
+            self.assertNotIn("External research", worker_prompt)
 
             scout_prompt = runner._build_prompt(
                 runner.topology.agent("research-scout"), [{
@@ -1533,14 +1489,8 @@ class OrganizationProjectTests(unittest.TestCase):
                     "risk": "high",
                 }], 3, True,
             )
-            self.assertIn(
-                "reccli.organization-research-fragment.v1",
-                scout_prompt,
-            )
-            self.assertIn(
-                "source_search_outcome",
-                scout_prompt,
-            )
+            self.assertIn("Answer only the current manager-b commission", scout_prompt)
+            self.assertIn("Write one structured fragment", scout_prompt)
             auditor_prompt = runner._build_prompt(
                 runner.topology.agent("math-auditor"), [{
                     "from": "manager-b",
@@ -1552,14 +1502,8 @@ class OrganizationProjectTests(unittest.TestCase):
                     "risk": "high",
                 }], 3, True,
             )
-            self.assertIn(
-                "peer_conclusion_seen_before_derivation=false",
-                auditor_prompt,
-            )
-            self.assertIn(
-                "Do not read the run research-cell directory",
-                auditor_prompt,
-            )
+            self.assertIn("Independently analyze", auditor_prompt)
+            self.assertIn("Answer only the current manager-b commission", auditor_prompt)
 
     def test_prompt_injects_assigned_context_without_hard_read_isolation(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1582,15 +1526,20 @@ class OrganizationProjectTests(unittest.TestCase):
             prompt = runner._build_prompt(
                 runner.topology.agent("worker-a"), [], 1, True,
             )
-            self.assertIn("## Assigned documentation context", prompt)
+            self.assertIn("## Shared foundation and on-demand context", prompt)
             self.assertIn("docs/common.md", prompt)
             self.assertIn("docs/worker-a.md", prompt)
-            self.assertIn("Indexed reference library", prompt)
-            self.assertIn("docs/library-a.md", prompt)
+            self.assertIn("Context index:", prompt)
+            self.assertNotIn("docs/library-a.md", prompt)
             self.assertNotIn("docs/worker-b.md", prompt)
             self.assertNotIn("docs/library-b.md", prompt)
-            self.assertIn("Do not ingest every indexed library record", prompt)
-            self.assertIn("not a deny-read boundary", prompt)
+            self.assertIn("once for this native session", prompt)
+            self.assertIn("Retrieve non-Critical entries", prompt)
+            resumed = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 2, False,
+            )
+            self.assertNotIn("## Shared foundation", resumed)
+            self.assertNotIn("docs/common.md", resumed)
 
     def test_research_cell_requires_two_fragments_before_dependent_delegation(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1900,17 +1849,8 @@ class OrganizationProjectTests(unittest.TestCase):
                 risk="high",
                 round_number=2,
             )
-            self.assertTrue(accepted, reason)
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "only one autonomous experiment loop",
-            ):
-                runner._activate_experiment_contract(
-                    manager_id="manager-b",
-                    worker_id="worker-b",
-                    work_item="experiment/second-file",
-                    round_number=2,
-                )
+            self.assertFalse(accepted)
+            self.assertIn("already has active owner worker-a", reason)
             runner._ensure_experiment_baseline(
                 runner.topology.agent("worker-a"),
                 3,
@@ -2054,6 +1994,203 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             self.assertFalse(verified)
             self.assertIn("mismatch", error)
+
+    def test_ordinary_candidate_uses_one_predicate_bound_goal_evaluation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            policy_path = _add_experiment_policy(
+                root,
+                require_goal_progress=True,
+            )
+            run_dir = Path(td) / "run"
+            runner = OrganizationRunner(
+                root,
+                "Improve app.py through one measured ordinary candidate.",
+                "claude",
+                "scientific",
+                "ordinary-goal",
+                run_dir,
+                experiment_policy="experiment-policy.json",
+            )
+            runner.experiment_policy = (
+                organization_module._load_experiment_policy_definition(
+                    root,
+                    policy_path,
+                )
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [], base,
+            )
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-a",
+                manager_id="manager-a",
+                work_item="ordinary/app-improvement",
+                objective="Make the immutable app evaluator pass.",
+                risk="high",
+                round_number=2,
+                goal_class="production_pipeline",
+                predicate_id="app-output-passes",
+                evaluator_id="app-regression",
+            )
+            self.assertTrue(accepted, reason)
+            goal = runner.worker_goals["worker-a"]
+            self.assertFalse(goal["baseline_value"])
+            for field in (
+                "goal_sha256",
+                "goal_class",
+                "predicate_id",
+                "baseline_candidate",
+                "evaluator_profile_sha256",
+                "immutable_ground_truth_sha256",
+                "baseline_value",
+                "baseline_result_sha256",
+                "baseline_result_path",
+                "comparison_rule_id",
+            ):
+                self.assertIn(field, goal)
+            self.assertNotIn("trusted_evaluator_profile_sha256", goal)
+            self.assertRegex(
+                goal["baseline_result_sha256"],
+                r"^[0-9a-f]{64}$",
+            )
+            self.assertTrue(Path(goal["baseline_result_path"]).is_file())
+
+            (root / "app.py").write_text(
+                "print('improved')\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "ordinary improvement"],
+                cwd=root,
+                check=True,
+            )
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            runner._deliver_message(
+                "worker-a",
+                {
+                    "to": "manager-a",
+                    "tag": "handoff",
+                    "content": "Exact ordinary candidate improves the bound predicate.",
+                    "candidate": candidate,
+                    "workItem": "ordinary/app-improvement",
+                    "risk": "high",
+                },
+                3,
+            )
+            self.assertEqual(
+                runner.inboxes["manager-a"][-1]["candidate"],
+                candidate,
+            )
+            progress = runner._candidate_goal_progress_verdict(
+                candidate,
+                round_number=3,
+            )
+            self.assertTrue(progress["qualifies"])
+            self.assertEqual(
+                progress["qualifying_goal_evaluations"][0]["predicate_id"],
+                "app-output-passes",
+            )
+            persisted = json.loads(
+                (run_dir / "goal-state.json").read_text(encoding="utf-8")
+            )
+            persisted_goal = persisted["worker_goals"]["worker-a"]
+            self.assertNotIn("outcome", persisted_goal)
+            self.assertNotIn("commands", persisted_goal)
+
+            saturated = OrganizationRunner(
+                root,
+                "Do not spend a worker turn on an already-satisfied predicate.",
+                "claude",
+                "scientific",
+                "saturated-goal",
+                Path(td) / "saturated-run",
+                experiment_policy="experiment-policy.json",
+            )
+            saturated.experiment_policy = (
+                organization_module._load_experiment_policy_definition(
+                    root,
+                    policy_path,
+                )
+            )
+            saturated.workspaces["worker-b"] = Workspace(
+                root, "worker-b", "main", root, [], candidate,
+            )
+            accepted, reason = saturated._bind_worker_goal(
+                worker_id="worker-b",
+                manager_id="manager-b",
+                work_item="ordinary/already-satisfied",
+                objective="Make the immutable app evaluator pass.",
+                risk="routine",
+                round_number=2,
+                goal_class="production_pipeline",
+                predicate_id="app-output-passes",
+                evaluator_id="app-regression",
+            )
+            self.assertFalse(accepted)
+            self.assertIn("already satisfied at baseline", reason)
+            self.assertEqual(
+                saturated.worker_goals["worker-b"]["status"],
+                "unevaluable",
+            )
+            self.assertNotIn(
+                "worker-b",
+                {
+                    agent.agent_id
+                    for agent in saturated._select_agents(3)
+                },
+            )
+
+    def test_bound_predicate_itself_must_improve(self):
+        evaluator = {
+            "metrics": [
+                {
+                    "id": "goal-metric",
+                    "direction": "maximize",
+                    "tolerance": 0.1,
+                },
+                {
+                    "id": "unrelated-metric",
+                    "direction": "maximize",
+                    "tolerance": 0.0,
+                },
+            ],
+        }
+        predicate = {
+            "result_id": "goal-metric",
+            "comparison_rule_id": "maximize",
+        }
+        self.assertFalse(
+            OrganizationRunner._goal_predicate_improved(
+                evaluator,
+                predicate,
+                1.0,
+                1.0,
+            )
+        )
+        self.assertTrue(
+            OrganizationRunner._goal_predicate_improved(
+                evaluator,
+                predicate,
+                1.0,
+                1.2,
+            )
+        )
 
     def test_experiment_metric_verdict_is_pareto_strict_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2446,6 +2583,16 @@ class OrganizationProjectTests(unittest.TestCase):
                 "Never describe a round limit as a turn limit",
                 conclusion_prompt,
             )
+            self.assertIn(
+                "Mission retained from this session's bootstrap",
+                conclusion_prompt,
+            )
+            self.assertNotIn(
+                "Qualify the bounded system.",
+                conclusion_prompt,
+            )
+            self.assertIn('"mission_sha256"', conclusion_prompt)
+            self.assertNotIn('"mission":', conclusion_prompt)
 
     def test_cancelled_run_writes_fallback_without_another_model_turn(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3071,7 +3218,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 {agent.agent_id for agent in runner._select_agents(3)},
             )
 
-    def test_delegation_barrier_requires_every_lane_before_parallel_work(self):
+    def test_delegation_barrier_activates_working_managers_without_filling_lanes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -3082,11 +3229,11 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 RuntimeError,
-                "lead-to-manager.*manager-a, manager-b, manager-c, manager-d",
+                "lead-to-manager.*manager-a, manager-b",
             ):
                 runner._assert_delegation_barrier(1)
 
-            for manager_id in runner.topology.manager_ids:
+            for manager_id in ("manager-a", "manager-b"):
                 runner.inboxes[manager_id] = [{
                     "from": "lead",
                     "to": manager_id,
@@ -3097,25 +3244,6 @@ class OrganizationProjectTests(unittest.TestCase):
                     "risk": "routine",
                 }]
             runner._assert_delegation_barrier(1)
-
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "manager-to-worker.*worker-a, worker-b, worker-c, worker-d",
-            ):
-                runner._assert_delegation_barrier(2)
-
-            for worker_id, manager_id in (
-                runner.topology.primary_manager_by_worker.items()
-            ):
-                runner.inboxes[worker_id] = [{
-                    "from": manager_id,
-                    "to": worker_id,
-                    "tag": "review" if worker_id == "worker-d" else "handoff",
-                    "content": "Execute or explicitly investigate this bounded lane.",
-                    "candidate": None,
-                    "workItem": f"execute-{worker_id}",
-                    "risk": "high",
-                }]
             runner._assert_delegation_barrier(2)
             self.assertEqual(
                 {
@@ -3123,8 +3251,10 @@ class OrganizationProjectTests(unittest.TestCase):
                     for agent in runner._select_agents(3)
                     if agent.agent_id in runner.topology.worker_ids
                 },
-                set(runner.topology.worker_ids),
+                set(),
             )
+            self.assertEqual(runner.inboxes["manager-c"], [])
+            self.assertEqual(runner.inboxes["manager-d"], [])
 
     def test_worker_has_one_host_owned_problem_solving_goal(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3197,8 +3327,8 @@ class OrganizationProjectTests(unittest.TestCase):
                 3,
                 True,
             )
-            self.assertIn("## Active execution goal", prompt)
-            self.assertIn("ONE ACTIVE GOAL", prompt)
+            self.assertIn("## One active goal", prompt)
+            self.assertIn("Goal:", prompt)
             self.assertIn(
                 "Fix the radius qualifier and pass its focused test.",
                 prompt,
@@ -3212,8 +3342,17 @@ class OrganizationProjectTests(unittest.TestCase):
                 for line in (run_dir / "messages.jsonl").read_text().splitlines()
             ]
             self.assertIn("primary manager", records[0]["reason"])
-            self.assertIn("problem-solving outcome", records[-2]["reason"])
-            self.assertIn("already has active goal", records[-1]["reason"])
+            reasons = [
+                str(record.get("reason") or "")
+                for record in records
+                if record.get("status") == "dropped"
+            ]
+            self.assertTrue(any(
+                "problem-solving outcome" in reason for reason in reasons
+            ))
+            self.assertTrue(any(
+                "already has active goal" in reason for reason in reasons
+            ))
 
     def test_off_goal_flag_requires_exactly_one_peer_manager_consult(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3526,7 +3665,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 "output_tokens": 16,
             })
 
-    def test_resumed_prompt_uses_host_state_and_compacts_static_policy(self):
+    def test_resumed_prompt_is_delta_only_with_bounded_overlap(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -3567,14 +3706,222 @@ class OrganizationProjectTests(unittest.TestCase):
             bootstrap = runner._build_prompt(
                 runner.topology.agent("worker-a"), [], 3, True,
             )
+            runner.model_prompt_state_by_agent["worker-a"] = (
+                runner._model_prompt_state("worker-a")
+            )
             incremental = runner._build_prompt(
                 runner.topology.agent("worker-a"), [], 4, False,
             )
-            self.assertIn("Host-owned repository and candidate state", incremental)
-            self.assertIn("state-sha", incremental)
+            next_incremental = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 5, False,
+            )
+            self.assertIn("# RecCli delta worker-a R4", incremental)
+            self.assertNotIn("state-sha", incremental)
             self.assertNotIn("## Mission", incremental)
-            self.assertIn("20 protected path declarations", incremental)
+            self.assertNotIn("Operational boundary", incremental)
+            self.assertNotIn("Context index", incremental)
+            self.assertNotIn("Evidence manifest", incremental)
+            self.assertNotIn("protected-19", incremental)
+            self.assertNotIn("mission_commit_inventory", incremental)
+            self.assertNotIn("## RecCli project memory", bootstrap)
+            self.assertNotIn("## Organization charter", bootstrap)
+            self.assertLess(len(bootstrap) - len(runner.mission), 8_000)
             self.assertLess(len(incremental), len(bootstrap))
+            self.assertLess(len(incremental), 500)
+            left = incremental.splitlines(keepends=True)
+            right = next_incremental.splitlines(keepends=True)
+            repeated_chars = sum(
+                len("".join(left[match.a:match.a + match.size]))
+                for match in SequenceMatcher(
+                    None, left, right, autojunk=False,
+                ).get_matching_blocks()
+            )
+            self.assertLess(repeated_chars, 128)
+            self.assertLess(repeated_chars / len(next_incremental), 0.8)
+
+    def test_review_assignment_appears_once_without_unrelated_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            runner = OrganizationRunner(
+                root, "Review one exact candidate.", "claude",
+                "scientific", "review-once", run_dir,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-c"] = Workspace(
+                root, "manager-c", "main", root, [], base,
+            )
+            candidate = "a" * 40
+            unrelated = "f" * 40
+            review = {
+                "runId": "review-once",
+                "round": 4,
+                "from": "manager-a",
+                "to": "manager-c",
+                "tag": "review",
+                "content": "REVIEW_THIS_EXACT_CANDIDATE_ONCE",
+                "candidate": candidate,
+                "workItem": "exact-review",
+                "risk": "high",
+                "status": "delivered",
+            }
+            (run_dir / "messages.jsonl").write_text(
+                json.dumps(review) + "\n",
+                encoding="utf-8",
+            )
+            runner.inboxes["manager-c"] = [review]
+            runner.host_state_brief = {
+                "content_sha256": "host-state",
+                "round": 4,
+                "repository": {"launch_head": base},
+                "known_candidates": [
+                    {"candidate": candidate, "kind": "implementation"},
+                    {"candidate": unrelated, "kind": "implementation"},
+                ],
+                "governance": {"history": ["unrelated"]},
+                "workspaces": {},
+                "experiment_budget": {
+                    "maximum": 3, "used": 0, "remaining": 3,
+                },
+            }
+            prompt = runner._build_prompt(
+                runner.topology.agent("manager-c"), [review], 4, True,
+            )
+            self.assertEqual(
+                prompt.count("REVIEW_THIS_EXACT_CANDIDATE_ONCE"),
+                1,
+            )
+            self.assertEqual(prompt.count(candidate), 1)
+            self.assertNotIn(unrelated, prompt)
+            self.assertNotIn("governance", prompt)
+            self.assertNotIn("experiment_budget", prompt)
+            self.assertNotIn("ASSIGNABLE PREDICATES", prompt)
+
+    def test_research_and_release_roles_do_not_receive_worker_planning_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Answer one bounded question.", "claude",
+                "scientific", "role-state", root / "run",
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.worker_goals["worker-a"] = {
+                "worker_id": "worker-a",
+                "manager_id": "manager-a",
+                "work_item": "SECRET_UNRELATED_WORK_ITEM",
+                "objective": "SECRET_UNRELATED_OBJECTIVE",
+                "risk": "routine",
+                "status": "active",
+                "goal_sha256": "1" * 64,
+                "predicate_id": "unrelated-predicate",
+            }
+            runner.host_state_brief = {
+                "content_sha256": "state",
+                "experiment_budget": {
+                    "maximum": 3, "used": 0, "remaining": 3,
+                },
+            }
+            for agent_id in ("manager-c", "manager-d", "research-scout"):
+                runner.workspaces[agent_id] = Workspace(
+                    root, agent_id, "main", root, [], base,
+                )
+                prompt = runner._build_prompt(
+                    runner.topology.agent(agent_id), [], 3, True,
+                )
+                self.assertNotIn("SECRET_UNRELATED", prompt)
+                self.assertNotIn("unrelated-predicate", prompt)
+                self.assertNotIn("experiment_budget", prompt)
+                self.assertNotIn("ASSIGNABLE PREDICATES", prompt)
+
+    def test_primary_manager_goal_packet_omits_terminal_worker_goals(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Assign only current measurable work.", "claude",
+                "scientific", "manager-current-goals", root / "run",
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["manager-a"] = Workspace(
+                root, "manager-a", "main", root, [], base,
+            )
+            runner.worker_goals = {
+                "worker-a": {
+                    "worker_id": "worker-a",
+                    "manager_id": "manager-a",
+                    "work_item": "CURRENT_GOAL",
+                    "objective": "Change the measured production behavior.",
+                    "risk": "routine",
+                    "status": "active",
+                    "goal_sha256": "1" * 64,
+                    "predicate_id": "current-predicate",
+                },
+                "worker-c": {
+                    "worker_id": "worker-c",
+                    "manager_id": "manager-a",
+                    "work_item": "STALE_TERMINAL_GOAL",
+                    "objective": "This goal is already closed.",
+                    "risk": "routine",
+                    "status": "unevaluable",
+                    "goal_sha256": "2" * 64,
+                    "predicate_id": "stale-predicate",
+                },
+            }
+            prompt = runner._build_prompt(
+                runner.topology.agent("manager-a"), [], 3, True,
+            )
+            self.assertIn("CURRENT_GOAL", prompt)
+            self.assertNotIn("STALE_TERMINAL_GOAL", prompt)
+            self.assertNotIn("stale-predicate", prompt)
+
+    def test_active_experiment_state_is_delivered_once_and_then_only_on_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Run one exact bounded experiment.", "claude",
+                "scientific", "experiment-once", root / "run",
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [], base,
+            )
+            contract_sha = "c" * 64
+            runner.active_experiment_by_worker["worker-a"] = contract_sha
+            runner.experiment_contracts[contract_sha] = {
+                "sha256": contract_sha,
+                "work_item": "one-experiment",
+                "mutable_file": "src/app.py",
+                "evaluator_id": "truth-evaluator",
+                "status": "active",
+            }
+            bootstrap = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 3, True,
+            )
+            self.assertEqual(bootstrap.count(contract_sha), 1)
+            self.assertEqual(bootstrap.count("src/app.py"), 1)
+            runner.model_prompt_state_by_agent["worker-a"] = (
+                runner._model_prompt_state("worker-a")
+            )
+            unchanged = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 4, False,
+            )
+            self.assertNotIn(contract_sha, unchanged)
 
     def test_host_state_resolves_mission_commit_identity_once(self):
         with tempfile.TemporaryDirectory() as td:

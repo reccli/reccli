@@ -11,6 +11,7 @@ from unittest.mock import patch
 from reccli.organization_project_launch import (
     PROJECT_LAUNCH_FILENAME,
     ProjectOrganizationLaunchError,
+    _continuation_mission,
     start_project_organization,
 )
 from reccli.organization_launch import launch_organization_console
@@ -404,15 +405,63 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 "is a handoff, not authority",
                 captured["mission"],
             )
-            self.assertIn(
-                "Investigate the original defect", captured["mission"],
-            )
             self.assertIn("12-round limit", captured["mission"])
             self.assertNotIn("12-turn limit", captured["mission"])
+            self.assertNotIn(
+                "Investigate the original defect", captured["mission"],
+            )
+            self.assertIn(
+                "not copied into this successor", captured["mission"],
+            )
             self.assertNotEqual(
                 captured["mission"],
                 (root / "mission.md").read_text(encoding="utf-8").strip(),
             )
+
+    def test_terminal_continuation_does_not_grow_by_copying_prior_missions(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(root, continuation=True)
+            terminal = {
+                "run_id": "terminal-parent",
+                "status": "round_limit",
+                "conclusion_sha256": "a" * 64,
+                "conclusion": {
+                    "summary": "One bounded result.",
+                    "accomplishments": [],
+                    "conclusive_findings": [],
+                    "evidence_and_tests": [],
+                    "scientific_or_product_blockers": [],
+                    "infrastructure_failures": [],
+                    "unresolved": [],
+                    "promotion_readiness": "not_ready",
+                    "next_action": "Measure the current predicate.",
+                    "limitations": [],
+                },
+                "run": {
+                    "mission": (
+                        "# Successor mission\n"
+                        + ("historical recursive material\n" * 20_000)
+                    ),
+                },
+            }
+            selection = {"mission_id": "current-state-audit"}
+            first = _continuation_mission(
+                root,
+                terminal,
+                selection,
+            )
+            terminal["run"]["mission"] = first
+            second = _continuation_mission(
+                root,
+                terminal,
+                selection,
+            )
+            self.assertLess(len(first), 10_000)
+            self.assertLessEqual(len(second), len(first) + 100)
+            self.assertNotIn("historical recursive material", first)
+            self.assertEqual(first.count("## Required final output"), 1)
 
     def test_terminal_continuation_carries_binding_human_rejection(self):
         with tempfile.TemporaryDirectory() as td:

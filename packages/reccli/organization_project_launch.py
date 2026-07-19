@@ -565,14 +565,23 @@ def _retryable_infrastructure_failure(terminal: Dict[str, Any]) -> bool:
 def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
     """Keep successor context useful without copying an unbounded transcript."""
 
-    def text(value: Any, limit: int = 16_000) -> str:
+    def text(value: Any, limit: int = 1_200) -> str:
         return str(value or "")[:limit]
 
-    def strings(name: str, limit: int = 40) -> List[str]:
+    def strings(
+        name: str,
+        *,
+        count: int = 3,
+        chars: int = 500,
+    ) -> List[str]:
         values = conclusion.get(name)
         if not isinstance(values, list):
             return []
-        return [text(value, 4_000) for value in values[:limit] if str(value).strip()]
+        return [
+            text(value, chars)
+            for value in values[:count]
+            if str(value).strip()
+        ]
 
     summary = text(conclusion.get("summary"))
     summary = re.sub(
@@ -587,17 +596,20 @@ def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
     )
     return {
         "summary": summary,
-        "accomplishments": strings("accomplishments"),
+        "accomplishments": strings("accomplishments", count=2),
         "conclusive_findings": strings("conclusive_findings"),
-        "evidence_and_tests": strings("evidence_and_tests"),
+        "evidence_and_tests": strings("evidence_and_tests", count=2),
         "scientific_or_product_blockers": strings(
             "scientific_or_product_blockers",
         ),
-        "infrastructure_failures": strings("infrastructure_failures"),
+        "infrastructure_failures": strings(
+            "infrastructure_failures",
+            count=2,
+        ),
         "unresolved": strings("unresolved"),
         "promotion_readiness": text(conclusion.get("promotion_readiness"), 200),
-        "next_action": text(conclusion.get("next_action")),
-        "limitations": strings("limitations"),
+        "next_action": text(conclusion.get("next_action"), 800),
+        "limitations": strings("limitations", count=2),
     }
 
 
@@ -607,7 +619,6 @@ def _continuation_mission(
     base_selection: Dict[str, Any],
 ) -> str:
     conclusion = terminal["conclusion"]
-    prior_mission = str(terminal["run"].get("mission") or "").strip()
     current_head = _git(root, "rev-parse", "HEAD")
     view = _bounded_conclusion_view(conclusion)
     operator_decision = terminal.get("operator_decision")
@@ -666,13 +677,9 @@ work; it prohibits agents from granting themselves the final authority.
 
 {rejection}
 
-## Parent mission boundary
-
-The following mission is historical. Its completed tasks must not be replayed,
-but its scope restrictions and authority boundaries continue to apply unless
-the current tracked project contracts explicitly supersede them.
-
-{prior_mission or '_No parent mission text was preserved._'}
+The historical mission remains available in the parent run's durable
+`run.json`; it is not copied into this successor. Current tracked project
+contracts define the active scope and authority boundaries.
 
 ## Required final output
 
