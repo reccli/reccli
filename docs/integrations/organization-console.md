@@ -113,6 +113,12 @@ searching files or symbols, running tests, inspecting Git history, editing
 workspace files, using another tool, or waiting for a routed response before
 the final turn reply exists.
 
+When a project opts into the autonomous experiment loop, the console also
+renders its host-owned baseline and trial ledger: the single mutable file,
+immutable evaluator, kept and discarded challengers, gates or metrics,
+duration, and manager-wake reason. This is distinct from agent chat and does
+not depend on a model summarizing its own progress.
+
 The runner also publishes `host-state.json`, a host-owned mechanical brief for
 launch HEAD, mission-mentioned commit existence and ancestry, candidate kinds,
 integration identity, governance state, workspace heads, and experiment

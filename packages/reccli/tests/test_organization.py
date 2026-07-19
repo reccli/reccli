@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from reccli import organization as organization_module
 from reccli.organization import (
     AGENT_REPLY_SCHEMA,
     HOST_CANDIDATE,
@@ -28,6 +29,7 @@ from reccli.organization import (
     prepare_context_packs,
     prepare_evidence_snapshot,
     prepare_workspaces,
+    resolve_experiment_policy,
     resolve_provider_plan,
     validate_agent_reply,
     verify_context_packs,
@@ -129,6 +131,47 @@ def _add_context_manifest(root: Path) -> Path:
         ["git", "commit", "-qm", "add context packs"], cwd=root, check=True,
     )
     return manifest
+
+
+def _add_experiment_policy(root: Path) -> Path:
+    evaluator = root / "evaluator.py"
+    evaluator.write_text(
+        "from pathlib import Path\n"
+        "raise SystemExit(0 if \"improved\" in "
+        "Path(\"app.py\").read_text() else 1)\n",
+        encoding="utf-8",
+    )
+    policy = root / "experiment-policy.json"
+    policy.write_text(json.dumps({
+        "schema": "reccli.organization-experiment-policy.v1",
+        "enabled": True,
+        "max_trials_per_contract": 3,
+        "max_consecutive_non_improving": 2,
+        "max_contract_wall_seconds": 300,
+        "evaluators": [{
+            "id": "app-regression",
+            "commands": [{
+                "argv": ["python3", "evaluator.py"],
+                "timeout_seconds": 30,
+            }],
+            "immutable_paths": ["evaluator.py"],
+            "mutable_roots": ["app.py"],
+            "result_mode": "command_exit",
+            "hard_gates": [],
+            "metrics": [],
+        }],
+    }, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "evaluator.py", "experiment-policy.json"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "add experiment policy"],
+        cwd=root,
+        check=True,
+    )
+    return policy
 
 
 class OrganizationTopologyTests(unittest.TestCase):
@@ -790,6 +833,40 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(
                 persisted["context_manifest"], "context-packs.json",
             )
+
+    def test_request_persists_validated_experiment_policy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            _add_experiment_policy(root)
+            with patch(
+                "reccli.organization.shutil.which",
+                return_value="/fake/claude",
+            ):
+                request = create_run_request(
+                    str(root),
+                    "Optimize the bounded evaluator target.",
+                    provider="claude",
+                    topology="scientific",
+                    experiment_policy="experiment-policy.json",
+                )
+            self.assertEqual(
+                request["experiment_policy"],
+                "experiment-policy.json",
+            )
+            self.assertEqual(
+                resolve_experiment_policy(
+                    root,
+                    "experiment-policy.json",
+                ),
+                root.resolve() / "experiment-policy.json",
+            )
+            self.assertIn(
+                "experiment-policy.json",
+                request["protected_paths"],
+            )
+            self.assertIn("evaluator.py", request["protected_paths"])
 
     def test_context_packs_route_worker_lanes_and_full_manager_union(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1604,6 +1681,269 @@ class OrganizationProjectTests(unittest.TestCase):
                 work_item,
             )
 
+    def test_experiment_loop_runs_baseline_keeps_and_reverts_without_manager_churn(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            policy_path = _add_experiment_policy(root)
+            run_dir = Path(td) / "durable-run"
+            runner = OrganizationRunner(
+                root,
+                "Improve one file against an immutable evaluator.",
+                "claude",
+                "scientific",
+                "experiment-loop-run",
+                run_dir,
+                experiment_policy="experiment-policy.json",
+                max_experiments=2,
+            )
+            runner.experiment_loop_root.mkdir(parents=True)
+            runner.experiment_policy = (
+                organization_module._load_experiment_policy_definition(
+                    root,
+                    policy_path,
+                )
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            for agent_id in ("manager-a", "worker-a"):
+                runner.workspaces[agent_id] = Workspace(
+                    root,
+                    agent_id,
+                    "main",
+                    root,
+                    [],
+                    base,
+                )
+
+            work_item = "experiment/app-improvement"
+            contract_path = (
+                root
+                / runner.artifact_staging_prefix
+                / "experiment-loop"
+                / "contracts"
+                / "app-improvement.json"
+            )
+            contract_path.parent.mkdir(parents=True)
+            contract_path.write_text(json.dumps({
+                "schema": "reccli.organization-experiment-contract.v1",
+                "run_id": runner.run_id,
+                "work_item": work_item,
+                "manager_id": "manager-a",
+                "worker_id": "worker-a",
+                "baseline_mode": "worker_head_at_activation",
+                "mutable_file": "app.py",
+                "evaluator_id": "app-regression",
+                "objective": "Make the immutable evaluator pass.",
+                "success_rule": "All immutable evaluator commands pass.",
+                "max_trials": 2,
+                "max_consecutive_non_improving": 2,
+                "max_wall_seconds": 300,
+                "research_decision_sha256": None,
+            }), encoding="utf-8")
+            contract_head = runner._materialize_agent_candidate(
+                runner.topology.agent("manager-a"),
+                _reply("contract registered"),
+                base,
+                2,
+            )
+            contract_sha = runner.experiment_contract_by_work_item[work_item]
+            runner._activate_experiment_contract(
+                manager_id="manager-a",
+                worker_id="worker-a",
+                work_item=work_item,
+                round_number=2,
+            )
+            second_sha = "f" * 64
+            runner.workspaces["worker-b"] = Workspace(
+                root,
+                "worker-b",
+                "main",
+                root,
+                [],
+                base,
+            )
+            runner.experiment_contracts[second_sha] = {
+                **runner.experiment_contracts[contract_sha],
+                "sha256": second_sha,
+                "work_item": "experiment/second-file",
+                "manager_id": "manager-b",
+                "worker_id": "worker-b",
+                "max_trials": 1,
+                "status": "registered",
+                "activation_baseline_candidate": None,
+            }
+            runner.experiment_contract_by_work_item[
+                "experiment/second-file"
+            ] = second_sha
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "only one autonomous experiment loop",
+            ):
+                runner._activate_experiment_contract(
+                    manager_id="manager-b",
+                    worker_id="worker-b",
+                    work_item="experiment/second-file",
+                    round_number=2,
+                )
+            runner._ensure_experiment_baseline(
+                runner.topology.agent("worker-a"),
+                3,
+            )
+            self.assertEqual(
+                runner.experiment_trials[0]["verdict"],
+                "baseline",
+            )
+            self.assertNotIn(
+                "stdout_tail",
+                runner.experiment_trials[0]["outcome"]["commands"][0],
+            )
+            self.assertFalse(
+                runner.experiment_trials[0]["outcome"]["commands_pass"]
+            )
+            self.assertEqual(runner._experiment_used(), 0)
+
+            trial_path = (
+                root
+                / runner.artifact_staging_prefix
+                / "experiment-loop"
+                / "trials"
+                / "current.json"
+            )
+
+            def write_trial(hypothesis: str, change: str) -> None:
+                trial_path.parent.mkdir(parents=True, exist_ok=True)
+                trial_path.write_text(json.dumps({
+                    "schema": "reccli.organization-experiment-trial.v1",
+                    "run_id": runner.run_id,
+                    "contract_sha256": contract_sha,
+                    "work_item": work_item,
+                    "worker_id": "worker-a",
+                    "hypothesis": hypothesis,
+                    "single_change": change,
+                    "expected_result": "The immutable evaluator changes state.",
+                }), encoding="utf-8")
+
+            (root / "app.py").write_text(
+                "print('improved')\n",
+                encoding="utf-8",
+            )
+            write_trial("The target token is load-bearing.", "Change output token.")
+            kept_head = runner._materialize_agent_candidate(
+                runner.topology.agent("worker-a"),
+                _reply("first challenger"),
+                contract_head,
+                3,
+            )
+            self.assertEqual(runner.experiment_trials[-1]["verdict"], "keep")
+            self.assertIn("improved", (root / "app.py").read_text())
+            self.assertEqual(runner._experiment_used(), 1)
+
+            (root / "app.py").write_text(
+                "print('regression')\n",
+                encoding="utf-8",
+            )
+            write_trial(
+                "Removing the target may simplify the file.",
+                "Replace the passing token.",
+            )
+            resulting_head = runner._materialize_agent_candidate(
+                runner.topology.agent("worker-a"),
+                _reply("second challenger"),
+                kept_head,
+                4,
+            )
+            self.assertEqual(
+                runner.experiment_trials[-1]["verdict"],
+                "discard",
+            )
+            self.assertNotEqual(resulting_head, kept_head)
+            self.assertIn("improved", (root / "app.py").read_text())
+            self.assertEqual(runner._experiment_used(), 2)
+            self.assertIn("worker-a", runner.experiment_halted_workers)
+            self.assertNotIn("worker-a", runner.active_experiment_by_worker)
+            self.assertTrue(runner.inboxes["manager-a"])
+            self.assertEqual(
+                runner.inboxes["manager-a"][-1]["workItem"],
+                work_item,
+            )
+            persisted_intent = Path(
+                runner.experiment_trials[-1]["intent_persisted_path"]
+            )
+            self.assertEqual(
+                hashlib.sha256(persisted_intent.read_bytes()).hexdigest(),
+                runner.experiment_trials[-1]["intent_sha256"],
+            )
+
+    def test_experiment_metric_verdict_is_pareto_strict_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root,
+                "Rank bounded challengers.",
+                "claude",
+                "scientific",
+                "metric-verdict",
+                root / "run",
+            )
+            runner.experiment_policy = {
+                "evaluators": {
+                    "metric": {
+                        "metrics": [
+                            {
+                                "id": "error",
+                                "direction": "minimize",
+                                "tolerance": 0.01,
+                            },
+                            {
+                                "id": "coverage",
+                                "direction": "maximize",
+                                "tolerance": 0.01,
+                            },
+                        ],
+                    }
+                }
+            }
+            contract = {"evaluator_id": "metric"}
+            champion = {
+                "commands_pass": True,
+                "result_error": None,
+                "timed_out": False,
+                "hard_gates": {"valid": True},
+                "metrics": {"error": 1.0, "coverage": 0.5},
+            }
+            improved = {
+                **champion,
+                "metrics": {"error": 0.8, "coverage": 0.5},
+            }
+            regressed = {
+                **champion,
+                "metrics": {"error": 1.2, "coverage": 0.5},
+            }
+            tradeoff = {
+                **champion,
+                "metrics": {"error": 0.8, "coverage": 0.4},
+            }
+            self.assertEqual(
+                runner._experiment_verdict(contract, improved, champion),
+                "keep",
+            )
+            self.assertEqual(
+                runner._experiment_verdict(contract, regressed, champion),
+                "discard",
+            )
+            self.assertEqual(
+                runner._experiment_verdict(contract, tradeoff, champion),
+                "inconclusive",
+            )
+
     def test_artifact_only_scope_rejects_source_changes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2300,6 +2640,7 @@ class OrganizationProjectTests(unittest.TestCase):
                     "evidence_paths": [],
                     "protected_paths": [],
                     "context_manifest": None,
+                    "experiment_policy": "experiment-policy.json",
                     "max_experiments": 3,
                 }) + "\n",
                 encoding="utf-8",
@@ -2326,6 +2667,10 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(
                 request["action"]["type"],
                 "start_successor",
+            )
+            self.assertEqual(
+                request["continuation"]["experiment_policy"],
+                "experiment-policy.json",
             )
             self.assertIn(
                 "Approve checkpoint X only.",

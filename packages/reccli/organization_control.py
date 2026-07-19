@@ -366,6 +366,14 @@ def organization_snapshot(
         run_dir / "research-cell" / "decisions.jsonl",
         max(count, 500),
     )
+    experiment_contracts = _tail_jsonl(
+        run_dir / "experiment-loop" / "contracts.jsonl",
+        max(count, 500),
+    )
+    experiment_trials = _tail_jsonl(
+        run_dir / "experiment-loop" / "trials.jsonl",
+        max(count, 500),
+    )
     topology = _topology_snapshot(run, status)
     live, active_agent_ids = process_group_activity(
         pid,
@@ -422,6 +430,10 @@ def organization_snapshot(
                 agent["state"] = "awaiting_assignment"
         if agent["id"] in active_agents:
             agent["state"] = "working"
+        elif agent["id"] in set(
+            status.get("experiment_loop_halted_workers") or []
+        ):
+            agent["state"] = "blocked"
         elif agent.get("state") not in {"awaiting_assignment", "blocked", "done"}:
             # A model returning "working" means it wants another scheduled
             # turn; it does not mean a provider subprocess is still executing.
@@ -483,6 +495,24 @@ def organization_snapshot(
             "commissions": research_commissions,
             "fragments": research_fragments,
             "decisions": research_decisions,
+        },
+        "experiment_loop": {
+            "enabled": bool(
+                run.get("experiment_loop", {}).get("enabled")
+                or status.get("experiment_loop_enabled")
+            ),
+            "policy": (
+                run.get("experiment_loop", {}).get("source_policy")
+                or run.get("experiment_policy")
+            ),
+            "contracts": experiment_contracts,
+            "trials": experiment_trials,
+            "active_workers": (
+                status.get("experiment_loop_active_workers") or []
+            ),
+            "halted_workers": (
+                status.get("experiment_loop_halted_workers") or []
+            ),
         },
         "messages": messages,
         "events": events,
@@ -962,6 +992,7 @@ supervisor.
         evidence_paths=evidence_paths,
         protected_paths=list(continuation.get("protected_paths") or []),
         context_manifest=continuation.get("context_manifest"),
+        experiment_policy=continuation.get("experiment_policy"),
         max_experiments=int(continuation.get("max_experiments") or 0),
     )
     successor.update({

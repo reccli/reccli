@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import queue
 import re
@@ -44,6 +45,10 @@ DEFAULT_CLOSEOUT_ROUNDS = 4
 ACTIVITY_SCHEMA = "reccli.organization-activity.v1"
 HOST_STATE_SCHEMA = "reccli.organization-host-state.v1"
 EXPERIMENT_RECORD_SCHEMA = "reccli.organization-experiment-record.v1"
+EXPERIMENT_POLICY_SCHEMA = "reccli.organization-experiment-policy.v1"
+EXPERIMENT_CONTRACT_SCHEMA = "reccli.organization-experiment-contract.v1"
+EXPERIMENT_TRIAL_SCHEMA = "reccli.organization-experiment-trial.v1"
+PROJECT_EXPERIMENT_RESULT_SCHEMA = "reccli.project-experiment-result.v1"
 RESEARCH_FRAGMENT_SCHEMA = "reccli.organization-research-fragment.v1"
 RESEARCH_DECISION_SCHEMA = "reccli.organization-research-decision.v1"
 RESEARCH_DISPOSITIONS = {
@@ -58,6 +63,13 @@ RESEARCH_IMPLEMENTATION_READINESS = {
     "human_authority_required",
 }
 REPORT_ONLY_SUFFIXES = frozenset({".md", ".txt", ".rst", ".adoc"})
+EXPERIMENT_VERDICTS = frozenset({
+    "baseline",
+    "keep",
+    "discard",
+    "inconclusive",
+    "crash",
+})
 EXPERIMENT_PATH_COMPONENTS = frozenset({
     "benchmark", "benchmarks", "data", "fixture", "fixtures",
     "measurement", "measurements", "output", "outputs", "probe", "probes",
@@ -346,12 +358,12 @@ def get_topology(name: str = "google-rotating") -> Topology:
             ),
             AgentSpec(
                 "manager-a", "evidence and novelty manager",
-                "Own the single semantic reconciliation of authority documents against primary receipts and the experiment ledger. Accept RecCli's host state brief for mechanical commit identity and ancestry; publish one correction only if primary evidence contradicts it, so other lanes do not repeat Git archaeology. On your first turn, refine the lead map into explicit plan or handoff assignments with named work items and risks for worker-a and worker-c. Surface the nearest prior attempts and contradictions as advice; do not pretend novelty or scientific merit is machine-decidable.",
-                False, "high", "none", True,
+                "Own the single semantic reconciliation of authority documents against primary receipts and the experiment ledger. Accept RecCli's host state brief for mechanical commit identity and ancestry; publish one correction only if primary evidence contradicts it, so other lanes do not repeat Git archaeology. On your first turn, refine the lead map into explicit plan or handoff assignments with named work items and risks for worker-a and worker-c. When a bounded question has an adequate immutable evaluator, you may author one experiment-loop contract for exactly one worker and one mutable tracked file. Surface the nearest prior attempts and contradictions as advice; do not pretend novelty or scientific merit is machine-decidable.",
+                True, "high", "artifacts", True,
             ),
             AgentSpec(
                 "manager-b", "hypothesis and model manager",
-                "Act as research director for load-bearing technical claims. Coordinate competing hypotheses, model choices, assumptions, and evidence needed to distinguish them. On your first turn, refine the lead map into explicit plan or handoff assignments with named work items and risks for worker-b and worker-d. When repository authority and evidence do not settle a material model, method, standard, identifiability, uncertainty, or numerical question, commission both research-scout and math-auditor on the same neutral work item before authorizing dependent implementation. Synthesize their independent records into one validated research decision packet; do not forward raw literature as a coding instruction. Allocate the bounded experiment budget by expected information gain, not by ceremony.",
+                "Act as research director for load-bearing technical claims. Coordinate competing hypotheses, model choices, assumptions, and evidence needed to distinguish them. On your first turn, refine the lead map into explicit plan or handoff assignments with named work items and risks for worker-b and worker-d. When repository authority and evidence do not settle a material model, method, standard, identifiability, uncertainty, or numerical question, commission both research-scout and math-auditor on the same neutral work item before authorizing dependent implementation. Synthesize their independent records into one validated research decision packet; do not forward raw literature as a coding instruction. Once the claim is bounded and an adequate immutable evaluator exists, author an experiment-loop contract for exactly one worker and one mutable tracked file. Allocate the bounded experiment budget by expected information gain, not by ceremony.",
                 True, "high", "artifacts", True,
             ),
             AgentSpec(
@@ -366,22 +378,22 @@ def get_topology(name: str = "google-rotating") -> Topology:
             ),
             AgentSpec(
                 "worker-a", "reproduction experimenter",
-                "Choose and run reversible baseline or receipt-reproduction experiments in this disposable worktree. Use temporary run-local identifiers, preserve primary outputs through the artifacts channel, and hand off host-materialized exact candidates without claiming canonical acceptance.",
+                "Choose and run reversible baseline or receipt-reproduction experiments in this disposable worktree. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Use temporary run-local identifiers, preserve primary outputs through the artifacts channel, and hand off host-materialized exact candidates without claiming canonical acceptance.",
                 True, "medium", "workspace",
             ),
             AgentSpec(
                 "worker-b", "hypothesis and model experimenter",
-                "Choose and run reversible hypothesis or model-comparison experiments in your project-owned lane. Make assumptions and discriminators explicit, compare alternatives against the selected evidence, seal generated outputs, and do not mint canonical attempt IDs.",
+                "Choose and run reversible hypothesis or model-comparison experiments in your project-owned lane. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Make assumptions and discriminators explicit, compare alternatives against the selected evidence, seal generated outputs, and do not mint canonical attempt IDs.",
                 True, "high", "workspace",
             ),
             AgentSpec(
                 "worker-c", "structural and integration validator",
-                "Choose and run reversible structural, interface, integration, or measurement experiments in your project-owned lane. Try to falsify candidate claims using the project's declared invariants, end-to-end checks, quantitative evidence, and direct review; preserve outputs without declaring canonical acceptance.",
+                "Choose and run reversible structural, interface, integration, or measurement experiments in your project-owned lane. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Try to falsify candidate claims using the project's declared invariants, end-to-end checks, quantitative evidence, and direct review; preserve outputs without declaring canonical acceptance.",
                 True, "high", "workspace",
             ),
             AgentSpec(
                 "worker-d", "uncertainty and alternative-explanation experimenter",
-                "Choose and run reversible uncertainty, missing-information, or alternative-explanation experiments within the mission's existing authority. Use temporary run-local identifiers and seal evidence. Escalate any request to mutate immutable evidence, introduce new authoritative inputs, invent unsupported facts, or expand the acceptance standard.",
+                "Choose and run reversible uncertainty, missing-information, or alternative-explanation experiments within the mission's existing authority. When RecCli assigns a validated experiment-loop contract, change only its single mutable file, make one cohesive change per trial, write the required structured trial intent, and let the host-owned evaluator keep or revert the challenger. Continue without manager ceremony until a stop or escalation trigger fires. Use temporary run-local identifiers and seal evidence. Escalate any request to mutate immutable evidence, introduce new authoritative inputs, invent unsupported facts, or expand the acceptance standard.",
                 True, "high", "workspace",
             ),
             AgentSpec(
@@ -1662,6 +1674,264 @@ def resolve_context_manifest(
     return candidate
 
 
+def resolve_experiment_policy(
+    project_root: Path, experiment_policy: Optional[str],
+) -> Optional[Path]:
+    """Resolve one tracked, project-local autonomous experiment policy."""
+    if experiment_policy is None:
+        return None
+    if not isinstance(experiment_policy, str) or not experiment_policy.strip():
+        raise ValueError(
+            "experiment_policy must be a non-empty project-relative path"
+        )
+    supplied = Path(experiment_policy).expanduser()
+    if supplied.is_absolute():
+        raise ValueError("experiment_policy must be relative to the project root")
+    project_root = project_root.resolve()
+    candidate = (project_root / supplied).resolve()
+    if candidate == project_root or not _path_is_within(candidate, project_root):
+        raise ValueError("experiment_policy escapes or selects the project root")
+    if candidate.is_symlink() or not candidate.is_file():
+        raise FileNotFoundError(
+            f"experiment_policy must name a regular tracked file: {candidate}"
+        )
+    relative = candidate.relative_to(project_root).as_posix()
+    tracked = _git(
+        project_root,
+        ["ls-files", "--error-unmatch", "--", relative],
+    ).strip()
+    if tracked != relative:
+        raise ValueError(f"experiment_policy is not tracked: {relative}")
+    return candidate
+
+
+def _safe_project_relative(raw: Any, *, label: str) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"{label} must be a non-empty project-relative path")
+    supplied = PurePosixPath(raw.strip())
+    if supplied.is_absolute() or ".." in supplied.parts or not supplied.parts:
+        raise ValueError(f"{label} is unsafe: {raw}")
+    return supplied.as_posix().rstrip("/")
+
+
+def _load_experiment_policy_definition(
+    project_root: Path,
+    policy_path: Path,
+) -> Dict[str, Any]:
+    """Validate the generic host-run evaluator policy without executing it."""
+    try:
+        definition = json.loads(policy_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"experiment policy is not valid JSON: {policy_path}"
+        ) from exc
+    if not isinstance(definition, dict):
+        raise ValueError("experiment policy must be a JSON object")
+    if definition.get("schema") != EXPERIMENT_POLICY_SCHEMA:
+        raise ValueError(
+            f"experiment policy schema must be {EXPERIMENT_POLICY_SCHEMA!r}"
+        )
+    if definition.get("enabled") is not True:
+        raise ValueError("experiment policy must explicitly set enabled=true")
+
+    def bounded_integer(name: str, minimum: int, maximum: int) -> int:
+        value = definition.get(name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"experiment policy {name} must be an integer")
+        if value < minimum or value > maximum:
+            raise ValueError(
+                f"experiment policy {name} must be between "
+                f"{minimum} and {maximum}"
+            )
+        return value
+
+    max_trials = bounded_integer("max_trials_per_contract", 1, 100)
+    max_non_improving = bounded_integer(
+        "max_consecutive_non_improving", 1, max_trials,
+    )
+    max_wall = bounded_integer(
+        "max_contract_wall_seconds", 1, 86_400,
+    )
+    raw_evaluators = definition.get("evaluators")
+    if not isinstance(raw_evaluators, list) or not raw_evaluators:
+        raise ValueError("experiment policy evaluators must be a non-empty array")
+    evaluators: Dict[str, Dict[str, Any]] = {}
+    for index, raw_evaluator in enumerate(raw_evaluators):
+        if not isinstance(raw_evaluator, dict):
+            raise ValueError(f"experiment evaluator {index} must be an object")
+        evaluator_id = str(raw_evaluator.get("id") or "").strip()
+        if not evaluator_id or not re.fullmatch(r"[A-Za-z0-9._-]+", evaluator_id):
+            raise ValueError(f"experiment evaluator {index} has an invalid id")
+        if evaluator_id in evaluators:
+            raise ValueError(f"duplicate experiment evaluator id: {evaluator_id}")
+        raw_commands = raw_evaluator.get("commands")
+        if not isinstance(raw_commands, list) or not raw_commands:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} requires commands"
+            )
+        commands: List[Dict[str, Any]] = []
+        for command_index, raw_command in enumerate(raw_commands):
+            if not isinstance(raw_command, dict):
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} command "
+                    f"{command_index} must be an object"
+                )
+            argv = raw_command.get("argv")
+            if (
+                not isinstance(argv, list)
+                or not argv
+                or any(
+                    not isinstance(value, str)
+                    or not value
+                    or "\0" in value
+                    for value in argv
+                )
+            ):
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} command "
+                    f"{command_index} has invalid argv"
+                )
+            timeout = raw_command.get("timeout_seconds")
+            if (
+                isinstance(timeout, bool)
+                or not isinstance(timeout, int)
+                or timeout < 1
+                or timeout > 1800
+            ):
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} command "
+                    f"{command_index} timeout must be 1..1800 seconds"
+                )
+            commands.append({
+                "argv": list(argv),
+                "timeout_seconds": timeout,
+            })
+        raw_immutable_paths = raw_evaluator.get("immutable_paths")
+        if not isinstance(raw_immutable_paths, list):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} immutable_paths must "
+                "be an array"
+            )
+        immutable_paths = [
+            _safe_project_relative(
+                raw,
+                label=f"experiment evaluator {evaluator_id} immutable path",
+            )
+            for raw in raw_immutable_paths
+        ]
+        if not immutable_paths:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} requires immutable_paths"
+            )
+        for relative in immutable_paths:
+            source = project_root / relative
+            if source.is_symlink() or not source.exists():
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} immutable path "
+                    f"is missing or unsafe: {relative}"
+                )
+            if not _git(project_root, ["ls-files", "--", relative]).strip():
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} immutable path "
+                    f"is not tracked: {relative}"
+                )
+        raw_mutable_roots = raw_evaluator.get("mutable_roots")
+        if not isinstance(raw_mutable_roots, list):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} mutable_roots must "
+                "be an array"
+            )
+        mutable_roots = [
+            _safe_project_relative(
+                raw,
+                label=f"experiment evaluator {evaluator_id} mutable root",
+            )
+            for raw in raw_mutable_roots
+        ]
+        if not mutable_roots:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} requires mutable_roots"
+            )
+        result_mode = str(raw_evaluator.get("result_mode") or "").strip()
+        if result_mode not in {"command_exit", "json_file"}:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} result_mode must be "
+                "command_exit or json_file"
+            )
+        hard_gates = raw_evaluator.get("hard_gates", [])
+        if (
+            not isinstance(hard_gates, list)
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in hard_gates
+            )
+        ):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} hard_gates must "
+                "be a string array"
+            )
+        raw_metrics = raw_evaluator.get("metrics", [])
+        if not isinstance(raw_metrics, list):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} metrics must be an array"
+            )
+        metrics: List[Dict[str, Any]] = []
+        for metric_index, raw_metric in enumerate(raw_metrics):
+            if not isinstance(raw_metric, dict):
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} metric "
+                    f"{metric_index} must be an object"
+                )
+            metric_id = str(raw_metric.get("id") or "").strip()
+            direction = raw_metric.get("direction")
+            unit = str(raw_metric.get("unit") or "").strip()
+            tolerance = raw_metric.get("tolerance", 0.0)
+            if (
+                not metric_id
+                or not re.fullmatch(r"[A-Za-z0-9._-]+", metric_id)
+                or direction not in {"minimize", "maximize"}
+                or not unit
+                or isinstance(tolerance, bool)
+                or not isinstance(tolerance, (int, float))
+                or float(tolerance) < 0
+            ):
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} metric "
+                    f"{metric_index} is invalid"
+                )
+            metrics.append({
+                "id": metric_id,
+                "direction": direction,
+                "unit": unit,
+                "tolerance": float(tolerance),
+            })
+        if result_mode == "command_exit" and (hard_gates or metrics):
+            raise ValueError(
+                f"command_exit evaluator {evaluator_id} cannot declare "
+                "JSON hard gates or metrics"
+            )
+        evaluators[evaluator_id] = {
+            "id": evaluator_id,
+            "commands": commands,
+            "immutable_paths": list(dict.fromkeys(immutable_paths)),
+            "mutable_roots": list(dict.fromkeys(mutable_roots)),
+            "result_mode": result_mode,
+            "hard_gates": list(dict.fromkeys(
+                value.strip() for value in hard_gates
+            )),
+            "metrics": metrics,
+        }
+    return {
+        "schema": EXPERIMENT_POLICY_SCHEMA,
+        "source_path": str(policy_path),
+        "source_sha256": _sha256_file(policy_path),
+        "max_trials_per_contract": max_trials,
+        "max_consecutive_non_improving": max_non_improving,
+        "max_contract_wall_seconds": max_wall,
+        "evaluators": evaluators,
+    }
+
+
 def _context_files_for_path(project_root: Path, raw: str) -> List[str]:
     project_root = project_root.resolve()
     if not isinstance(raw, str) or not raw.strip():
@@ -2329,6 +2599,7 @@ class OrganizationRunner:
         evidence_paths: Optional[List[str]] = None,
         protected_paths: Optional[List[str]] = None,
         context_manifest: Optional[str] = None,
+        experiment_policy: Optional[str] = None,
         max_experiments: int = 3,
         max_closeout_rounds: int = DEFAULT_CLOSEOUT_ROUNDS,
         continuation_from_run_id: Optional[str] = None,
@@ -2358,6 +2629,7 @@ class OrganizationRunner:
         self.evidence_paths = list(evidence_paths or [])
         self.protected_paths = list(protected_paths or [])
         self.context_manifest = context_manifest
+        self.experiment_policy_path = experiment_policy
         self.continuation_from_run_id = (
             str(continuation_from_run_id).strip()
             if continuation_from_run_id else None
@@ -2375,12 +2647,24 @@ class OrganizationRunner:
         self.run_dir = run_dir
         self.candidate_artifact_root = self.run_dir / "candidate-artifacts"
         self.research_cell_root = self.run_dir / "research-cell"
+        self.experiment_loop_root = self.run_dir / "experiment-loop"
         self.candidate_artifact_manifests: List[Dict[str, Any]] = []
         self.research_commissions: Dict[str, Dict[str, Any]] = {}
         self.research_fragments: Dict[str, Dict[str, Any]] = {}
         self.research_decisions: Dict[str, Dict[str, Any]] = {}
         self.research_authorizations: Dict[str, str] = {}
         self._research_lock = threading.Lock()
+        self.experiment_policy: Optional[Dict[str, Any]] = None
+        self.experiment_contracts: Dict[str, Dict[str, Any]] = {}
+        self.experiment_contract_by_work_item: Dict[str, str] = {}
+        self.active_experiment_by_worker: Dict[str, str] = {}
+        self.experiment_trials: List[Dict[str, Any]] = []
+        self.experiment_baselines: Dict[str, Dict[str, Any]] = {}
+        self.experiment_champions: Dict[str, Dict[str, Any]] = {}
+        self.experiment_non_improving: Dict[str, int] = {}
+        self.experiment_halted_workers: Set[str] = set()
+        self._experiment_contract_started: Dict[str, float] = {}
+        self._experiment_loop_lock = threading.Lock()
         self.experiment_records: List[Dict[str, Any]] = []
         self._experiment_records_by_turn: Dict[
             Tuple[str, int], Dict[str, Any]
@@ -2441,6 +2725,34 @@ class OrganizationRunner:
         self.candidate_artifact_root.mkdir(parents=True, exist_ok=False)
         self.candidate_artifact_root.chmod(0o555)
         self.research_cell_root.mkdir(parents=True, exist_ok=False)
+        self.experiment_loop_root.mkdir(parents=True, exist_ok=False)
+        resolved_experiment_policy = resolve_experiment_policy(
+            self.project_root,
+            self.experiment_policy_path,
+        )
+        if resolved_experiment_policy is not None:
+            self.experiment_policy = _load_experiment_policy_definition(
+                self.project_root,
+                resolved_experiment_policy,
+            )
+            immutable_loop_paths = {
+                resolved_experiment_policy.relative_to(
+                    self.project_root,
+                ).as_posix(),
+                *(
+                    path
+                    for evaluator in self.experiment_policy[
+                        "evaluators"
+                    ].values()
+                    for path in evaluator["immutable_paths"]
+                ),
+            }
+            for relative in sorted(immutable_loop_paths):
+                if relative not in self.protected_paths:
+                    self.protected_paths.append(relative)
+            policy_copy = self.experiment_loop_root / "policy.json"
+            policy_copy.write_bytes(resolved_experiment_policy.read_bytes())
+            policy_copy.chmod(0o444)
         self.evidence_manifest = prepare_evidence_snapshot(
             self.project_root, self.run_dir, self.evidence_paths,
         )
@@ -2470,7 +2782,7 @@ class OrganizationRunner:
                 )
         for agent_id in {
             self.topology.leader_id,
-            self.topology.research_director_id,
+            *self.topology.manager_ids,
             *self.topology.final_reviewer_pool,
             self.topology.finalizer_id,
             *self.topology.worker_ids,
@@ -2478,6 +2790,9 @@ class OrganizationRunner:
             if agent_id and agent_id in self.workspaces:
                 self.workspaces[agent_id].additional_directories.append(
                     self.research_cell_root
+                )
+                self.workspaces[agent_id].additional_directories.append(
+                    self.experiment_loop_root
                 )
         if self.evidence_manifest:
             evidence_environment = {
@@ -2538,6 +2853,22 @@ class OrganizationRunner:
                 "decision_registry": str(
                     self.research_cell_root / "decisions.jsonl"
                 ),
+            },
+            "experiment_loop": {
+                "enabled": self.experiment_policy is not None,
+                "root": str(self.experiment_loop_root),
+                "source_policy": self.experiment_policy_path,
+                "source_policy_sha256": (
+                    self.experiment_policy.get("source_sha256")
+                    if self.experiment_policy else None
+                ),
+                "contracts": str(
+                    self.experiment_loop_root / "contracts.jsonl"
+                ),
+                "trials": str(self.experiment_loop_root / "trials.jsonl"),
+                "one_mutable_file": True,
+                "baseline_required": True,
+                "manager_cadence": "event-driven",
             },
             "experiment_records": str(self.run_dir / "experiments.jsonl"),
             "human_promotion_required": self.topology.human_promotion_required,
@@ -2617,6 +2948,8 @@ class OrganizationRunner:
             phase = (
                 "closeout"
                 if closeout
+                else "experiment_loop"
+                if scheduled_ids & set(self.active_experiment_by_worker)
                 else "research_cell"
                 if scheduled_ids & set(self.topology.research_specialist_ids)
                 else None
@@ -3569,6 +3902,7 @@ class OrganizationRunner:
                 source_request.get("protected_paths") or [],
             ),
             "context_manifest": source_request.get("context_manifest"),
+            "experiment_policy": source_request.get("experiment_policy"),
             "max_experiments": self._experiment_remaining(),
         }
         request: Dict[str, Any] = {
@@ -3928,6 +4262,56 @@ class OrganizationRunner:
         }
         return self._mission_ref_state
 
+    def _experiment_loop_snapshot(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.experiment_policy is not None,
+            "policy_path": self.experiment_policy_path,
+            "policy_sha256": (
+                self.experiment_policy.get("source_sha256")
+                if self.experiment_policy else None
+            ),
+            "one_mutable_file": True,
+            "baseline_required": True,
+            "contracts": [
+                {
+                    key: record.get(key)
+                    for key in (
+                        "sha256",
+                        "work_item",
+                        "manager_id",
+                        "worker_id",
+                        "mutable_file",
+                        "evaluator_id",
+                        "max_trials",
+                        "max_consecutive_non_improving",
+                        "max_wall_seconds",
+                        "status",
+                        "activation_baseline_candidate",
+                        "halt_reason",
+                    )
+                }
+                for record in self.experiment_contracts.values()
+            ],
+            "trial_count": len(self.experiment_trials),
+            "trials": list(self.experiment_trials[-32:]),
+            "active_by_worker": dict(self.active_experiment_by_worker),
+            "halted_workers": sorted(self.experiment_halted_workers),
+            "champions": {
+                contract_sha: {
+                    key: outcome.get(key)
+                    for key in (
+                        "candidate",
+                        "evaluator_id",
+                        "hard_gates",
+                        "metrics",
+                        "evaluated_at",
+                    )
+                }
+                for contract_sha, outcome
+                in self.experiment_champions.items()
+            },
+        }
+
     def _write_host_state_brief(self, round_number: int) -> Dict[str, Any]:
         workspace_state: Dict[str, Dict[str, Any]] = {}
         for agent_id, workspace in self.workspaces.items():
@@ -4009,6 +4393,7 @@ class OrganizationRunner:
                 ],
                 "authorizations": dict(self.research_authorizations),
             },
+            "experiment_loop": self._experiment_loop_snapshot(),
         }
         canonical = json.dumps(
             payload,
@@ -4052,6 +4437,7 @@ class OrganizationRunner:
                 "experiment_budget",
             ),
             "research_cell": self.host_state_brief.get("research_cell"),
+            "experiment_loop": self.host_state_brief.get("experiment_loop"),
         }
         return (
             f"Durable brief: `{self.run_dir / 'host-state.json'}`\n\n"
@@ -4520,6 +4906,1008 @@ class OrganizationRunner:
             )
 
     @staticmethod
+    def _experiment_string(payload: Dict[str, Any], name: str) -> str:
+        value = payload.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(
+                f"experiment artifact field {name!r} must be a non-empty string"
+            )
+        return value.strip()
+
+    def _validate_experiment_contract(
+        self,
+        agent: AgentSpec,
+        path: Path,
+    ) -> Dict[str, Any]:
+        if self.experiment_policy is None:
+            raise RuntimeError(
+                "experiment-loop contracts require a project experiment policy"
+            )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"experiment-loop contract is not valid JSON: {path}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("experiment-loop contract must be a JSON object")
+        required = {
+            "schema",
+            "run_id",
+            "work_item",
+            "manager_id",
+            "worker_id",
+            "baseline_mode",
+            "mutable_file",
+            "evaluator_id",
+            "objective",
+            "success_rule",
+            "max_trials",
+            "max_consecutive_non_improving",
+            "max_wall_seconds",
+            "research_decision_sha256",
+        }
+        if set(payload) != required:
+            raise RuntimeError(
+                "experiment-loop contract fields must be exactly "
+                f"{sorted(required)}"
+            )
+        if payload.get("schema") != EXPERIMENT_CONTRACT_SCHEMA:
+            raise RuntimeError(
+                f"experiment-loop contract schema must be "
+                f"{EXPERIMENT_CONTRACT_SCHEMA}"
+            )
+        if payload.get("run_id") != self.run_id:
+            raise RuntimeError(
+                "experiment-loop contract run_id does not match this run"
+            )
+        if payload.get("manager_id") != agent.agent_id:
+            raise RuntimeError(
+                "experiment-loop contract manager_id does not match its author"
+            )
+        worker_id = self._experiment_string(payload, "worker_id")
+        if worker_id not in self.topology.worker_ids:
+            raise RuntimeError("experiment-loop contract worker_id is not a worker")
+        expected_manager = self.topology.primary_manager_by_worker.get(worker_id)
+        if expected_manager != agent.agent_id:
+            raise RuntimeError(
+                f"{agent.agent_id} is not the primary manager for {worker_id}"
+            )
+        if payload.get("baseline_mode") != "worker_head_at_activation":
+            raise RuntimeError(
+                "experiment-loop baseline_mode must be "
+                "worker_head_at_activation"
+            )
+        work_item = self._experiment_string(payload, "work_item")
+        mutable_file = _safe_project_relative(
+            self._experiment_string(payload, "mutable_file"),
+            label="experiment-loop mutable_file",
+        )
+        evaluator_id = self._experiment_string(payload, "evaluator_id")
+        evaluator = self.experiment_policy["evaluators"].get(evaluator_id)
+        if evaluator is None:
+            raise RuntimeError(
+                f"unknown experiment-loop evaluator: {evaluator_id}"
+            )
+        if not any(
+            mutable_file == root or mutable_file.startswith(root + "/")
+            for root in evaluator["mutable_roots"]
+        ):
+            raise RuntimeError(
+                f"experiment-loop mutable file {mutable_file} is outside "
+                f"evaluator {evaluator_id} mutable roots"
+            )
+        if any(
+            mutable_file == immutable
+            or mutable_file.startswith(immutable + "/")
+            or immutable.startswith(mutable_file + "/")
+            for immutable in evaluator["immutable_paths"]
+        ):
+            raise RuntimeError(
+                "experiment-loop mutable file overlaps the immutable evaluator"
+            )
+        max_trials = payload.get("max_trials")
+        max_non_improving = payload.get("max_consecutive_non_improving")
+        max_wall = payload.get("max_wall_seconds")
+        if (
+            isinstance(max_trials, bool)
+            or not isinstance(max_trials, int)
+            or max_trials < 1
+            or max_trials > self.experiment_policy["max_trials_per_contract"]
+            or max_trials > self._experiment_remaining()
+        ):
+            raise RuntimeError(
+                "experiment-loop max_trials must be positive and no greater "
+                "than both the project policy and remaining organization budget"
+            )
+        if (
+            isinstance(max_non_improving, bool)
+            or not isinstance(max_non_improving, int)
+            or max_non_improving < 1
+            or max_non_improving > max_trials
+            or max_non_improving
+            > self.experiment_policy["max_consecutive_non_improving"]
+        ):
+            raise RuntimeError(
+                "experiment-loop max_consecutive_non_improving is invalid"
+            )
+        if (
+            isinstance(max_wall, bool)
+            or not isinstance(max_wall, int)
+            or max_wall < 1
+            or max_wall > self.experiment_policy["max_contract_wall_seconds"]
+        ):
+            raise RuntimeError(
+                "experiment-loop max_wall_seconds exceeds project policy"
+            )
+        self._experiment_string(payload, "objective")
+        self._experiment_string(payload, "success_rule")
+        research_sha = payload.get("research_decision_sha256")
+        if research_sha is not None and (
+            not isinstance(research_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", research_sha)
+        ):
+            raise RuntimeError(
+                "research_decision_sha256 must be null or a SHA-256"
+            )
+        if work_item in self.research_commissions:
+            authorized_sha = self.research_authorizations.get(work_item)
+            if not authorized_sha or research_sha != authorized_sha:
+                raise RuntimeError(
+                    "research-dependent experiment contract must bind the "
+                    "authorizing decision SHA-256"
+                )
+        raw = path.read_bytes()
+        return {
+            "kind": "contract",
+            "work_item": work_item,
+            "manager_id": agent.agent_id,
+            "worker_id": worker_id,
+            "mutable_file": mutable_file,
+            "evaluator_id": evaluator_id,
+            "max_trials": max_trials,
+            "max_consecutive_non_improving": max_non_improving,
+            "max_wall_seconds": max_wall,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "bytes": len(raw),
+            "payload": payload,
+            "source_path": str(path),
+        }
+
+    def _validate_experiment_trial(
+        self,
+        agent: AgentSpec,
+        path: Path,
+    ) -> Dict[str, Any]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"experiment-loop trial intent is not valid JSON: {path}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("experiment-loop trial intent must be an object")
+        required = {
+            "schema",
+            "run_id",
+            "contract_sha256",
+            "work_item",
+            "worker_id",
+            "hypothesis",
+            "single_change",
+            "expected_result",
+        }
+        if set(payload) != required:
+            raise RuntimeError(
+                "experiment-loop trial fields must be exactly "
+                f"{sorted(required)}"
+            )
+        if payload.get("schema") != EXPERIMENT_TRIAL_SCHEMA:
+            raise RuntimeError(
+                f"experiment-loop trial schema must be {EXPERIMENT_TRIAL_SCHEMA}"
+            )
+        if payload.get("run_id") != self.run_id:
+            raise RuntimeError(
+                "experiment-loop trial run_id does not match this run"
+            )
+        if payload.get("worker_id") != agent.agent_id:
+            raise RuntimeError(
+                "experiment-loop trial worker_id does not match its author"
+            )
+        contract_sha = self._experiment_string(payload, "contract_sha256")
+        if not re.fullmatch(r"[0-9a-f]{64}", contract_sha):
+            raise RuntimeError("experiment-loop contract_sha256 is invalid")
+        contract = self.experiment_contracts.get(contract_sha)
+        if contract is None:
+            raise RuntimeError(
+                "experiment-loop trial references an unknown contract"
+            )
+        if (
+            contract["worker_id"] != agent.agent_id
+            or self.active_experiment_by_worker.get(agent.agent_id)
+            != contract_sha
+        ):
+            raise RuntimeError(
+                "experiment-loop trial contract is not active for this worker"
+            )
+        work_item = self._experiment_string(payload, "work_item")
+        if work_item != contract["work_item"]:
+            raise RuntimeError(
+                "experiment-loop trial work_item does not match its contract"
+            )
+        for field_name in ("hypothesis", "single_change", "expected_result"):
+            self._experiment_string(payload, field_name)
+        raw = path.read_bytes()
+        return {
+            "kind": "trial",
+            "work_item": work_item,
+            "worker_id": agent.agent_id,
+            "contract_sha256": contract_sha,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "bytes": len(raw),
+            "payload": payload,
+            "source_path": str(path),
+        }
+
+    def _validated_experiment_loop_artifacts(
+        self,
+        agent: AgentSpec,
+        workspace: Workspace,
+        turn_paths: Set[str],
+    ) -> List[Dict[str, Any]]:
+        prefix = f"{self.artifact_staging_prefix}/experiment-loop/"
+        paths = [
+            path for path in sorted(turn_paths)
+            if path.startswith(prefix) and path.endswith(".json")
+        ]
+        if not paths:
+            return []
+        records: List[Dict[str, Any]] = []
+        for relative in paths:
+            path = workspace.cwd / relative
+            subpath = relative[len(prefix):]
+            if subpath.startswith("contracts/"):
+                if agent.agent_id not in set(
+                    self.topology.primary_manager_by_worker.values()
+                ):
+                    raise RuntimeError(
+                        "only primary managers may author experiment contracts"
+                    )
+                records.append(self._validate_experiment_contract(agent, path))
+            elif subpath.startswith("trials/"):
+                if agent.agent_id not in self.topology.worker_ids:
+                    raise RuntimeError(
+                        "only workers may author experiment trial intents"
+                    )
+                records.append(self._validate_experiment_trial(agent, path))
+            else:
+                raise RuntimeError(
+                    "experiment-loop JSON must be under contracts/ or trials/"
+                )
+        if sum(record["kind"] == "contract" for record in records) > 1:
+            raise RuntimeError("a manager turn may author only one loop contract")
+        if sum(record["kind"] == "trial" for record in records) > 1:
+            raise RuntimeError("a worker turn may author only one trial intent")
+        return records
+
+    def _register_experiment_contract(
+        self,
+        record: Dict[str, Any],
+        *,
+        candidate: str,
+        round_number: int,
+    ) -> None:
+        source_path = Path(str(record["source_path"]))
+        raw = source_path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+            raise RuntimeError(
+                f"experiment contract changed after validation: {source_path}"
+            )
+        with self._experiment_loop_lock:
+            previous = self.experiment_contract_by_work_item.get(
+                record["work_item"]
+            )
+            if previous and previous != record["sha256"]:
+                raise RuntimeError(
+                    "an experiment work item may bind only one immutable "
+                    "contract; use a new workItem for a revised contract"
+                )
+            persisted = {
+                **record,
+                "candidate": candidate,
+                "round": round_number,
+                "registered_at": _utc_now(),
+                "status": "registered",
+                "activation_baseline_candidate": None,
+            }
+            persisted.pop("source_path", None)
+            destination_dir = self.experiment_loop_root / "contracts"
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            destination = destination_dir / f"{record['sha256']}.json"
+            if not destination.exists():
+                destination.write_bytes(raw)
+                destination.chmod(0o444)
+            persisted["persisted_path"] = str(destination)
+            self.experiment_contracts[record["sha256"]] = persisted
+            self.experiment_contract_by_work_item[
+                record["work_item"]
+            ] = record["sha256"]
+        self._append_jsonl(
+            "experiment-loop/contracts.jsonl",
+            {
+                **persisted,
+                "action": "registered",
+                "ts": _utc_now(),
+            },
+        )
+        self._event(
+            "experiment_loop.contract_registered",
+            round_number,
+            contract_sha256=record["sha256"],
+            work_item=record["work_item"],
+            manager_id=record["manager_id"],
+            worker_id=record["worker_id"],
+            mutable_file=record["mutable_file"],
+            evaluator_id=record["evaluator_id"],
+        )
+
+    def _activate_experiment_contract(
+        self,
+        *,
+        manager_id: str,
+        worker_id: str,
+        work_item: str,
+        round_number: int,
+    ) -> Optional[str]:
+        contract_sha = self.experiment_contract_by_work_item.get(work_item)
+        if not contract_sha:
+            return None
+        contract = self.experiment_contracts[contract_sha]
+        if (
+            contract["manager_id"] != manager_id
+            or contract["worker_id"] != worker_id
+        ):
+            raise RuntimeError(
+                "experiment-loop assignment does not match its contract"
+            )
+        if contract.get("status") == "halted":
+            raise RuntimeError(
+                "a halted experiment contract cannot be reactivated; "
+                "manager judgment must create a new workItem and contract"
+            )
+        if contract["max_trials"] > self._experiment_remaining():
+            raise RuntimeError(
+                "experiment contract trial cap exceeds the remaining "
+                "organization budget"
+            )
+        active_contracts = [
+            other
+            for other in self.experiment_contracts.values()
+            if other.get("status") == "active"
+            and other.get("sha256") != contract_sha
+        ]
+        if active_contracts:
+            raise RuntimeError(
+                "only one autonomous experiment loop may be active at a time; "
+                f"current contract={active_contracts[0]['sha256']}"
+            )
+        baseline = _git(
+            self.workspaces[worker_id].cwd,
+            ["rev-parse", "HEAD"],
+        ).strip()
+        with self._experiment_loop_lock:
+            active = self.active_experiment_by_worker.get(worker_id)
+            if active and active != contract_sha:
+                active_contract = self.experiment_contracts.get(active, {})
+                if active_contract.get("status") == "active":
+                    raise RuntimeError(
+                        f"{worker_id} already has an active experiment contract"
+                    )
+            contract["status"] = "active"
+            if not contract.get("activation_baseline_candidate"):
+                contract["activation_baseline_candidate"] = baseline
+                self._experiment_contract_started[contract_sha] = (
+                    time.monotonic()
+                )
+            self.active_experiment_by_worker[worker_id] = contract_sha
+            self.experiment_halted_workers.discard(worker_id)
+        self._append_jsonl(
+            "experiment-loop/contracts.jsonl",
+            {
+                **contract,
+                "action": "activated",
+                "activation_round": round_number,
+                "ts": _utc_now(),
+            },
+        )
+        self._event(
+            "experiment_loop.contract_activated",
+            round_number,
+            contract_sha256=contract_sha,
+            work_item=work_item,
+            manager_id=manager_id,
+            worker_id=worker_id,
+            baseline_candidate=contract["activation_baseline_candidate"],
+        )
+        return contract_sha
+
+    def _experiment_environment(
+        self,
+        workspace: Workspace,
+        *,
+        result_path: Optional[Path],
+    ) -> Dict[str, str]:
+        env = os.environ.copy()
+        bridge_bin = workspace.cwd / ".venv" / "bin"
+        if ".venv" in workspace.runtime_paths and bridge_bin.is_dir():
+            env["PATH"] = (
+                f"{bridge_bin}{os.pathsep}{env.get('PATH', '')}"
+            )
+            env["VIRTUAL_ENV"] = str(workspace.cwd / ".venv")
+        python_paths = [str(workspace.cwd / "src"), str(workspace.cwd)]
+        if env.get("PYTHONPATH"):
+            python_paths.append(env["PYTHONPATH"])
+        env["PYTHONPATH"] = os.pathsep.join(python_paths)
+        env.update(workspace.environment)
+        env["RECCLI_EXPERIMENT_RUN_ID"] = self.run_id
+        if result_path is not None:
+            env["RECCLI_EXPERIMENT_RESULT_PATH"] = str(result_path)
+        return env
+
+    def _run_experiment_evaluator(
+        self,
+        contract: Dict[str, Any],
+        *,
+        candidate: str,
+        label: str,
+        round_number: int,
+    ) -> Dict[str, Any]:
+        if self.experiment_policy is None:
+            raise RuntimeError("experiment evaluator policy is not configured")
+        evaluator = self.experiment_policy["evaluators"][
+            contract["evaluator_id"]
+        ]
+        workspace = self.workspaces[contract["worker_id"]]
+        sequence = 1 + sum(
+            trial["contract_sha256"] == contract["sha256"]
+            for trial in self.experiment_trials
+        )
+        log_root = (
+            self.experiment_loop_root
+            / "logs"
+            / contract["sha256"][:16]
+            / f"{sequence:03d}-{_safe_name(label)}"
+        )
+        log_root.mkdir(parents=True, exist_ok=False)
+        result_path = (
+            log_root / "result.json"
+            if evaluator["result_mode"] == "json_file"
+            else None
+        )
+        environment = self._experiment_environment(
+            workspace,
+            result_path=result_path,
+        )
+        command_records: List[Dict[str, Any]] = []
+        started = time.monotonic()
+        timed_out = False
+        for index, command in enumerate(evaluator["commands"], 1):
+            command_started = time.monotonic()
+            stdout = ""
+            stderr = ""
+            returncode: Optional[int] = None
+            try:
+                completed = subprocess.run(
+                    command["argv"],
+                    cwd=workspace.cwd,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=command["timeout_seconds"],
+                    check=False,
+                )
+                returncode = completed.returncode
+                stdout = completed.stdout or ""
+                stderr = completed.stderr or ""
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                stdout = str(exc.stdout or "")
+                stderr = str(exc.stderr or "")
+            stdout_path = log_root / f"command-{index:02d}.stdout.txt"
+            stderr_path = log_root / f"command-{index:02d}.stderr.txt"
+            stdout_path.write_text(stdout[-1_000_000:], encoding="utf-8")
+            stderr_path.write_text(stderr[-1_000_000:], encoding="utf-8")
+            command_records.append({
+                "argv": list(command["argv"]),
+                "timeout_seconds": command["timeout_seconds"],
+                "returncode": returncode,
+                "timed_out": returncode is None,
+                "duration_ms": int(
+                    (time.monotonic() - command_started) * 1000
+                ),
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "stdout_tail": stdout[-4_000:],
+                "stderr_tail": stderr[-4_000:],
+            })
+            if returncode is None:
+                break
+        commands_pass = bool(command_records) and all(
+            record["returncode"] == 0 for record in command_records
+        ) and len(command_records) == len(evaluator["commands"])
+        hard_gates: Dict[str, bool]
+        metrics: Dict[str, float]
+        notes: List[str] = []
+        result_sha256: Optional[str] = None
+        result_error: Optional[str] = None
+        if evaluator["result_mode"] == "command_exit":
+            hard_gates = {"commands_pass": commands_pass}
+            metrics = {}
+        else:
+            hard_gates = {}
+            metrics = {}
+            if result_path is None or not result_path.is_file():
+                result_error = (
+                    "immutable evaluator did not write "
+                    "RECCLI_EXPERIMENT_RESULT_PATH"
+                )
+            else:
+                raw = result_path.read_bytes()
+                result_sha256 = hashlib.sha256(raw).hexdigest()
+                try:
+                    result_payload = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    result_error = f"project experiment result is invalid: {exc}"
+                else:
+                    if (
+                        not isinstance(result_payload, dict)
+                        or result_payload.get("schema")
+                        != PROJECT_EXPERIMENT_RESULT_SCHEMA
+                    ):
+                        result_error = (
+                            "project experiment result has the wrong schema"
+                        )
+                    else:
+                        raw_gates = result_payload.get("hard_gates")
+                        raw_metrics = result_payload.get("metrics")
+                        raw_notes = result_payload.get("notes", [])
+                        if (
+                            not isinstance(raw_gates, dict)
+                            or set(raw_gates) != set(evaluator["hard_gates"])
+                            or any(
+                                not isinstance(value, bool)
+                                for value in raw_gates.values()
+                            )
+                        ):
+                            result_error = (
+                                "project experiment result hard_gates do not "
+                                "match the immutable evaluator profile"
+                            )
+                        elif (
+                            not isinstance(raw_metrics, dict)
+                            or set(raw_metrics)
+                            != {
+                                metric["id"]
+                                for metric in evaluator["metrics"]
+                            }
+                            or any(
+                                isinstance(value, bool)
+                                or not isinstance(value, (int, float))
+                                or not math.isfinite(float(value))
+                                for value in raw_metrics.values()
+                            )
+                        ):
+                            result_error = (
+                                "project experiment result metrics do not "
+                                "match the immutable evaluator profile"
+                            )
+                        elif (
+                            not isinstance(raw_notes, list)
+                            or any(
+                                not isinstance(value, str)
+                                for value in raw_notes
+                            )
+                        ):
+                            result_error = (
+                                "project experiment result notes are invalid"
+                            )
+                        else:
+                            hard_gates = dict(raw_gates)
+                            metrics = {
+                                key: float(value)
+                                for key, value in raw_metrics.items()
+                            }
+                            notes = list(raw_notes)
+        evaluator_mutations = sorted(self._uncommitted_paths(workspace))
+        if evaluator_mutations:
+            result_error = (
+                "immutable evaluator modified the worker worktree: "
+                f"{evaluator_mutations}"
+            )
+        outcome = {
+            "candidate": candidate,
+            "label": label,
+            "evaluator_id": evaluator["id"],
+            "commands_pass": commands_pass,
+            "timed_out": timed_out,
+            "hard_gates": hard_gates,
+            "metrics": metrics,
+            "notes": notes,
+            "result_sha256": result_sha256,
+            "result_error": result_error,
+            "commands": command_records,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "evaluated_at": _utc_now(),
+        }
+        self._event(
+            "experiment_loop.evaluator_completed",
+            round_number,
+            contract_sha256=contract["sha256"],
+            work_item=contract["work_item"],
+            worker_id=contract["worker_id"],
+            candidate=candidate,
+            label=label,
+            commands_pass=commands_pass,
+            timed_out=timed_out,
+            result_error=result_error,
+        )
+        return outcome
+
+    @staticmethod
+    def _experiment_outcome_passes(outcome: Dict[str, Any]) -> bool:
+        return bool(
+            outcome.get("commands_pass")
+            and not outcome.get("result_error")
+            and outcome.get("hard_gates")
+            and all(outcome["hard_gates"].values())
+        )
+
+    def _experiment_verdict(
+        self,
+        contract: Dict[str, Any],
+        challenger: Dict[str, Any],
+        champion: Dict[str, Any],
+    ) -> str:
+        if challenger.get("timed_out") or challenger.get("result_error"):
+            return "crash"
+        challenger_passes = self._experiment_outcome_passes(challenger)
+        champion_passes = self._experiment_outcome_passes(champion)
+        if not challenger_passes:
+            return "discard"
+        if not champion_passes:
+            return "keep"
+        evaluator = self.experiment_policy["evaluators"][
+            contract["evaluator_id"]
+        ]
+        if not evaluator["metrics"]:
+            return "inconclusive"
+        improved = False
+        worsened = False
+        for metric in evaluator["metrics"]:
+            identifier = metric["id"]
+            challenger_value = challenger["metrics"][identifier]
+            champion_value = champion["metrics"][identifier]
+            tolerance = metric["tolerance"]
+            delta = challenger_value - champion_value
+            if metric["direction"] == "maximize":
+                improved = improved or delta > tolerance
+                worsened = worsened or delta < -tolerance
+            else:
+                improved = improved or delta < -tolerance
+                worsened = worsened or delta > tolerance
+        if improved and not worsened:
+            return "keep"
+        if worsened and not improved:
+            return "discard"
+        return "inconclusive"
+
+    def _record_experiment_trial(
+        self,
+        contract: Dict[str, Any],
+        *,
+        intent: Optional[Dict[str, Any]],
+        outcome: Dict[str, Any],
+        verdict: str,
+        round_number: int,
+        resulting_head: str,
+        budget_slot: Optional[int],
+    ) -> Dict[str, Any]:
+        if verdict not in EXPERIMENT_VERDICTS:
+            raise RuntimeError(f"unsupported experiment-loop verdict: {verdict}")
+        compact_outcome = {
+            key: outcome.get(key)
+            for key in (
+                "candidate",
+                "label",
+                "evaluator_id",
+                "commands_pass",
+                "timed_out",
+                "hard_gates",
+                "metrics",
+                "result_sha256",
+                "result_error",
+                "duration_ms",
+                "evaluated_at",
+            )
+        }
+        compact_outcome["notes"] = [
+            str(note)[:500] for note in outcome.get("notes", [])[:10]
+        ]
+        compact_outcome["commands"] = [
+            {
+                key: command.get(key)
+                for key in (
+                    "argv",
+                    "timeout_seconds",
+                    "returncode",
+                    "timed_out",
+                    "duration_ms",
+                    "stdout_path",
+                    "stderr_path",
+                )
+            }
+            for command in outcome.get("commands", [])
+        ]
+        record = {
+            "schema": "reccli.organization-experiment-loop-record.v1",
+            "run_id": self.run_id,
+            "contract_sha256": contract["sha256"],
+            "work_item": contract["work_item"],
+            "manager_id": contract["manager_id"],
+            "worker_id": contract["worker_id"],
+            "round": round_number,
+            "trial_number": (
+                0 if verdict == "baseline" else 1 + sum(
+                    trial["contract_sha256"] == contract["sha256"]
+                    and trial["verdict"] != "baseline"
+                    for trial in self.experiment_trials
+                )
+            ),
+            "intent_sha256": intent.get("sha256") if intent else None,
+            "intent": intent.get("payload") if intent else None,
+            "intent_persisted_path": (
+                intent.get("persisted_path") if intent else None
+            ),
+            "challenger_candidate": outcome["candidate"],
+            "resulting_head": resulting_head,
+            "verdict": verdict,
+            "budget_slot": budget_slot,
+            "outcome": compact_outcome,
+            "ts": _utc_now(),
+        }
+        self.experiment_trials.append(record)
+        self._append_jsonl("experiment-loop/trials.jsonl", record)
+        self._event(
+            f"experiment_loop.{verdict}",
+            round_number,
+            contract_sha256=contract["sha256"],
+            work_item=contract["work_item"],
+            worker_id=contract["worker_id"],
+            challenger_candidate=outcome["candidate"],
+            resulting_head=resulting_head,
+            trial_number=record["trial_number"],
+            budget_slot=budget_slot,
+        )
+        return record
+
+    def _ensure_experiment_baseline(
+        self,
+        agent: AgentSpec,
+        round_number: int,
+    ) -> None:
+        contract_sha = self.active_experiment_by_worker.get(agent.agent_id)
+        if not contract_sha or contract_sha in self.experiment_baselines:
+            return
+        contract = self.experiment_contracts[contract_sha]
+        baseline = str(contract["activation_baseline_candidate"])
+        head = _git(
+            self.workspaces[agent.agent_id].cwd,
+            ["rev-parse", "HEAD"],
+        ).strip()
+        if head != baseline:
+            raise RuntimeError(
+                "experiment-loop baseline must run before the worker changes HEAD"
+            )
+        outcome = self._run_experiment_evaluator(
+            contract,
+            candidate=baseline,
+            label="baseline",
+            round_number=round_number,
+        )
+        self.experiment_baselines[contract_sha] = outcome
+        self.experiment_champions[contract_sha] = outcome
+        self.experiment_non_improving[contract_sha] = 0
+        self._record_experiment_trial(
+            contract,
+            intent=None,
+            outcome=outcome,
+            verdict="baseline",
+            round_number=round_number,
+            resulting_head=head,
+            budget_slot=None,
+        )
+        self._system_message(
+            agent.agent_id,
+            "status",
+            "Host baseline completed for experiment contract "
+            f"{contract_sha}. commands_pass={outcome['commands_pass']} "
+            f"hard_gates={outcome['hard_gates']} metrics={outcome['metrics']}. "
+            "This control run did not consume a challenger slot.",
+            round_number,
+            baseline,
+            contract["work_item"],
+            "routine",
+        )
+
+    def _halt_experiment_loop(
+        self,
+        contract: Dict[str, Any],
+        *,
+        reason: str,
+        round_number: int,
+        candidate: str,
+    ) -> None:
+        worker_id = contract["worker_id"]
+        contract["status"] = "halted"
+        contract["halt_reason"] = reason
+        contract["halted_at"] = _utc_now()
+        self.experiment_halted_workers.add(worker_id)
+        self.active_experiment_by_worker.pop(worker_id, None)
+        self._append_jsonl(
+            "experiment-loop/contracts.jsonl",
+            {
+                **contract,
+                "action": "halted",
+                "reason": reason,
+                "ts": _utc_now(),
+            },
+        )
+        self._system_message(
+            contract["manager_id"],
+            "status",
+            "Experiment loop stopped and requires manager judgment. "
+            f"contract={contract['sha256']} workItem={contract['work_item']} "
+            f"worker={worker_id} candidate={candidate} reason={reason}. "
+            f"Review {self.experiment_loop_root / 'trials.jsonl'}; consult "
+            "another manager directly if the decision crosses a subsystem.",
+            round_number,
+            candidate,
+            contract["work_item"],
+            "high",
+        )
+        self._event(
+            "experiment_loop.manager_wake",
+            round_number,
+            contract_sha256=contract["sha256"],
+            work_item=contract["work_item"],
+            worker_id=worker_id,
+            manager_id=contract["manager_id"],
+            candidate=candidate,
+            reason=reason,
+        )
+
+    def _process_experiment_trial(
+        self,
+        agent: AgentSpec,
+        record: Dict[str, Any],
+        *,
+        challenger: str,
+        round_number: int,
+    ) -> str:
+        contract = self.experiment_contracts[record["contract_sha256"]]
+        if contract["sha256"] not in self.experiment_baselines:
+            raise RuntimeError(
+                "experiment-loop challenger cannot run before its baseline"
+            )
+        intent_source = Path(str(record["source_path"]))
+        intent_raw = intent_source.read_bytes()
+        if hashlib.sha256(intent_raw).hexdigest() != record["sha256"]:
+            raise RuntimeError(
+                f"experiment trial intent changed after validation: "
+                f"{intent_source}"
+            )
+        intent_dir = self.experiment_loop_root / "intents"
+        intent_dir.mkdir(parents=True, exist_ok=True)
+        intent_destination = intent_dir / f"{record['sha256']}.json"
+        if not intent_destination.exists():
+            intent_destination.write_bytes(intent_raw)
+            intent_destination.chmod(0o444)
+        record["persisted_path"] = str(intent_destination)
+        budget = self._experiment_records_by_turn.get(
+            (agent.agent_id, int(round_number))
+        )
+        trial_number = 1 + sum(
+            trial["contract_sha256"] == contract["sha256"]
+            and trial["verdict"] != "baseline"
+            for trial in self.experiment_trials
+        )
+        outcome = self._run_experiment_evaluator(
+            contract,
+            candidate=challenger,
+            label=f"trial-{trial_number}",
+            round_number=round_number,
+        )
+        champion = self.experiment_champions[contract["sha256"]]
+        verdict = self._experiment_verdict(contract, outcome, champion)
+        resulting_head = challenger
+        if verdict == "keep":
+            self.experiment_champions[contract["sha256"]] = outcome
+            self.experiment_non_improving[contract["sha256"]] = 0
+        else:
+            self._host_git(
+                self.workspaces[agent.agent_id],
+                [
+                    "-c",
+                    "commit.gpgsign=false",
+                    "revert",
+                    "--no-edit",
+                    "--no-gpg-sign",
+                    challenger,
+                ],
+            )
+            resulting_head = _git(
+                self.workspaces[agent.agent_id].cwd,
+                ["rev-parse", "HEAD"],
+            ).strip()
+            self.experiment_non_improving[contract["sha256"]] = (
+                self.experiment_non_improving.get(contract["sha256"], 0) + 1
+            )
+        trial = self._record_experiment_trial(
+            contract,
+            intent=record,
+            outcome=outcome,
+            verdict=verdict,
+            round_number=round_number,
+            resulting_head=resulting_head,
+            budget_slot=budget.get("slot") if budget else None,
+        )
+        self._system_message(
+            agent.agent_id,
+            "status",
+            "Host evaluator verdict for experiment trial "
+            f"{trial['trial_number']}: {verdict}. "
+            f"challenger={challenger} resulting_head={resulting_head} "
+            f"hard_gates={outcome['hard_gates']} metrics={outcome['metrics']}.",
+            round_number,
+            resulting_head,
+            contract["work_item"],
+            "routine" if verdict == "keep" else "high",
+        )
+        trial_count = trial["trial_number"]
+        elapsed = (
+            time.monotonic()
+            - self._experiment_contract_started.get(
+                contract["sha256"],
+                time.monotonic(),
+            )
+        )
+        stop_reason: Optional[str] = None
+        if trial_count >= contract["max_trials"]:
+            stop_reason = f"fixed trial budget reached ({trial_count})"
+        elif (
+            self.experiment_non_improving.get(contract["sha256"], 0)
+            >= contract["max_consecutive_non_improving"]
+        ):
+            stop_reason = (
+                "consecutive non-improving limit reached "
+                f"({self.experiment_non_improving[contract['sha256']]})"
+            )
+        elif elapsed >= contract["max_wall_seconds"]:
+            stop_reason = (
+                f"fixed wall-clock budget reached ({int(elapsed)} seconds)"
+            )
+        elif verdict in {"crash", "inconclusive"}:
+            stop_reason = f"host evaluator returned {verdict}"
+        if stop_reason:
+            self._halt_experiment_loop(
+                contract,
+                reason=stop_reason,
+                round_number=round_number,
+                candidate=resulting_head,
+            )
+        return resulting_head
+
+    @staticmethod
     def _resolve_reply_candidate(
         reply: Dict[str, Any],
         candidate: Optional[str],
@@ -4622,6 +6010,41 @@ class OrganizationRunner:
             workspace,
             turn_paths,
         )
+        experiment_loop_artifacts = (
+            self._validated_experiment_loop_artifacts(
+                agent,
+                workspace,
+                turn_paths,
+            )
+        )
+        trial_records = [
+            record for record in experiment_loop_artifacts
+            if record["kind"] == "trial"
+        ]
+        active_contract_sha = self.active_experiment_by_worker.get(
+            agent.agent_id
+        )
+        normal_turn_paths = {
+            path for path in turn_paths if not self._artifact_path(path)
+        }
+        if active_contract_sha and normal_turn_paths:
+            contract = self.experiment_contracts[active_contract_sha]
+            if len(trial_records) != 1:
+                raise RuntimeError(
+                    "an active experiment-loop change requires exactly one "
+                    "structured trial intent"
+                )
+            if normal_turn_paths != {contract["mutable_file"]}:
+                raise RuntimeError(
+                    "experiment-loop trials may change exactly one tracked "
+                    f"file: {contract['mutable_file']}; got "
+                    f"{sorted(normal_turn_paths)}"
+                )
+        elif trial_records:
+            raise RuntimeError(
+                "an experiment-loop trial intent requires one change to its "
+                "single mutable tracked file"
+            )
         experiment_paths = self._scientific_experiment_paths(
             agent, turn_paths,
         )
@@ -4664,6 +6087,13 @@ class OrganizationRunner:
                 candidate=head,
                 round_number=round_number,
             )
+        for record in experiment_loop_artifacts:
+            if record["kind"] == "contract":
+                self._register_experiment_contract(
+                    record,
+                    candidate=head,
+                    round_number=round_number,
+                )
         if experiment_paths:
             self._claim_experiment_slot(
                 agent,
@@ -4671,6 +6101,13 @@ class OrganizationRunner:
                 kind="git-backed-probe-or-data",
                 candidate=head,
                 paths=experiment_paths,
+            )
+        if trial_records:
+            head = self._process_experiment_trial(
+                agent,
+                trial_records[0],
+                challenger=head,
+                round_number=round_number,
             )
         candidate_record = self._candidate_record(workspace, head)
         is_implementation = candidate_record["kind"] == "implementation"
@@ -4894,6 +6331,26 @@ class OrganizationRunner:
         started = time.monotonic()
         if agent.agent_id == self.topology.finalizer_id:
             self._sync_reviewed_candidates(round_number)
+        if agent.agent_id in self.topology.worker_ids:
+            try:
+                self._ensure_experiment_baseline(agent, round_number)
+            except Exception as exc:
+                contract_sha = self.active_experiment_by_worker.get(
+                    agent.agent_id
+                )
+                if contract_sha:
+                    contract = self.experiment_contracts[contract_sha]
+                    candidate = _git(
+                        self.workspaces[agent.agent_id].cwd,
+                        ["rev-parse", "HEAD"],
+                    ).strip()
+                    self._halt_experiment_loop(
+                        contract,
+                        reason=f"baseline evaluator infrastructure failure: {exc}",
+                        round_number=round_number,
+                        candidate=candidate,
+                    )
+                raise
         # Keep the inbox durable until a provider turn completes. A timeout,
         # quota error, or malformed reply must not silently consume messages.
         inbox = list(self.inboxes[agent.agent_id])
@@ -5132,6 +6589,130 @@ Indexed reference library (read relevant entries on demand):
         experiment_used = self._experiment_used()
         experiment_remaining = self._experiment_remaining()
         review_context = self._scientific_review_context(inbox)
+        experiment_loop_policy = (
+            "_No project-owned autonomous experiment policy is configured "
+            "for this run._"
+        )
+        if self.experiment_policy is not None:
+            primary_managers = set(
+                self.topology.primary_manager_by_worker.values()
+            )
+            if agent.agent_id in primary_managers:
+                owned_workers = sorted(
+                    worker_id
+                    for worker_id, manager_id
+                    in self.topology.primary_manager_by_worker.items()
+                    if manager_id == agent.agent_id
+                )
+                evaluator_summary = json.dumps(
+                    [
+                        {
+                            "id": evaluator["id"],
+                            "commands": evaluator["commands"],
+                            "immutable_paths": evaluator["immutable_paths"],
+                            "mutable_roots": evaluator["mutable_roots"],
+                            "result_mode": evaluator["result_mode"],
+                            "hard_gates": evaluator["hard_gates"],
+                            "metrics": evaluator["metrics"],
+                        }
+                        for evaluator in
+                        self.experiment_policy["evaluators"].values()
+                    ],
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                experiment_loop_policy = f"""You may commission an autonomous
+experiment loop only when the question is bounded and one immutable evaluator
+can distinguish an improvement from a regression. Your owned workers are:
+{', '.join(owned_workers)}.
+
+Write exactly one contract to:
+`{self.artifact_staging_prefix}/experiment-loop/contracts/<safe-work-item>.json`
+
+It must use schema `{EXPERIMENT_CONTRACT_SCHEMA}` and contain exactly:
+schema, run_id, work_item, manager_id, worker_id,
+baseline_mode="worker_head_at_activation", mutable_file, evaluator_id,
+objective, success_rule, max_trials, max_consecutive_non_improving,
+max_wall_seconds, and research_decision_sha256 (null unless the work item was
+research-authorized). Exactly one tracked file is mutable for the whole
+contract. The evaluator and its declared immutable paths cannot overlap it.
+After writing the contract, send that worker a plan or handoff with the exact
+same workItem. RecCli registers the contract before delivering your message,
+runs the baseline before the worker's first trial, and schedules the worker
+without waking you for routine keep/discard results.
+
+Policy maxima: trials={self.experiment_policy['max_trials_per_contract']},
+consecutive_non_improving={
+    self.experiment_policy['max_consecutive_non_improving']
+}, wall_seconds={self.experiment_policy['max_contract_wall_seconds']}.
+
+Available immutable evaluator profiles:
+
+{evaluator_summary}
+
+Do not create a loop merely to make progress look automatic. If the evaluator
+cannot adjudicate the intended claim, continue ordinary investigation or use
+the research cell. You wake again on a crash, inconclusive result, exhausted
+budget, plateau, worker escalation, cross-subsystem question, or reviewable
+candidate. You retain full repository reasoning, test execution, web research,
+and direct communication with every other manager."""
+            elif agent.agent_id in self.topology.worker_ids:
+                contract_sha = self.active_experiment_by_worker.get(
+                    agent.agent_id
+                )
+                if contract_sha:
+                    contract = self.experiment_contracts[contract_sha]
+                    recent_trials = [
+                        trial for trial in self.experiment_trials
+                        if trial["contract_sha256"] == contract_sha
+                    ][-4:]
+                    experiment_loop_policy = f"""A host-enforced autonomous
+experiment contract is active for this worker:
+
+{json.dumps({
+    key: contract.get(key) for key in (
+        'sha256', 'work_item', 'manager_id', 'worker_id', 'mutable_file',
+        'evaluator_id', 'max_trials', 'max_consecutive_non_improving',
+        'max_wall_seconds', 'status', 'activation_baseline_candidate',
+    )
+}, indent=2, ensure_ascii=False)}
+
+Recent host-owned baseline/trial results:
+
+{json.dumps(recent_trials, indent=2, ensure_ascii=False)[-16_000:]}
+
+For each challenger, make exactly one cohesive change and modify exactly:
+`{contract['mutable_file']}`
+
+Also write exactly one intent to:
+`{self.artifact_staging_prefix}/experiment-loop/trials/current.json`
+
+It must use schema `{EXPERIMENT_TRIAL_SCHEMA}` and contain exactly schema,
+run_id, contract_sha256, work_item, worker_id, hypothesis, single_change, and
+expected_result. Do not modify the immutable evaluator, another source file,
+or the acceptance standard. Do not run Git mutation. RecCli materializes one
+candidate, charges one challenger slot, runs the evaluator with its fixed
+timeout, keeps a strict improvement, and host-reverts a regression, crash, or
+inconclusive challenger while preserving the ledger.
+
+Continue directly to the next useful challenger without sending routine
+progress to your manager. Contact the manager when judgment is genuinely
+needed: the contract is scientifically inadequate, a result contradicts its
+assumptions, work must cross another file or subsystem, or you have a
+reviewable final candidate. Host stop triggers wake the manager automatically."""
+                else:
+                    experiment_loop_policy = """No experiment-loop contract is
+active for this worker. Continue the explicit manager assignment normally.
+Do not invent a contract or trial record; only your primary manager can bind
+the single mutable file and immutable evaluator."""
+            else:
+                experiment_loop_policy = f"""Autonomous experiment loops are
+recorded under `{self.experiment_loop_root}`. Primary managers retain full
+reasoning and cross-manager communication but sleep during routine worker
+trials. A baseline is mandatory; one tracked file and one cohesive change are
+allowed per challenger; the host runs the immutable evaluator and controls
+keep/revert. Inspect the compact ledger for review, integration, or lead
+synthesis. A loop result is candidate evidence, not scientific acceptance."""
         research_cell_policy = "_No dedicated research cell is configured for this topology._"
         if self.topology.research_director_id:
             registry = self.research_cell_root
@@ -5428,6 +7009,10 @@ Any change to a declared protected path rejects the turn even in a writable work
 Scientific work bundles used: {experiment_used} of {self.max_experiments}. Remaining: {experiment_remaining}.
 
 This is a hard resource limit, not a judgment of novelty or scientific value. A worker turn consumes one bundle when it preserves new probes, fixtures, measurements, result data, or other non-report evidence under the Git-backed artifact prefix, reports ignored/generated outputs, or uses both channels. Markdown/text-only reports that summarize already-existing evidence do not consume a slot. Do not hide experimental code or data in a report path: unbound experimental claims are not reviewable evidence. Parallel turns cannot exceed the shared cap. Use a temporary run-local identifier such as `{self.run_id}/{agent.agent_id}/r{round_number}`. Do not mint, reserve, or claim a canonical experiment/attempt ID; canonical IDs are assigned only at human-authorized archive import.
+
+## Autonomous experiment loop
+
+{experiment_loop_policy}
 
 ## Durable artifact protocol
 
@@ -5973,6 +7558,54 @@ APPROVED or BLOCKED.
             self.dropped_messages += 1
             self._append_jsonl("messages.jsonl", {"round": round_number, "from": sender, **message, "status": "dropped", "reason": reason, "ts": _utc_now()})
             return
+        if (
+            recipient in self.topology.worker_ids
+            and sender in self.topology.manager_ids
+            and tag in {"plan", "handoff"}
+            and message.get("workItem")
+            in self.experiment_contract_by_work_item
+        ):
+            try:
+                self._activate_experiment_contract(
+                    manager_id=sender,
+                    worker_id=recipient,
+                    work_item=str(message["workItem"]),
+                    round_number=round_number,
+                )
+            except Exception as exc:
+                self.dropped_messages += 1
+                self._append_jsonl("messages.jsonl", {
+                    "round": round_number,
+                    "from": sender,
+                    **message,
+                    "status": "dropped",
+                    "reason": f"experiment-loop activation failed: {exc}",
+                    "ts": _utc_now(),
+                })
+                return
+        active_contract_sha = self.active_experiment_by_worker.get(sender)
+        if (
+            active_contract_sha
+            and recipient
+            == self.experiment_contracts[active_contract_sha]["manager_id"]
+            and tag in {"blocker", "question", "handoff"}
+        ):
+            self._halt_experiment_loop(
+                self.experiment_contracts[active_contract_sha],
+                reason=(
+                    "worker submitted a reviewable candidate"
+                    if tag == "handoff"
+                    else "worker requested manager judgment"
+                ),
+                round_number=round_number,
+                candidate=str(
+                    message.get("candidate")
+                    or _git(
+                        self.workspaces[sender].cwd,
+                        ["rev-parse", "HEAD"],
+                    ).strip()
+                ),
+            )
         delivered = {
             "runId": self.run_id, "round": round_number, "from": sender,
             **message, "deliveredAt": _utc_now(),
@@ -6114,6 +7747,10 @@ APPROVED or BLOCKED.
             artifacts.add(str(self.research_cell_root / "fragments.jsonl"))
         if (self.research_cell_root / "decisions.jsonl").is_file():
             artifacts.add(str(self.research_cell_root / "decisions.jsonl"))
+        if (self.experiment_loop_root / "contracts.jsonl").is_file():
+            artifacts.add(str(self.experiment_loop_root / "contracts.jsonl"))
+        if (self.experiment_loop_root / "trials.jsonl").is_file():
+            artifacts.add(str(self.experiment_loop_root / "trials.jsonl"))
 
         return {
             "terminal_status": status,
@@ -6179,6 +7816,7 @@ APPROVED or BLOCKED.
                 ],
                 "authorizations": dict(self.research_authorizations),
             },
+            "experiment_loop": self._experiment_loop_snapshot(),
         }
 
     def _authoritative_promotion_readiness(
@@ -6457,6 +8095,7 @@ turns. Never describe a round limit as a turn limit.
             },
             "experiment_budget": digest["experiment_budget"],
             "research_cell": digest["research_cell"],
+            "experiment_loop": digest["experiment_loop"],
             "canonical_effects_applied": False,
         }
         _write_run_conclusion_files(self.run_dir, conclusion)
@@ -6628,6 +8267,10 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
                 or self._has_initial_worker_assignment(agent.agent_id)
             )
         ]
+        selected = [
+            agent for agent in selected
+            if agent.agent_id not in self.experiment_halted_workers
+        ]
         # A worker turn is not synonymous with a sealed experiment. Workers
         # may inspect evidence, reproduce tracked tests, review interfaces, or
         # report that a route is indeterminate without consuming an artifact
@@ -6764,6 +8407,8 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
                 resolved_phase = "lead_recon"
             elif round_number == 2:
                 resolved_phase = "manager_delegation"
+        if phase is None and self.active_experiment_by_worker:
+            resolved_phase = "experiment_loop"
         payload = {
             "run_id": self.run_id, "status": status, "round": round_number,
             "max_rounds": self.max_rounds,
@@ -6809,6 +8454,16 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "research_fragments": len(self.research_fragments),
             "research_decisions": len(self.research_decisions),
             "research_cell_root": str(self.research_cell_root),
+            "experiment_loop_enabled": self.experiment_policy is not None,
+            "experiment_loop_contracts": len(self.experiment_contracts),
+            "experiment_loop_trials": len(self.experiment_trials),
+            "experiment_loop_active_workers": sorted(
+                self.active_experiment_by_worker
+            ),
+            "experiment_loop_halted_workers": sorted(
+                self.experiment_halted_workers
+            ),
+            "experiment_loop_root": str(self.experiment_loop_root),
         }
         if result is not None:
             payload["result"] = result
@@ -7035,6 +8690,7 @@ def create_run_request(
     evidence_paths: Optional[List[str]] = None,
     protected_paths: Optional[List[str]] = None,
     context_manifest: Optional[str] = None,
+    experiment_policy: Optional[str] = None,
     max_experiments: int = 3,
     continuation_from_run_id: Optional[str] = None,
     continuation_conclusion_sha256: Optional[str] = None,
@@ -7072,6 +8728,28 @@ def create_run_request(
     resolved_evidence = resolve_evidence_paths(project_root, evidence_paths)
     resolved_protected = resolve_protected_paths(project_root, protected_paths)
     resolved_context = resolve_context_manifest(project_root, context_manifest)
+    resolved_experiment_policy = resolve_experiment_policy(
+        project_root,
+        experiment_policy,
+    )
+    if resolved_experiment_policy is not None:
+        experiment_policy_definition = _load_experiment_policy_definition(
+            project_root,
+            resolved_experiment_policy,
+        )
+        immutable_loop_paths = {
+            resolved_experiment_policy.relative_to(project_root).as_posix(),
+            *(
+                path
+                for evaluator in experiment_policy_definition[
+                    "evaluators"
+                ].values()
+                for path in evaluator["immutable_paths"]
+            ),
+        }
+        for relative in sorted(immutable_loop_paths):
+            if relative not in resolved_protected:
+                resolved_protected.append(relative)
     topology_config = get_topology(topology)
     provider_plan = resolve_provider_plan(provider, topology_config)
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_org_{_safe_name(topology)}_{uuid.uuid4().hex[:6]}"
@@ -7107,6 +8785,10 @@ def create_run_request(
             resolved_context.relative_to(project_root).as_posix()
             if resolved_context else None
         ),
+        "experiment_policy": (
+            resolved_experiment_policy.relative_to(project_root).as_posix()
+            if resolved_experiment_policy else None
+        ),
         "max_experiments": max(0, int(max_experiments)),
         "control_protocol": "reccli.organization-control.v1",
     }
@@ -7131,6 +8813,10 @@ def create_run_request(
         "context_manifest": (
             resolved_context.relative_to(project_root).as_posix()
             if resolved_context else None
+        ),
+        "experiment_policy": (
+            resolved_experiment_policy.relative_to(project_root).as_posix()
+            if resolved_experiment_policy else None
         ),
         "max_experiments": max(0, int(max_experiments)),
         "control_protocol": "reccli.organization-control.v1",
@@ -7158,6 +8844,7 @@ def run_request(request: Dict[str, Any]) -> Dict[str, Any]:
         evidence_paths=request.get("evidence_paths"),
         protected_paths=request.get("protected_paths"),
         context_manifest=request.get("context_manifest"),
+        experiment_policy=request.get("experiment_policy"),
         max_experiments=request.get("max_experiments", 3),
         continuation_from_run_id=request.get("continuation_from_run_id"),
         continuation_conclusion_sha256=request.get(

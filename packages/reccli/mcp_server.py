@@ -1044,6 +1044,7 @@ def start_organization(
     evidence_paths: Optional[List[str]] = None,
     protected_paths: Optional[List[str]] = None,
     context_manifest: Optional[str] = None,
+    experiment_policy: Optional[str] = None,
     max_experiments: int = 3,
 ) -> str:
     """Start a durable, subscription-backed multi-agent organization run.
@@ -1099,7 +1100,13 @@ def start_organization(
     research specialists for a load-bearing technical question; their
     structured fragments must be synthesized into a validated decision packet
     before dependent implementation is delegated. Dormant specialists consume
-    no agent turns. `max_experiments` bounds sealed generated-output bundles.
+    no agent turns. With a tracked `experiment_policy`, primary managers can
+    bind one worker, one mutable tracked file, and one immutable evaluator into
+    an autonomous baseline/challenger loop. RecCli runs the baseline first,
+    enforces fixed trial/time budgets, records a compact ledger, keeps strict
+    improvements, host-reverts regressions, and wakes managers only for
+    judgment events. `max_experiments` bounds challenger trials and sealed
+    generated-output bundles.
     `protected_paths` is a deny-write list for tracked immutable
     evidence, authority records, ledgers, or standards. The adversarial auditor is fully
     evidence-sighted and veto-only. Completion emits a promotion request; it
@@ -1136,7 +1143,10 @@ def start_organization(
         context_manifest: Tracked project-relative common-plus-agent context
             mapping with required paths and optional indexed library paths,
             used to build run-scoped documentation boxes.
-        max_experiments: Hard cap on sealed generated-output bundles (default 3).
+        experiment_policy: Tracked project-relative
+            `reccli.organization-experiment-policy.v1` evaluator policy.
+        max_experiments: Hard cap on autonomous challenger trials and sealed
+            generated-output bundles (default 3).
     """
     try:
         from .organization_launch import start_organization_from_arguments
@@ -1153,6 +1163,7 @@ def start_organization(
             "evidence_paths": evidence_paths,
             "protected_paths": protected_paths,
             "context_manifest": context_manifest,
+            "experiment_policy": experiment_policy,
             "max_experiments": max_experiments,
         }), indent=2)
     except Exception as exc:

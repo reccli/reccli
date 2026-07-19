@@ -10,6 +10,8 @@ import {
 import type {
   ActivityRecord,
   AgentRecord,
+  ExperimentLoopContract,
+  ExperimentLoopTrial,
   ResearchCellRecord,
   RunConclusion,
   RunSnapshot,
@@ -509,6 +511,161 @@ function ResearchCellPanel({
                       )}
                     </>
                   )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function ExperimentLoopPanel({
+  snapshot,
+}: {
+  snapshot: RunSnapshot;
+}) {
+  const loop = snapshot.experiment_loop;
+  if (!loop?.enabled) return null;
+  const latestContracts = new Map<string, ExperimentLoopContract>();
+  for (const contract of loop.contracts || []) {
+    if (contract.sha256) latestContracts.set(contract.sha256, contract);
+  }
+  const contracts = [...latestContracts.values()];
+  const trials = loop.trials || [];
+  const kept = trials.filter((trial) => trial.verdict === "keep").length;
+  const discarded = trials.filter(
+    (trial) => trial.verdict === "discard",
+  ).length;
+  const current = contracts.find(
+    (contract) =>
+      contract.status === "active" ||
+      loop.active_workers?.includes(contract.worker_id || ""),
+  );
+
+  function trialSummary(trial: ExperimentLoopTrial): string {
+    if (trial.verdict === "baseline") {
+      return "Immutable evaluator baseline";
+    }
+    return (
+      trial.intent?.single_change ||
+      trial.intent?.hypothesis ||
+      "One bounded challenger"
+    );
+  }
+
+  return (
+    <details className="experiment-loop-panel" open>
+      <summary>
+        <div>
+          <span className="eyebrow">Autonomous experiment loop</span>
+          <strong>
+            {current
+              ? `${current.worker_id} iterating on ${current.mutable_file}`
+              : contracts.length
+                ? "Campaign stopped for judgment"
+                : "Waiting for a bounded contract"}
+          </strong>
+        </div>
+        <div className="experiment-summary-facts">
+          <span>{trials.length} evaluations</span>
+          <span>{kept} kept</span>
+          <span>{discarded} discarded</span>
+        </div>
+      </summary>
+      <div className="experiment-loop-body">
+        <div className="experiment-contract-strip">
+          <span>Policy: {loop.policy || "run-local immutable evaluator"}</span>
+          <span>One active file</span>
+          <span>Baseline first</span>
+          <span>Host keep/revert</span>
+        </div>
+        {!contracts.length ? (
+          <p className="experiment-empty">
+            Dormant. A primary manager may bind one worker, one mutable file,
+            and one immutable evaluator when the question is measurable.
+          </p>
+        ) : (
+          <div className="experiment-campaigns">
+            {contracts.map((contract) => {
+              const contractTrials = trials.filter(
+                (trial) => trial.contract_sha256 === contract.sha256,
+              );
+              return (
+                <article
+                  className="experiment-campaign"
+                  key={contract.sha256}
+                >
+                  <div className="activity-kicker">
+                    <span>{contract.work_item}</span>
+                    <span className={`experiment-verdict ${contract.status || ""}`}>
+                      {titleCase(contract.status)}
+                    </span>
+                  </div>
+                  <div className="experiment-contract-grid">
+                    <span>
+                      <small>Worker</small>
+                      {contract.worker_id}
+                    </span>
+                    <span>
+                      <small>Mutable file</small>
+                      <code>{contract.mutable_file}</code>
+                    </span>
+                    <span>
+                      <small>Evaluator</small>
+                      {contract.evaluator_id}
+                    </span>
+                    <span>
+                      <small>Trial cap</small>
+                      {contract.max_trials}
+                    </span>
+                  </div>
+                  {contract.halt_reason && (
+                    <p className="experiment-halt">
+                      Stopped: {contract.halt_reason}
+                    </p>
+                  )}
+                  <div className="experiment-ledger">
+                    {contractTrials.map((trial, index) => {
+                      const metricEntries = Object.entries(
+                        trial.outcome?.metrics || {},
+                      );
+                      return (
+                        <div
+                          className="experiment-ledger-row"
+                          key={`${trial.contract_sha256}-${trial.trial_number}-${index}`}
+                        >
+                          <span
+                            className={`experiment-verdict ${trial.verdict || ""}`}
+                          >
+                            {titleCase(trial.verdict)}
+                          </span>
+                          <p>{trialSummary(trial)}</p>
+                          <span>
+                            {metricEntries.length
+                              ? metricEntries
+                                  .map(
+                                    ([name, value]) =>
+                                      `${name}=${Number(value).toPrecision(5)}`,
+                                  )
+                                  .join(" · ")
+                              : trial.outcome?.commands_pass
+                                ? "gates pass"
+                                : "gates fail"}
+                          </span>
+                          <span>
+                            {durationLabel(trial.outcome?.duration_ms)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {!contractTrials.length && (
+                      <p className="experiment-empty">
+                        Contract registered; baseline has not run yet.
+                      </p>
+                    )}
+                  </div>
                 </article>
               );
             })}
@@ -1150,6 +1307,7 @@ export default function OrganizationConsole() {
           />
         )}
         {snapshot && <ResearchCellPanel snapshot={snapshot} />}
+        {snapshot && <ExperimentLoopPanel snapshot={snapshot} />}
         {snapshot?.conclusion && (
           <ConclusionPanel conclusion={snapshot.conclusion} />
         )}

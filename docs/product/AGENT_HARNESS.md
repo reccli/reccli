@@ -584,6 +584,22 @@ payloads into Git object storage.
 Scientific workers use temporary run-local identifiers. Canonical attempt IDs
 are assigned only by the project's authorized archive-import transaction.
 
+### Autonomous experiment loop
+
+Scientific projects may pass a tracked `experiment_policy` to bind a bounded
+worker campaign to one mutable file and one immutable evaluator. RecCli runs an
+uncharged baseline, enforces one cohesive challenger per experiment slot,
+keeps strict improvements, host-reverts regressions, and appends a compact
+ledger. One campaign is active at a time. Routine keep/discard trials do not
+wake managers; crashes, inconclusive results, plateaus, budget exhaustion,
+cross-file needs, and final review do.
+
+The evaluator policy and its inputs are automatically deny-write. A pass-only
+evaluator cannot rank two passing candidates and therefore returns
+inconclusive; quantitative projects can declare immutable hard gates and
+minimize/maximize metrics through a JSON result contract. See
+`docs/integrations/autonomous-experiment-loop.md`.
+
 `request.json` includes `host_provider`, `provider_assignments`,
 `blind_verifier_provider`, and authentication-state labels. It never contains
 authentication output, tokens, or API keys.

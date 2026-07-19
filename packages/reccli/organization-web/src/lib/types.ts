@@ -154,6 +154,51 @@ export interface ResearchCellRecord {
   };
 }
 
+export interface ExperimentLoopContract {
+  sha256?: string;
+  work_item?: string;
+  manager_id?: string;
+  worker_id?: string;
+  mutable_file?: string;
+  evaluator_id?: string;
+  max_trials?: number;
+  max_consecutive_non_improving?: number;
+  max_wall_seconds?: number;
+  status?: string;
+  halt_reason?: string;
+  action?: string;
+  activation_baseline_candidate?: string;
+}
+
+export interface ExperimentLoopTrial {
+  contract_sha256?: string;
+  work_item?: string;
+  manager_id?: string;
+  worker_id?: string;
+  round?: number;
+  trial_number?: number;
+  verdict?: "baseline" | "keep" | "discard" | "inconclusive" | "crash" | string;
+  challenger_candidate?: string;
+  resulting_head?: string;
+  budget_slot?: number | null;
+  ts?: string;
+  intent?: {
+    hypothesis?: string;
+    single_change?: string;
+    expected_result?: string;
+  } | null;
+  outcome?: {
+    evaluator_id?: string;
+    commands_pass?: boolean;
+    timed_out?: boolean;
+    hard_gates?: Record<string, boolean>;
+    metrics?: Record<string, number>;
+    notes?: string[];
+    result_error?: string | null;
+    duration_ms?: number;
+  };
+}
+
 export interface ApprovalRequest {
   schema?: string;
   version?: number;
@@ -280,5 +325,13 @@ export interface RunSnapshot {
     commissions?: ResearchCellRecord[];
     fragments?: ResearchCellRecord[];
     decisions?: ResearchCellRecord[];
+  };
+  experiment_loop?: {
+    enabled?: boolean;
+    policy?: string | null;
+    contracts?: ExperimentLoopContract[];
+    trials?: ExperimentLoopTrial[];
+    active_workers?: string[];
+    halted_workers?: string[];
   };
 }

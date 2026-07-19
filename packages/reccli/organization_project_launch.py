@@ -42,6 +42,7 @@ ALLOWED_START_ARGUMENTS = {
     "evidence_paths",
     "protected_paths",
     "context_manifest",
+    "experiment_policy",
     "max_experiments",
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

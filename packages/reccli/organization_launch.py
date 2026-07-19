@@ -124,6 +124,7 @@ def start_organization_from_arguments(arguments: Dict[str, Any]) -> Dict[str, An
         "evidence_paths": request["evidence_paths"],
         "protected_paths": request["protected_paths"],
         "context_manifest": request["context_manifest"],
+        "experiment_policy": request.get("experiment_policy"),
         "max_experiments": request["max_experiments"],
         "next": (
             "Poll organization_status with this run_id until terminal, "
