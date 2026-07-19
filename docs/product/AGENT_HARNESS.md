@@ -391,7 +391,10 @@ to the retained bootstrap material. Each trace records `prompt_mode` and
 Projects may additionally pass a tracked `context_manifest` using schema
 `reccli.organization-context-packs.v1`. It declares ordered `common.paths`,
 per-agent `agents.<id>.paths`, optional `library_paths` on either pack, and
-`full_context_agents`. RecCli expands tracked directories, copies the selected
+`full_context_agents`. The optional root field
+`lane_paths_mode: "on_demand"` converts worker-lane `paths` into indexed
+references while keeping `common.paths` as the compact mandatory reading set;
+the default is `"required"`. RecCli expands tracked directories, copies the selected
 files into per-agent run-owned boxes, preserves project-relative paths under
 `canonical/`, removes write bits, records hashes, and verifies both boxes and
 canonical sources throughout the run. Required `paths` are the ordered first-
@@ -403,6 +406,7 @@ available when an interface or contradiction requires them.
 ```json
 {
   "schema": "reccli.organization-context-packs.v1",
+  "lane_paths_mode": "on_demand",
   "common": {
     "purpose": "Authority every agent must know.",
     "paths": ["AGENTS.md", "docs/Core/Critical"]
@@ -419,10 +423,12 @@ available when an interface or contradiction requires them.
 ```
 
 Paths and directories must be project-relative, tracked, and free of symlinks.
-Workers read required common-plus-lane `paths` before substantive work and
-consult relevant `library_paths` before acting on a matching hypothesis or
-failure mode. Full-context agents read the common authority first and use the
-lane union as an indexed library, avoiding needless up-front context ingestion.
+By default, workers read required common-plus-lane `paths` before substantive
+work. In `on_demand` mode, they read only the common paths and consult their
+lane paths plus explicit `library_paths` when the assignment, hypothesis,
+failure mode, or candidate calls for them. Full-context agents read the common
+authority first and use the lane union as an indexed library, avoiding
+needless up-front context ingestion.
 
 `topology="scientific"` is a single reversibility-based organization for
 evidence-heavy research and engineering. RecCli supplies generic role slots:

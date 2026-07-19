@@ -2103,6 +2103,7 @@ def _load_context_definition(
     common = definition.get("common")
     agents = definition.get("agents")
     full_context_agents = definition.get("full_context_agents", [])
+    lane_paths_mode = definition.get("lane_paths_mode", "required")
     if not isinstance(common, dict) or not isinstance(common.get("paths"), list):
         raise ValueError("context manifest common.paths must be an array")
     if not isinstance(agents, dict):
@@ -2111,6 +2112,10 @@ def _load_context_definition(
         not isinstance(agent_id, str) for agent_id in full_context_agents
     ):
         raise ValueError("context manifest full_context_agents must be an array of IDs")
+    if lane_paths_mode not in {"required", "on_demand"}:
+        raise ValueError(
+            "context manifest lane_paths_mode must be 'required' or 'on_demand'"
+        )
     known_agents = {agent.agent_id for agent in topology.agents}
     unknown = (set(agents) | set(full_context_agents)) - known_agents
     if unknown:
@@ -2170,6 +2175,7 @@ def _load_context_definition(
         "common": normalize_pack("common", common),
         "agents": normalized_agents,
         "full_context_agents": list(dict.fromkeys(full_context_agents)),
+        "lane_paths_mode": lane_paths_mode,
     }
 
 
@@ -2248,8 +2254,14 @@ def prepare_context_packs(
                 )
         elif lane:
             selected_files.extend([*lane["files"], *lane["library_files"]])
-            declared_paths.extend(lane["declared_paths"])
-            declared_library_paths.extend(lane["declared_library_paths"])
+            if definition["lane_paths_mode"] == "on_demand":
+                declared_library_paths.extend([
+                    *lane["declared_paths"],
+                    *lane["declared_library_paths"],
+                ])
+            else:
+                declared_paths.extend(lane["declared_paths"])
+                declared_library_paths.extend(lane["declared_library_paths"])
             purposes.append(
                 (
                     f"Your project-owned lane ({agent.agent_id}): "
@@ -2283,6 +2295,7 @@ def prepare_context_packs(
             "source_manifest": str(manifest_path),
             "source_manifest_sha256": _sha256_file(manifest_path),
             "canonical_access_remains_available": True,
+            "lane_paths_mode": definition["lane_paths_mode"],
             "declared_reading_paths": declared_paths,
             "declared_library_paths": declared_library_paths,
             "materialized_files": selected_files,
@@ -2299,6 +2312,7 @@ def prepare_context_packs(
             "index": str(pack_index),
             "scope": pack_document["scope"],
             "description": pack_description,
+            "lane_paths_mode": definition["lane_paths_mode"],
             "declared_reading_paths": declared_paths,
             "declared_library_paths": declared_library_paths,
             "materialized_files": selected_files,
@@ -2315,6 +2329,7 @@ def prepare_context_packs(
         "source_manifest_sha256": _sha256_file(manifest_path),
         "context_root": str(context_root),
         "read_only": True,
+        "lane_paths_mode": definition["lane_paths_mode"],
         "source_files": source_files,
         "agent_packs": agent_packs,
     }
@@ -6918,9 +6933,14 @@ Treat the snapshot as immutable primary evidence. Read snapshot paths, never the
                     "Read the required common authority before substantive work. The worker lanes and declared library paths are a full-visibility indexed library, not an instruction to ingest every lane immediately; read the relevant entries before deciding on work that touches them. An adversarial review must read every lane and library record relevant to the exact candidate."
                 )
             elif first_turn:
-                first_read = (
-                    "Before substantive work in your first turn, read the required common-plus-lane paths in the declared order. Do not ingest every indexed library record up front; consult the records relevant to your hypothesis, failure mode, or candidate before acting, and ground messages in the source paths."
-                )
+                if pack.get("lane_paths_mode") == "on_demand":
+                    first_read = (
+                        "Before substantive work in your first turn, read the compact required paths in the declared order. Your lane material is an indexed on-demand library: consult only the entries named by the current assignment, hypothesis, failure mode, or candidate. Do not ingest the whole lane up front, and ground decisions in the source paths you actually used."
+                    )
+                else:
+                    first_read = (
+                        "Before substantive work in your first turn, read the required common-plus-lane paths in the declared order. Do not ingest every indexed library record up front; consult the records relevant to your hypothesis, failure mode, or candidate before acting, and ground messages in the source paths."
+                    )
             else:
                 first_read = (
                     "Revisit the assigned pack whenever this turn touches its contracts or evidence."

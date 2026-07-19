@@ -93,7 +93,9 @@ def _init_project(root: Path) -> None:
     subprocess.run(["git", "commit", "-qm", "add project memory"], cwd=root, check=True)
 
 
-def _add_context_manifest(root: Path) -> Path:
+def _add_context_manifest(
+    root: Path, *, lane_paths_mode: str | None = None,
+) -> Path:
     docs = root / "docs"
     docs.mkdir(exist_ok=True)
     (docs / "common.md").write_text("shared authority\n", encoding="utf-8")
@@ -105,7 +107,7 @@ def _add_context_manifest(root: Path) -> Path:
             f"worker {letter} indexed history\n", encoding="utf-8",
         )
     manifest = root / "context-packs.json"
-    manifest.write_text(json.dumps({
+    definition = {
         "schema": "reccli.organization-context-packs.v1",
         "description": "Test common-plus-lane routing.",
         "common": {
@@ -123,7 +125,12 @@ def _add_context_manifest(root: Path) -> Path:
         "full_context_agents": [
             "lead", "manager-a", "manager-b", "manager-c", "manager-d",
         ],
-    }, indent=2) + "\n", encoding="utf-8")
+    }
+    if lane_paths_mode is not None:
+        definition["lane_paths_mode"] = lane_paths_mode
+    manifest.write_text(
+        json.dumps(definition, indent=2) + "\n", encoding="utf-8"
+    )
     subprocess.run(
         ["git", "add", "docs", "context-packs.json"], cwd=root, check=True,
     )
@@ -961,6 +968,45 @@ class OrganizationProjectTests(unittest.TestCase):
             copied.write_text("tampered lane\n", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "context pack"):
                 verify_context_packs(manifest, full=False)
+
+    def test_context_packs_can_route_worker_lane_reading_on_demand(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            _add_context_manifest(root, lane_paths_mode="on_demand")
+            run_dir = root / "devsession" / "agent-organizations" / "context-jit"
+            run_dir.mkdir(parents=True)
+            manifest = prepare_context_packs(
+                root, run_dir, "context-packs.json", get_topology("scientific"),
+            )
+
+            worker = manifest["agent_packs"]["worker-a"]
+            self.assertEqual(worker["declared_reading_paths"], ["docs/common.md"])
+            self.assertEqual(
+                worker["declared_library_paths"],
+                ["docs/worker-a.md", "docs/library-a.md"],
+            )
+            self.assertEqual(worker["lane_paths_mode"], "on_demand")
+            canonical = Path(worker["root"]) / "canonical"
+            self.assertTrue((canonical / "docs/worker-a.md").is_file())
+            self.assertTrue((canonical / "docs/library-a.md").is_file())
+
+            runner = OrganizationRunner(
+                root, "Qualify the pipeline.", "claude", "scientific",
+                "context-jit", run_dir, context_manifest="context-packs.json",
+            )
+            runner.context_pack_manifest = manifest
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "integration", root,
+                [Path(worker["root"])],
+            )
+            prompt = runner._build_prompt(
+                runner.topology.agent("worker-a"), [], 1, True,
+            )
+            self.assertIn("lane material is an indexed on-demand library", prompt)
+            required = prompt.split("Indexed reference library", 1)[0]
+            self.assertNotIn("docs/worker-a.md", required)
 
     def test_evidence_snapshot_is_hashed_read_only_and_tamper_detected(self):
         with tempfile.TemporaryDirectory() as td:

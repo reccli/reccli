@@ -99,7 +99,10 @@ plus distinct worker lanes into hash-bound, read-only run context boxes.
 Required `paths` are read before substantive work; larger `library_paths` are
 boxed and verified but consulted only when relevant. Designated managers and
 auditors can receive the union, while canonical files remain authoritative and
-readable. A fully-sighted auditor can veto but cannot promote. Worker turns do
+readable. Projects with large lane curricula can set
+`lane_paths_mode: "on_demand"` so only `common.paths` remain required and each
+worker's lane paths become a just-in-time indexed library. A fully-sighted
+auditor can veto but cannot promote. Worker turns do
 not consume experiment slots merely by running; the hard experiment budget is
 charged only when RecCli seals an explicitly reported generated-output bundle.
 Native agents edit and test while RecCli owns staging, commits, and reviewed

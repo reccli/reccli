@@ -168,6 +168,9 @@ worktree:
   canonical source files after rounds and before finalization. Canonical
   documentation remains readable and authoritative; the boxes route required
   education and on-demand history rather than enforce a deny-read boundary.
+  The optional root setting `lane_paths_mode: "on_demand"` keeps only
+  `common.paths` mandatory and routes each worker's lane paths into its
+  just-in-time library.
 
   For `topology="scientific"`, workers may experiment in disposable branches.
   Deterministic enforcement covers only clean/pinned Git identity, evidence
