@@ -324,6 +324,21 @@ function AgentStream({
               <span>{titleCase(agent.goal.risk)}</span>
               <span>{agent.goal.manager_id || "human operator"}</span>
             </div>
+            <div className="goal-meta">
+              <span>
+                {agent.goal.progress_evaluator_id
+                  ? `Measured by ${agent.goal.progress_evaluator_id}`
+                  : "Evaluator not bound"}
+              </span>
+              <span>
+                {agent.goal.goal_sha256
+                  ? `goal ${agent.goal.goal_sha256.slice(0, 10)}`
+                  : "goal hash pending"}
+              </span>
+            </div>
+            {agent.goal.progress_success_rule && (
+              <p>{agent.goal.progress_success_rule}</p>
+            )}
           </article>
         ) : agent.assignment ? (
           <article className="assignment-card">
@@ -600,7 +615,20 @@ function ExperimentLoopPanel({
           <span>Baseline first</span>
           <span>Same-host thread envelope</span>
           <span>Host keep/revert</span>
+          <span>Exact goal bound</span>
         </div>
+        {loop.candidate_progress && (
+          <p
+            className={
+              loop.candidate_progress.qualifies
+                ? "experiment-empty"
+                : "experiment-halt"
+            }
+          >
+            Candidate {loop.candidate_progress.decision}:{" "}
+            {loop.candidate_progress.reason}
+          </p>
+        )}
         {loop.ledger?.verified === false && (
           <p className="experiment-halt">
             Trial ledger integrity failure: {loop.ledger.error || "unknown error"}
@@ -645,7 +673,16 @@ function ExperimentLoopPanel({
                       <small>Trial cap</small>
                       {contract.max_trials}
                     </span>
+                    <span>
+                      <small>Goal binding</small>
+                      {contract.goal_sha256?.slice(0, 10) || "pending"}
+                    </span>
                   </div>
+                  {contract.goal_success_rule && (
+                    <p className="experiment-empty">
+                      Success: {contract.goal_success_rule}
+                    </p>
+                  )}
                   {contract.halt_reason && (
                     <p className="experiment-halt">
                       Stopped: {contract.halt_reason}

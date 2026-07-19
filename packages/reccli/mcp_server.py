@@ -1360,6 +1360,47 @@ def approve_organization(
 
 
 @mcp.tool()
+def reject_organization(
+    working_directory: str,
+    run_id: str,
+    candidate: str,
+    reason: str,
+    idempotency_key: str,
+) -> str:
+    """Permanently reject one exact candidate from a terminal organization.
+
+    Rejection applies no repository changes. It disables later approval and
+    binds successor missions not to revive the failed candidate as progress.
+
+    Args:
+        working_directory: Project root or any path inside the project.
+        run_id: Terminal organization run containing the candidate.
+        candidate: Exact 40-character candidate commit to reject.
+        reason: Concise human reason the candidate does not advance the goal.
+        idempotency_key: Caller-stable key preventing duplicate decisions.
+    """
+    try:
+        from .organization_control import reject_organization_candidate
+
+        result = reject_organization_candidate(
+            working_directory,
+            run_id,
+            candidate=candidate,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            requested_by="mcp-human-operator",
+        )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({
+            "status": "rejection_error",
+            "run_id": run_id,
+            "candidate": candidate,
+            "error": str(exc),
+        }, indent=2)
+
+
+@mcp.tool()
 def list_organizations(
     working_directory: str,
     limit: int = 100,

@@ -516,6 +516,13 @@ def _latest_terminal_record(
         run_dir / "run-conclusion.json",
         label="latest terminal run conclusion",
     )
+    operator_decision: Optional[Dict[str, Any]] = None
+    operator_decision_path = run_dir / "operator-decision.json"
+    if operator_decision_path.is_file():
+        operator_decision, _ = _read_json_object(
+            operator_decision_path,
+            label="latest terminal operator decision",
+        )
     run_id = str(latest.get("run_id") or run.get("run_id") or "")
     if (
         not run_id
@@ -534,6 +541,7 @@ def _latest_terminal_record(
         "run": run,
         "conclusion": conclusion,
         "conclusion_sha256": hashlib.sha256(conclusion_bytes).hexdigest(),
+        "operator_decision": operator_decision,
     }
 
 
@@ -602,6 +610,25 @@ def _continuation_mission(
     prior_mission = str(terminal["run"].get("mission") or "").strip()
     current_head = _git(root, "rev-parse", "HEAD")
     view = _bounded_conclusion_view(conclusion)
+    operator_decision = terminal.get("operator_decision")
+    rejection = ""
+    if (
+        isinstance(operator_decision, dict)
+        and operator_decision.get("decision") == "rejected"
+    ):
+        rejection = f"""
+## Binding human rejection
+
+The human operator rejected exact candidate
+`{operator_decision.get('candidate')}`.
+
+Reason: {operator_decision.get('reason')}
+
+Do not revive, re-review, repackage, or use that candidate as evidence of
+progress. Preserve only its compact failed-attempt lesson. A successor must
+earn progress against its own stated current goal and host-bound evaluator
+baseline.
+"""
     return f"""# Successor mission from terminal organization conclusion
 
 Parent run: `{terminal['run_id']}`
@@ -636,6 +663,8 @@ work; it prohibits agents from granting themselves the final authority.
 ```json
 {json.dumps(view, indent=2, ensure_ascii=False)}
 ```
+
+{rejection}
 
 ## Parent mission boundary
 

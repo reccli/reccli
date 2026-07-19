@@ -1811,6 +1811,14 @@ def _load_experiment_policy_definition(
     max_wall = bounded_integer(
         "max_contract_wall_seconds", 1, 86_400,
     )
+    promotion_requires_goal_progress = definition.get(
+        "promotion_requires_goal_progress",
+        False,
+    )
+    if not isinstance(promotion_requires_goal_progress, bool):
+        raise ValueError(
+            "experiment policy promotion_requires_goal_progress must be Boolean"
+        )
     raw_evaluators = definition.get("evaluators")
     if not isinstance(raw_evaluators, list) or not raw_evaluators:
         raise ValueError("experiment policy evaluators must be a non-empty array")
@@ -1964,6 +1972,14 @@ def _load_experiment_policy_definition(
                 "unit": unit,
                 "tolerance": float(tolerance),
             })
+        goal_success_rule = str(
+            raw_evaluator.get("goal_success_rule") or "",
+        ).strip()
+        if promotion_requires_goal_progress and not goal_success_rule:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} requires a "
+                "goal_success_rule when promotion_requires_goal_progress=true"
+            )
         if result_mode == "command_exit" and (hard_gates or metrics):
             raise ValueError(
                 f"command_exit evaluator {evaluator_id} cannot declare "
@@ -2040,6 +2056,7 @@ def _load_experiment_policy_definition(
                 value.strip() for value in hard_gates
             )),
             "metrics": metrics,
+            "goal_success_rule": goal_success_rule,
             "resource_limits": {
                 "max_threads": max_threads,
                 "same_host_required": same_host_required,
@@ -2056,6 +2073,9 @@ def _load_experiment_policy_definition(
         "max_trials_per_contract": max_trials,
         "max_consecutive_non_improving": max_non_improving,
         "max_contract_wall_seconds": max_wall,
+        "promotion_requires_goal_progress": (
+            promotion_requires_goal_progress
+        ),
         "evaluators": evaluators,
     }
 
@@ -2808,6 +2828,7 @@ class OrganizationRunner:
         self.experiment_halted_workers: Set[str] = set()
         self.experiment_resource_fingerprints: Dict[str, str] = {}
         self.experiment_ledger_head_sha256: Optional[str] = None
+        self.candidate_progress: Optional[Dict[str, Any]] = None
         self._experiment_contract_started: Dict[str, float] = {}
         self._experiment_loop_lock = threading.Lock()
         self.experiment_records: List[Dict[str, Any]] = []
@@ -3296,6 +3317,28 @@ class OrganizationRunner:
                         ),
                     )
                     continue
+                progress_verdict = self._candidate_goal_progress_verdict(
+                    candidate,
+                    round_number=round_number,
+                )
+                if not progress_verdict["qualifies"]:
+                    status = "completed_no_promotion"
+                    finalized_by = "reccli-host"
+                    final_summary = (
+                        "RecCli discarded the proposed candidate because the "
+                        "project-owned evaluator recorded no improvement over "
+                        "baseline bound to the exact stated current worker goal."
+                    )
+                    self.states[agent.agent_id] = "done"
+                    self._event(
+                        "finalization.no_goal_progress",
+                        round_number,
+                        agent_id=agent.agent_id,
+                        candidate=candidate,
+                        verdict_sha256=progress_verdict["verdict_sha256"],
+                        reason=progress_verdict["reason"],
+                    )
+                    break
                 if self.topology.blind_final_review:
                     if self.evidence_manifest:
                         verify_evidence_snapshot(self.evidence_manifest, full=True)
@@ -3456,6 +3499,7 @@ class OrganizationRunner:
             "host_state_brief": str(self.run_dir / "host-state.json"),
             "host_state_sha256": self.host_state_brief.get("content_sha256"),
             "integrated_candidates": dict(self.integrated_candidates),
+            "candidate_progress": self.candidate_progress,
             "conclusion": conclusion,
             "conclusion_json": str(self.run_dir / "run-conclusion.json"),
             "conclusion_markdown": str(self.run_dir / "run-conclusion.md"),
@@ -4427,6 +4471,12 @@ class OrganizationRunner:
             "one_mutable_file": True,
             "one_host_commit_per_trial": True,
             "baseline_required": True,
+            "promotion_requires_goal_progress": bool(
+                self.experiment_policy
+                and self.experiment_policy.get(
+                    "promotion_requires_goal_progress",
+                )
+            ),
             "ledger_verified": True,
             "ledger_head_sha256": self.experiment_ledger_head_sha256,
             "semantic_single_change_proven": False,
@@ -4445,6 +4495,8 @@ class OrganizationRunner:
                         "max_wall_seconds",
                         "status",
                         "activation_baseline_candidate",
+                        "goal_sha256",
+                        "goal_success_rule",
                         "halt_reason",
                     )
                 }
@@ -4468,6 +4520,7 @@ class OrganizationRunner:
                 for contract_sha, outcome
                 in self.experiment_champions.items()
             },
+            "candidate_progress": self.candidate_progress,
         }
 
     def _write_host_state_brief(self, round_number: int) -> Dict[str, Any]:
@@ -4554,6 +4607,7 @@ class OrganizationRunner:
                 "authorizations": dict(self.research_authorizations),
             },
             "experiment_loop": self._experiment_loop_snapshot(),
+            "candidate_progress": self.candidate_progress,
         }
         canonical = json.dumps(
             payload,
@@ -5201,7 +5255,21 @@ class OrganizationRunner:
                 "experiment-loop max_wall_seconds exceeds project policy"
             )
         self._experiment_string(payload, "objective")
-        self._experiment_string(payload, "success_rule")
+        success_rule = self._experiment_string(payload, "success_rule")
+        policy_success_rule = str(
+            evaluator.get("goal_success_rule") or "",
+        ).strip()
+        if (
+            self.experiment_policy.get(
+                "promotion_requires_goal_progress",
+                False,
+            )
+            and success_rule != policy_success_rule
+        ):
+            raise RuntimeError(
+                "experiment-loop success_rule must exactly match the "
+                "project-owned evaluator goal_success_rule"
+            )
         research_sha = payload.get("research_decision_sha256")
         if research_sha is not None and (
             not isinstance(research_sha, str)
@@ -5225,6 +5293,8 @@ class OrganizationRunner:
             "worker_id": worker_id,
             "mutable_file": mutable_file,
             "evaluator_id": evaluator_id,
+            "objective": payload["objective"].strip(),
+            "goal_success_rule": success_rule,
             "max_trials": max_trials,
             "max_consecutive_non_improving": max_non_improving,
             "max_wall_seconds": max_wall,
@@ -5379,6 +5449,7 @@ class OrganizationRunner:
                 "registered_at": _utc_now(),
                 "status": "registered",
                 "activation_baseline_candidate": None,
+                "goal_sha256": None,
             }
             persisted.pop("source_path", None)
             destination_dir = self.experiment_loop_root / "contracts"
@@ -5440,6 +5511,35 @@ class OrganizationRunner:
                 "experiment contract trial cap exceeds the remaining "
                 "organization budget"
             )
+        goal = self.worker_goals.get(worker_id)
+        if not self._goal_is_active(goal):
+            raise RuntimeError(
+                "experiment contract activation requires the worker's current "
+                "active goal"
+            )
+        if (
+            goal.get("work_item") != work_item
+            or goal.get("objective") != contract.get("objective")
+        ):
+            raise RuntimeError(
+                "experiment contract objective must exactly match the stated "
+                "current worker goal"
+            )
+        evaluator = self.experiment_policy["evaluators"][
+            contract["evaluator_id"]
+        ]
+        if (
+            self.experiment_policy.get(
+                "promotion_requires_goal_progress",
+                False,
+            )
+            and contract.get("goal_success_rule")
+            != evaluator.get("goal_success_rule")
+        ):
+            raise RuntimeError(
+                "experiment contract is not bound to the project-defined "
+                "success rule for the stated current goal"
+            )
         active_contracts = [
             other
             for other in self.experiment_contracts.values()
@@ -5469,8 +5569,14 @@ class OrganizationRunner:
                 self._experiment_contract_started[contract_sha] = (
                     time.monotonic()
                 )
+            contract["goal_sha256"] = goal["goal_sha256"]
             self.active_experiment_by_worker[worker_id] = contract_sha
             self.experiment_halted_workers.discard(worker_id)
+            goal["progress_contract_sha256"] = contract_sha
+            goal["progress_evaluator_id"] = contract["evaluator_id"]
+            goal["progress_success_rule"] = contract["goal_success_rule"]
+            goal["updated_round"] = round_number
+            self._persist_goal_state()
         self._append_jsonl(
             "experiment-loop/contracts.jsonl",
             {
@@ -5488,6 +5594,9 @@ class OrganizationRunner:
             manager_id=manager_id,
             worker_id=worker_id,
             baseline_candidate=contract["activation_baseline_candidate"],
+            goal_sha256=contract["goal_sha256"],
+            evaluator_id=contract["evaluator_id"],
+            goal_success_rule=contract["goal_success_rule"],
         )
         return contract_sha
 
@@ -5841,6 +5950,145 @@ class OrganizationRunner:
         if worsened and not improved:
             return "discard"
         return "inconclusive"
+
+    def _candidate_goal_progress_verdict(
+        self,
+        candidate: str,
+        *,
+        round_number: int,
+    ) -> Dict[str, Any]:
+        """Bind promotion retention to measured progress on the stated goal."""
+        required = bool(
+            self.experiment_policy
+            and self.experiment_policy.get(
+                "promotion_requires_goal_progress",
+                False,
+            )
+        )
+        known_goals = {
+            str(goal.get("goal_sha256")): goal
+            for goal in [
+                *self.worker_goal_history,
+                *self.worker_goals.values(),
+            ]
+            if goal.get("goal_sha256")
+        }
+        qualifying_trials: List[Dict[str, Any]] = []
+        retained_trials = [
+            trial
+            for trial in self.experiment_trials
+            if trial.get("verdict") == "keep"
+        ]
+        workspace = (
+            self.workspaces.get(self.topology.finalizer_id)
+            or next(iter(self.workspaces.values()))
+        )
+        for trial in retained_trials:
+            contract = self.experiment_contracts.get(
+                str(trial.get("contract_sha256") or ""),
+                {},
+            )
+            goal_sha = str(contract.get("goal_sha256") or "")
+            goal = known_goals.get(goal_sha)
+            if (
+                not goal
+                or goal.get("work_item") != contract.get("work_item")
+                or goal.get("objective") != contract.get("objective")
+                or goal.get("progress_contract_sha256")
+                != contract.get("sha256")
+                or goal.get("progress_evaluator_id")
+                != contract.get("evaluator_id")
+                or goal.get("progress_success_rule")
+                != contract.get("goal_success_rule")
+            ):
+                continue
+            challenger = str(trial.get("challenger_candidate") or "")
+            possible_ancestors = [
+                challenger,
+                str(self.integrated_candidates.get(challenger) or ""),
+            ]
+            ancestor = next(
+                (
+                    value
+                    for value in possible_ancestors
+                    if value
+                    and self._host_git(
+                        workspace,
+                        [
+                            "merge-base",
+                            "--is-ancestor",
+                            value,
+                            candidate,
+                        ],
+                        check=False,
+                    ).returncode
+                    == 0
+                ),
+                None,
+            )
+            if ancestor:
+                qualifying_trials.append({
+                    "contract_sha256": contract["sha256"],
+                    "goal_sha256": goal_sha,
+                    "work_item": contract["work_item"],
+                    "objective": contract["objective"],
+                    "evaluator_id": contract["evaluator_id"],
+                    "goal_success_rule": contract["goal_success_rule"],
+                    "trial_number": trial.get("trial_number"),
+                    "challenger_candidate": challenger,
+                    "retained_ancestor": ancestor,
+                    "baseline_candidate": contract.get(
+                        "activation_baseline_candidate"
+                    ),
+                    "hard_gates": (
+                        trial.get("outcome", {}).get("hard_gates")
+                    ),
+                    "metrics": trial.get("outcome", {}).get("metrics"),
+                })
+        qualifies = not required or bool(qualifying_trials)
+        verdict = {
+            "schema": "reccli.organization-candidate-goal-progress.v1",
+            "run_id": self.run_id,
+            "candidate": candidate,
+            "required": required,
+            "qualifies": qualifies,
+            "decision": "retain" if qualifies else "discard",
+            "reason": (
+                "candidate contains host-retained evaluator improvement bound "
+                "to the exact stated worker goal"
+                if qualifying_trials
+                else (
+                    "project policy does not require goal-bound measured progress"
+                    if not required
+                    else
+                    "no host-retained improvement bound to the exact stated "
+                    "current goal is present in this candidate"
+                )
+            ),
+            "qualifying_trials": qualifying_trials,
+            "retained_trial_count": len(retained_trials),
+            "evaluated_round": round_number,
+            "evaluated_at": _utc_now(),
+        }
+        canonical = json.dumps(
+            verdict,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        verdict["verdict_sha256"] = hashlib.sha256(canonical).hexdigest()
+        self.candidate_progress = verdict
+        self._write_json("candidate-progress.json", verdict)
+        self._event(
+            "candidate.goal_progress",
+            round_number,
+            candidate=candidate,
+            required=required,
+            qualifies=qualifies,
+            decision=verdict["decision"],
+            qualifying_trials=len(qualifying_trials),
+        )
+        return verdict
 
     def _record_experiment_trial(
         self,
@@ -7017,6 +7265,9 @@ Indexed reference library (read relevant entries on demand):
                             "immutable_paths": evaluator["immutable_paths"],
                             "mutable_roots": evaluator["mutable_roots"],
                             "result_mode": evaluator["result_mode"],
+                            "goal_success_rule": evaluator[
+                                "goal_success_rule"
+                            ],
                             "hard_gates": evaluator["hard_gates"],
                             "metrics": evaluator["metrics"],
                             "resource_limits": evaluator["resource_limits"],
@@ -7044,8 +7295,10 @@ max_wall_seconds, and research_decision_sha256 (null unless the work item was
 research-authorized). Exactly one tracked file is mutable for the whole
 contract. The evaluator and its declared immutable paths cannot overlap it.
 After writing the contract, send that worker a plan or handoff with the exact
-same workItem. RecCli registers the contract before delivering your message,
-runs the baseline before the worker's first trial, and schedules the worker
+same workItem and objective text. The contract objective must exactly equal the
+worker's stated current goal, and its success_rule must exactly equal the
+project-owned evaluator goal_success_rule. RecCli binds the resulting goal
+SHA-256 to the contract before running its baseline, then schedules the worker
 without waking you for routine keep/discard results.
 
 Policy maxima: trials={self.experiment_policy['max_trials_per_contract']},
@@ -7084,6 +7337,7 @@ experiment contract is active for this worker:
         'sha256', 'work_item', 'manager_id', 'worker_id', 'mutable_file',
         'evaluator_id', 'max_trials', 'max_consecutive_non_improving',
         'max_wall_seconds', 'status', 'activation_baseline_candidate',
+        'goal_sha256', 'goal_success_rule',
     )
 }, indent=2, ensure_ascii=False)}
 
@@ -7621,6 +7875,29 @@ APPROVED or BLOCKED.
             "updated_round": round_number,
             "candidate": None,
         }
+        goal_identity = {
+            key: goal[key]
+            for key in (
+                "worker_id",
+                "manager_id",
+                "work_item",
+                "objective",
+                "risk",
+                "source",
+                "created_round",
+            )
+        }
+        goal["goal_sha256"] = hashlib.sha256(
+            json.dumps(
+                goal_identity,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        goal["progress_contract_sha256"] = None
+        goal["progress_evaluator_id"] = None
+        goal["progress_success_rule"] = None
         self.worker_goals[worker_id] = goal
         if validated_flag and same_goal:
             validated_flag["status"] = "acted"
@@ -7923,10 +8200,15 @@ Objective: {goal['objective']}
 Risk: {goal['risk']}
 Primary manager: {primary}
 Status: {goal['status']}
+Goal SHA-256: {goal['goal_sha256']}
+Progress evaluator: {goal.get('progress_evaluator_id') or 'not bound'}
+Success rule: {goal.get('progress_success_rule') or 'not bound'}
 
 Spend this turn changing, testing, evaluating, or directly advancing the
 project execution path that produces this objective. Administrative prose is
-not progress. Do not solve unrelated findings. If an unrelated defect or a
+not progress. A candidate is retained only when the project-owned evaluator
+bound to this exact goal SHA-256 measures improvement over its baseline. Do
+not solve unrelated findings. If an unrelated defect or a
 contradiction between retrieved context sources matters, send exactly one
 tag=flag message to {primary} with candidate=null, this same workItem and risk,
 name the conflicting paths or observation, and continue every unaffected part
@@ -7949,7 +8231,9 @@ of this goal."""
             ]
             goal_lines = [
                 f"- {goal['worker_id']}: {goal['work_item']} "
-                f"[{goal['status']}] — {goal['objective']}"
+                f"[{goal['status']}] goal={goal.get('goal_sha256', '')[:12]} "
+                f"evaluator={goal.get('progress_evaluator_id') or 'unbound'} "
+                f"— {goal['objective']}"
                 for goal in owned
             ] or ["- No worker goal is bound yet."]
             flag_lines = [
@@ -8347,6 +8631,97 @@ of this goal."""
                     "ts": _utc_now(),
                 })
                 return
+            if (
+                candidate_record["kind"] == "implementation"
+                and tag == "handoff"
+                and sender in self.topology.worker_ids
+                and self.experiment_policy
+                and self.experiment_policy.get(
+                    "promotion_requires_goal_progress",
+                    False,
+                )
+            ):
+                progress = self._candidate_goal_progress_verdict(
+                    str(candidate),
+                    round_number=round_number,
+                )
+                exact_goal_trial = any(
+                    trial.get("challenger_candidate") == str(candidate)
+                    for trial in progress.get("qualifying_trials", [])
+                )
+                if not progress["qualifies"] or not exact_goal_trial:
+                    reason = (
+                        "implementation handoff discarded: the exact candidate "
+                        "is not a host-retained evaluator improvement bound to "
+                        "this worker's exact stated current goal"
+                    )
+                    workspace = self.workspaces[sender]
+                    parent = _git(
+                        workspace.cwd,
+                        ["rev-parse", f"{candidate}^"],
+                    ).strip()
+                    self._host_git(
+                        workspace,
+                        ["reset", "--hard", parent],
+                    )
+                    self._event(
+                        "candidate.discarded_no_goal_progress",
+                        round_number,
+                        agent_id=sender,
+                        candidate=str(candidate),
+                        resulting_head=parent,
+                        verdict_sha256=progress["verdict_sha256"],
+                    )
+                    goal = self.worker_goals.get(sender)
+                    if goal:
+                        goal["status"] = "blocked"
+                        goal["candidate"] = None
+                        goal["updated_round"] = round_number
+                        goal["progress_discarded_candidate"] = str(candidate)
+                        self._persist_goal_state()
+                    self.dropped_messages += 1
+                    self._append_jsonl("messages.jsonl", {
+                        "round": round_number,
+                        "from": sender,
+                        **message,
+                        "status": "dropped",
+                        "reason": reason,
+                        "ts": _utc_now(),
+                    })
+                    primary = self.topology.primary_manager_by_worker.get(
+                        sender,
+                    )
+                    self._system_message(
+                        sender,
+                        "blocker",
+                        (
+                            f"{reason}. Keep only compact failure evidence. "
+                            "The primary manager must bind the current goal to "
+                            "a project-owned evaluator and baseline before "
+                            "another implementation can be retained."
+                        ),
+                        round_number,
+                        str(candidate),
+                        message.get("workItem"),
+                        message.get("risk"),
+                    )
+                    if primary:
+                        self._system_message(
+                            primary,
+                            "blocker",
+                            (
+                                f"{reason} for {sender}. Do not send the "
+                                "candidate into review. Either register an "
+                                "evaluator contract whose objective exactly "
+                                "matches the current goal, or close the route "
+                                "as no progress."
+                            ),
+                            round_number,
+                            str(candidate),
+                            message.get("workItem"),
+                            message.get("risk"),
+                        )
+                    return
         allowed, reason = self.topology.can_route(sender, recipient, tag)
         if not allowed:
             self.dropped_messages += 1
@@ -8763,6 +9138,8 @@ of this goal."""
             artifacts.add(str(self.experiment_loop_root / "trials.jsonl"))
         if (self.run_dir / "goal-state.json").is_file():
             artifacts.add(str(self.run_dir / "goal-state.json"))
+        if (self.run_dir / "candidate-progress.json").is_file():
+            artifacts.add(str(self.run_dir / "candidate-progress.json"))
 
         return {
             "terminal_status": status,
@@ -8831,6 +9208,7 @@ of this goal."""
                 "authorizations": dict(self.research_authorizations),
             },
             "experiment_loop": self._experiment_loop_snapshot(),
+            "candidate_progress": self.candidate_progress,
         }
 
     def _authoritative_promotion_readiness(

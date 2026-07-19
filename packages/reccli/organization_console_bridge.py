@@ -17,6 +17,7 @@ from .organization_control import (
     list_organization_runs,
     organization_snapshot,
     queue_control_request,
+    reject_organization_candidate,
 )
 
 
@@ -63,6 +64,15 @@ def dispatch(payload: Dict[str, Any]) -> Dict[str, Any]:
             working_directory,
             run_id,
             request_sha256=payload.get("request_sha256"),
+            idempotency_key=payload.get("idempotency_key"),
+            requested_by="organization-console-human",
+        )
+    if command == "reject":
+        return reject_organization_candidate(
+            working_directory,
+            run_id,
+            candidate=str(payload.get("candidate") or ""),
+            reason=str(payload.get("reason") or ""),
             idempotency_key=payload.get("idempotency_key"),
             requested_by="organization-console-human",
         )

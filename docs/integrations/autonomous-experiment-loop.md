@@ -37,6 +37,7 @@ Projects opt in by passing a tracked policy path as `experiment_policy`:
   "max_trials_per_contract": 3,
   "max_consecutive_non_improving": 3,
   "max_contract_wall_seconds": 3600,
+  "promotion_requires_goal_progress": true,
   "evaluators": [
     {
       "id": "bounded-regression-v1",
@@ -49,6 +50,7 @@ Projects opt in by passing a tracked policy path as `experiment_policy`:
       "immutable_paths": ["tests/test_target.py"],
       "mutable_roots": ["src"],
       "result_mode": "command_exit",
+      "goal_success_rule": "Make the immutable evaluator change from failing to passing for the exact current worker goal.",
       "hard_gates": [],
       "metrics": [],
       "resource_limits": {
@@ -70,6 +72,15 @@ and a challenger can make the fixed checks pass. A baseline and challenger
 that both pass are inconclusive, because a pass-only evaluator cannot rank
 them.
 
+When `promotion_requires_goal_progress` is true, the current worker goal,
+contract objective, project-owned evaluator, baseline, and
+`goal_success_rule` are bound before the first trial. The contract objective
+must exactly equal the worker's stated current goal. RecCli retains only the
+exact worker candidate whose evaluator result improved over that baseline; an
+unrelated passing test, report, contract, descendant cleanup commit, or
+improvement on another goal is discarded before review. Final promotion must
+contain at least one such retained goal-bound improvement.
+
 For quantitative optimization, use `result_mode: "json_file"`. The evaluator
 writes `RECCLI_EXPERIMENT_RESULT_PATH` with schema
 `reccli.project-experiment-result.v1`, the policy's exact Boolean hard gates,
@@ -83,8 +94,10 @@ worsens none. Tradeoffs and ties are inconclusive and fail closed.
 A primary manager binds one named work item, worker, mutable file, evaluator,
 trial limit, non-improving stop, wall limit, and any required research decision
 hash in a `reccli.organization-experiment-contract.v1` artifact. Delivery of
-the matching plan activates the campaign and pins the worker's current HEAD as
-the baseline.
+the matching plan activates the campaign only when its objective exactly
+matches the current worker goal and its success rule exactly matches the
+project evaluator. RecCli records the goal SHA-256, then pins the worker's
+current HEAD as the baseline.
 
 For each challenger the worker writes one
 `reccli.organization-experiment-trial.v1` intent containing its hypothesis,
@@ -97,6 +110,11 @@ the exact patch shape, and rejects a challenger outside the project policy's
 mechanical bounds before running its evaluator. These controls make a trial
 operationally atomic; they cannot prove that the patch contains exactly one
 semantic idea.
+
+Ordinary implementation handoffs cannot route around this rule in projects
+that require goal progress. A candidate without an exact retained trial is
+reset out of the disposable worker worktree and only its compact failed-attempt
+record remains.
 
 The resource envelope fixes common numerical thread pools and detects a
 host/runtime change between baseline and challenger. It is not a claim that

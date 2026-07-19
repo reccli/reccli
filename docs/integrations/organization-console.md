@@ -65,6 +65,11 @@ revives the stopped supervisor. `Approve & apply locally` revalidates a fully
 verified promotion request and fast-forwards only a clean local branch. RecCli
 does not push a remote from either action.
 
+`reject_organization` records an immutable human rejection for one exact
+terminal-run candidate. It applies no repository changes, permanently disables
+approval of that candidate, and binds terminal-continuation missions not to
+revive or repackage it as progress.
+
 The panel can enable browser notifications. Once permission is granted, the
 console sends one local notification per request hash so a waiting decision is
 visible without constant polling of the page.

@@ -140,7 +140,11 @@ def _add_context_manifest(
     return manifest
 
 
-def _add_experiment_policy(root: Path) -> Path:
+def _add_experiment_policy(
+    root: Path,
+    *,
+    require_goal_progress: bool = False,
+) -> Path:
     evaluator = root / "evaluator.py"
     evaluator.write_text(
         "from pathlib import Path\n"
@@ -149,7 +153,7 @@ def _add_experiment_policy(root: Path) -> Path:
         encoding="utf-8",
     )
     policy = root / "experiment-policy.json"
-    policy.write_text(json.dumps({
+    definition = {
         "schema": "reccli.organization-experiment-policy.v1",
         "enabled": True,
         "max_trials_per_contract": 3,
@@ -164,6 +168,10 @@ def _add_experiment_policy(root: Path) -> Path:
             "immutable_paths": ["evaluator.py"],
             "mutable_roots": ["app.py"],
             "result_mode": "command_exit",
+            "goal_success_rule": (
+                "Make the immutable evaluator change from failing to passing."
+                if require_goal_progress else ""
+            ),
             "hard_gates": [],
             "metrics": [],
             "resource_limits": {
@@ -175,7 +183,13 @@ def _add_experiment_policy(root: Path) -> Path:
                 "max_diff_hunks": 4,
             },
         }],
-    }, indent=2) + "\n", encoding="utf-8")
+    }
+    if require_goal_progress:
+        definition["promotion_requires_goal_progress"] = True
+    policy.write_text(
+        json.dumps(definition, indent=2) + "\n",
+        encoding="utf-8",
+    )
     subprocess.run(
         ["git", "add", "evaluator.py", "experiment-policy.json"],
         cwd=root,
@@ -1763,7 +1777,10 @@ class OrganizationProjectTests(unittest.TestCase):
             root = Path(td) / "project"
             root.mkdir()
             _init_project(root)
-            policy_path = _add_experiment_policy(root)
+            policy_path = _add_experiment_policy(
+                root,
+                require_goal_progress=True,
+            )
             run_dir = Path(td) / "durable-run"
             runner = OrganizationRunner(
                 root,
@@ -1818,7 +1835,9 @@ class OrganizationProjectTests(unittest.TestCase):
                 "mutable_file": "app.py",
                 "evaluator_id": "app-regression",
                 "objective": "Make the immutable evaluator pass.",
-                "success_rule": "All immutable evaluator commands pass.",
+                "success_rule": (
+                    "Make the immutable evaluator change from failing to passing."
+                ),
                 "max_trials": 2,
                 "max_consecutive_non_improving": 2,
                 "max_wall_seconds": 300,
@@ -1831,11 +1850,24 @@ class OrganizationProjectTests(unittest.TestCase):
                 2,
             )
             contract_sha = runner.experiment_contract_by_work_item[work_item]
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-a",
+                manager_id="manager-a",
+                work_item=work_item,
+                objective="Make the immutable evaluator pass.",
+                risk="high",
+                round_number=2,
+            )
+            self.assertTrue(accepted, reason)
             runner._activate_experiment_contract(
                 manager_id="manager-a",
                 worker_id="worker-a",
                 work_item=work_item,
                 round_number=2,
+            )
+            self.assertEqual(
+                runner.experiment_contracts[contract_sha]["goal_sha256"],
+                runner.worker_goals["worker-a"]["goal_sha256"],
             )
             second_sha = "f" * 64
             runner.workspaces["worker-b"] = Workspace(
@@ -1855,10 +1887,20 @@ class OrganizationProjectTests(unittest.TestCase):
                 "max_trials": 1,
                 "status": "registered",
                 "activation_baseline_candidate": None,
+                "objective": "Improve the second file.",
             }
             runner.experiment_contract_by_work_item[
                 "experiment/second-file"
             ] = second_sha
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-b",
+                manager_id="manager-b",
+                work_item="experiment/second-file",
+                objective="Improve the second file.",
+                risk="high",
+                round_number=2,
+            )
+            self.assertTrue(accepted, reason)
             with self.assertRaisesRegex(
                 RuntimeError,
                 "only one autonomous experiment loop",
@@ -1938,6 +1980,17 @@ class OrganizationProjectTests(unittest.TestCase):
                 3,
             )
             self.assertEqual(runner.experiment_trials[-1]["verdict"], "keep")
+            progress = runner._candidate_goal_progress_verdict(
+                kept_head,
+                round_number=3,
+            )
+            self.assertTrue(progress["required"])
+            self.assertTrue(progress["qualifies"])
+            self.assertEqual(progress["decision"], "retain")
+            self.assertEqual(
+                progress["qualifying_trials"][0]["goal_sha256"],
+                runner.worker_goals["worker-a"]["goal_sha256"],
+            )
             self.assertTrue(
                 runner.experiment_trials[-1]["outcome"]["patch_shape"][
                     "passes"

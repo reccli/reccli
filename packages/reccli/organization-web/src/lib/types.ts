@@ -58,6 +58,10 @@ export interface WorkerGoal {
   updated_round?: number;
   completed_round?: number;
   candidate?: string | null;
+  goal_sha256?: string;
+  progress_contract_sha256?: string | null;
+  progress_evaluator_id?: string | null;
+  progress_success_rule?: string | null;
 }
 
 export interface OffGoalFlag {
@@ -198,6 +202,8 @@ export interface ExperimentLoopContract {
   halt_reason?: string;
   action?: string;
   activation_baseline_candidate?: string;
+  goal_sha256?: string | null;
+  goal_success_rule?: string;
 }
 
 export interface ExperimentLoopTrial {
@@ -362,8 +368,15 @@ export interface RunSnapshot {
   approval_execution?: ApprovalExecution | null;
   approval_capabilities?: {
     approve: boolean;
+    reject?: boolean;
     action?: string | null;
   };
+  operator_decision?: {
+    decision?: "rejected" | string;
+    candidate?: string;
+    reason?: string;
+    decision_sha256?: string;
+  } | null;
   artifact_manifest?: Record<string, unknown> | null;
   conclusion?: RunConclusion | null;
   research_cell?: {
@@ -386,5 +399,13 @@ export interface RunSnapshot {
     };
     active_workers?: string[];
     halted_workers?: string[];
+    candidate_progress?: {
+      candidate?: string;
+      required?: boolean;
+      qualifies?: boolean;
+      decision?: "retain" | "discard" | string;
+      reason?: string;
+      verdict_sha256?: string;
+    } | null;
   };
 }

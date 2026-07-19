@@ -18,6 +18,7 @@ from reccli.organization_control import (
     pending_control_requests,
     process_group_activity,
     queue_control_request,
+    reject_organization_candidate,
 )
 
 
@@ -157,6 +158,67 @@ class OrganizationCliBootstrapTests(unittest.TestCase):
 
 
 class OrganizationControlTests(unittest.TestCase):
+    def test_terminal_candidate_rejection_is_durable_and_disables_approval(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root, run_id="rejection-run")
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            status_path = run_dir / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["status"] = "round_limit"
+            status_path.write_text(
+                json.dumps(status, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            conclusion = {
+                "schema": "reccli.organization-run-conclusion.v1",
+                "run_id": "rejection-run",
+                "terminal_status": "round_limit",
+                "candidates": [{
+                    "candidate": candidate,
+                    "kind": "implementation",
+                    "paths": ["app.py"],
+                }],
+            }
+            (run_dir / "run-conclusion.json").write_text(
+                json.dumps(conclusion, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            rejected = reject_organization_candidate(
+                str(root),
+                "rejection-run",
+                candidate=candidate,
+                reason="No evaluator-measured progress on the stated goal.",
+                idempotency_key="reject-once",
+                requested_by="test-human",
+            )
+            self.assertEqual(rejected["status"], "rejected")
+            self.assertFalse(rejected["canonical_effects_applied"])
+            replay = reject_organization_candidate(
+                str(root),
+                "rejection-run",
+                candidate=candidate,
+                reason="No evaluator-measured progress on the stated goal.",
+                idempotency_key="reject-once",
+                requested_by="test-human",
+            )
+            self.assertTrue(replay["idempotent_replay"])
+            snapshot = organization_snapshot(str(root), "rejection-run")
+            self.assertEqual(
+                snapshot["operator_decision"]["decision"],
+                "rejected",
+            )
+            self.assertFalse(snapshot["approval_capabilities"]["approve"])
+            self.assertFalse(snapshot["approval_capabilities"]["reject"])
+
     def test_verified_promotion_approval_fast_forwards_only_local_branch(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "project"

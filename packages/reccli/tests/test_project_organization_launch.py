@@ -414,6 +414,56 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 (root / "mission.md").read_text(encoding="utf-8").strip(),
             )
 
+    def test_terminal_continuation_carries_binding_human_rejection(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _write_dynamic_contract(root, continuation=True)
+            parent_dir = _write_terminal_run(root)
+            rejected = "a" * 40
+            (parent_dir / "operator-decision.json").write_text(
+                json.dumps({
+                    "schema": "reccli.organization-operator-decision.v1",
+                    "run_id": "terminal-parent",
+                    "candidate": rejected,
+                    "decision": "rejected",
+                    "reason": (
+                        "No evaluator-measured progress on the stated goal."
+                    ),
+                }, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            captured = {}
+
+            def fake_start(arguments):
+                captured.update(arguments)
+                return {
+                    "status": "starting",
+                    "run_id": "successor-run",
+                    "run_dir": str(
+                        root / "devsession" / "agent-organizations"
+                        / "successor-run"
+                    ),
+                    "pid": 1234,
+                }
+
+            with patch(
+                "reccli.organization_launch.start_organization_from_arguments",
+                side_effect=fake_start,
+            ):
+                start_project_organization(str(root), open_console=False)
+
+            self.assertIn("Binding human rejection", captured["mission"])
+            self.assertIn(rejected, captured["mission"])
+            self.assertIn(
+                "Do not revive, re-review, repackage",
+                captured["mission"],
+            )
+            self.assertIn(
+                "No evaluator-measured progress",
+                captured["mission"],
+            )
+
     def test_terminal_continuation_uses_fresh_per_run_experiment_budget(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

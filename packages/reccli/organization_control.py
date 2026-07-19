@@ -39,6 +39,7 @@ TERMINAL_STATUSES = {
 MAX_OPERATOR_MESSAGE_CHARS = 12_000
 APPROVAL_REQUEST_SCHEMA = "reccli.organization-approval-request.v1"
 APPROVAL_DECISION_SCHEMA = "reccli.organization-approval-decision.v1"
+OPERATOR_DECISION_SCHEMA = "reccli.organization-operator-decision.v1"
 
 
 def _utc_now() -> str:
@@ -406,6 +407,7 @@ def organization_snapshot(
         run_dir / "approval" / "execution.json",
         None,
     )
+    operator_decision = _read_json(run_dir / "operator-decision.json", None)
     artifact_manifest = _read_json(run_dir / "deliverables" / "manifest.json", None)
     conclusion = _read_json(run_dir / "run-conclusion.json", None)
     research_commissions = _tail_jsonl(
@@ -430,6 +432,10 @@ def organization_snapshot(
     )
     experiment_ledger = _experiment_ledger_status(
         run_dir / "experiment-loop" / "trials.jsonl",
+    )
+    candidate_progress = _read_json(
+        run_dir / "candidate-progress.json",
+        None,
     )
     topology = _topology_snapshot(run, status)
     live, active_agent_ids = process_group_activity(
@@ -575,6 +581,7 @@ def organization_snapshot(
             "halted_workers": (
                 status.get("experiment_loop_halted_workers") or []
             ),
+            "candidate_progress": candidate_progress,
         },
         "worker_goals": worker_goals,
         "off_goal_flags": off_goal_flags,
@@ -606,6 +613,7 @@ def organization_snapshot(
         "approval_request": approval_request,
         "approval_decision": approval_decision,
         "approval_execution": approval_execution,
+        "operator_decision": operator_decision,
         "approval_capabilities": {
             "approve": (
                 isinstance(approval_request, dict)
@@ -615,6 +623,17 @@ def organization_snapshot(
                 and not (
                     isinstance(approval_execution, dict)
                     and approval_execution.get("status") == "applied"
+                )
+                and not (
+                    isinstance(operator_decision, dict)
+                    and operator_decision.get("decision") == "rejected"
+                )
+            ),
+            "reject": (
+                status.get("status") in TERMINAL_STATUSES
+                and not (
+                    isinstance(operator_decision, dict)
+                    and operator_decision.get("decision") == "rejected"
                 )
             ),
             "action": (
@@ -1133,6 +1152,15 @@ def approve_organization_request(
             "run_id": run_id,
             "detail": "run has no staged approval request",
         }
+    operator_decision = _read_json(run_dir / "operator-decision.json", None)
+    if (
+        isinstance(operator_decision, dict)
+        and operator_decision.get("decision") == "rejected"
+    ):
+        raise RuntimeError(
+            "the human operator already rejected this run's candidate; "
+            "approval is permanently unavailable"
+        )
     actual_request_sha = _verify_approval_request(request)
     if request_sha256 and request_sha256 != actual_request_sha:
         raise RuntimeError(
@@ -1247,6 +1275,135 @@ def approve_organization_request(
         raise
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+def reject_organization_candidate(
+    working_directory: str,
+    run_id: str,
+    *,
+    candidate: str,
+    reason: str,
+    idempotency_key: Optional[str] = None,
+    requested_by: str = "human-operator",
+) -> Dict[str, Any]:
+    """Permanently reject one exact terminal-run candidate.
+
+    Rejection never mutates the caller's repository.  It records the failed
+    route as a compact durable decision, disables later approval, and gives a
+    successor mission an explicit instruction not to revive the candidate.
+    """
+    run_dir = _resolve_run(working_directory, run_id)
+    if run_dir is None:
+        return {"status": "not_found", "run_id": run_id}
+    status = _read_json(run_dir / "status.json", {}) or {}
+    if status.get("status") not in TERMINAL_STATUSES:
+        raise RuntimeError("rejection is available only after the run is terminal")
+    exact_candidate = str(candidate or "").strip().lower()
+    if (
+        len(exact_candidate) != 40
+        or any(char not in "0123456789abcdef" for char in exact_candidate)
+    ):
+        raise ValueError("candidate must be one exact 40-character Git commit")
+    exact_reason = " ".join(str(reason or "").split())
+    if not exact_reason:
+        raise ValueError("rejection reason must not be empty")
+    if len(exact_reason) > 4_000:
+        raise ValueError("rejection reason exceeds 4000 characters")
+
+    source_request = _read_json(run_dir / "request.json", {}) or {}
+    resolved_run_id = str(
+        source_request.get("run_id")
+        or status.get("run_id")
+        or run_id
+    )
+    conclusion_path = run_dir / "run-conclusion.json"
+    conclusion_raw = conclusion_path.read_bytes()
+    conclusion = json.loads(conclusion_raw)
+    candidates = {
+        str(record.get("candidate") or "").lower()
+        for record in conclusion.get("candidates", [])
+        if isinstance(record, dict)
+        and record.get("kind") == "implementation"
+    }
+    approval_request = _approval_request(run_dir)
+    if isinstance(approval_request, dict):
+        candidates.update(
+            str(value or "").lower()
+            for value in (
+                approval_request.get("verified_candidate"),
+                approval_request.get("proposed_promotion_candidate"),
+                approval_request.get("report_candidate"),
+            )
+            if value
+        )
+    if exact_candidate not in candidates:
+        raise RuntimeError(
+            "candidate is not an implementation or staged candidate from "
+            "this terminal run"
+        )
+    project_root = Path(
+        source_request.get("project_root") or working_directory,
+    ).expanduser().resolve()
+    _git_text(project_root, ["cat-file", "-e", f"{exact_candidate}^{{commit}}"])
+
+    decision_path = run_dir / "operator-decision.json"
+    existing = _read_json(decision_path, None)
+    if isinstance(existing, dict):
+        if (
+            existing.get("decision") == "rejected"
+            and existing.get("candidate") == exact_candidate
+        ):
+            return {
+                "status": "rejected",
+                "run_id": resolved_run_id,
+                "candidate": exact_candidate,
+                "decision": existing,
+                "idempotent_replay": True,
+            }
+        raise RuntimeError(
+            "this run already has a different immutable operator decision"
+        )
+
+    decision: Dict[str, Any] = {
+        "schema": OPERATOR_DECISION_SCHEMA,
+        "version": 1,
+        "run_id": resolved_run_id,
+        "terminal_status": status.get("status"),
+        "candidate": exact_candidate,
+        "decision": "rejected",
+        "reason": exact_reason,
+        "effect": (
+            "Candidate promotion is permanently disabled. The candidate may "
+            "remain only in the compact failed-attempt audit record and must "
+            "not seed or satisfy a successor mission."
+        ),
+        "canonical_effects_applied": False,
+        "conclusion_sha256": hashlib.sha256(conclusion_raw).hexdigest(),
+        "approval_request_sha256": (
+            approval_request.get("request_sha256")
+            if isinstance(approval_request, dict)
+            else None
+        ),
+        "decided_by": requested_by,
+        "decided_at": _utc_now(),
+        "idempotency_key": idempotency_key,
+    }
+    canonical = json.dumps(
+        decision,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    decision["decision_sha256"] = hashlib.sha256(canonical).hexdigest()
+    _atomic_write_json(decision_path, decision)
+    return {
+        "status": "rejected",
+        "run_id": resolved_run_id,
+        "candidate": exact_candidate,
+        "canonical_effects_applied": False,
+        "decision": decision,
+        "run_dir": str(run_dir),
+    }
 
 
 def cancel_organization_run(
