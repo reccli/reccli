@@ -159,6 +159,14 @@ def _add_experiment_policy(root: Path) -> Path:
             "result_mode": "command_exit",
             "hard_gates": [],
             "metrics": [],
+            "resource_limits": {
+                "max_threads": 1,
+                "same_host_required": True,
+            },
+            "change_limits": {
+                "max_changed_lines": 20,
+                "max_diff_hunks": 4,
+            },
         }],
     }, indent=2) + "\n", encoding="utf-8")
     subprocess.run(
@@ -254,10 +262,11 @@ class OrganizationTopologyTests(unittest.TestCase):
         }
         accepted, _, review = governance.process_message("worker-a", handoff, 1)
         self.assertTrue(accepted)
-        self.assertEqual(review["to"], "manager-c")
+        reviewer = review["to"]
+        self.assertEqual(reviewer, "manager-b")
         self.assertIn("NO_VETO", review["content"])
 
-        governance.record_decision("manager-c", {
+        governance.record_decision(reviewer, {
             "to": "manager-a", "tag": "decision",
             "content": "NO_VETO: no blocking falsification; visual meaning remains human judgment.",
             "candidate": "candidate-1", "workItem": "tmp-hypothesis", "risk": "high",
@@ -274,6 +283,28 @@ class OrganizationTopologyTests(unittest.TestCase):
             "candidate": "release-1", "workItem": "final-release", "risk": "release",
         })
         self.assertIn("manager-c", governance.missing_final_approvers("release-1"))
+
+    def test_scientific_candidate_review_rotates_by_lane_and_excludes_final_veto(self):
+        topology = get_topology("scientific")
+        governance = Governance(topology, "scientific-rotation")
+        reviewers = []
+        for index, (worker, primary) in enumerate((
+            ("worker-a", "manager-a"),
+            ("worker-b", "manager-b"),
+        )):
+            accepted, _, review = governance.process_message(worker, {
+                "to": primary,
+                "tag": "handoff",
+                "content": "Candidate ready.",
+                "candidate": f"candidate-{index}",
+                "workItem": f"work-{index}",
+                "risk": "high",
+            }, index + 1)
+            self.assertTrue(accepted)
+            reviewers.append(review["to"])
+        self.assertEqual(set(reviewers), {"manager-a", "manager-b"})
+        self.assertEqual(governance.release_reviewer_id, "manager-c")
+        self.assertNotIn(governance.release_reviewer_id, reviewers)
 
     def test_scientific_topology_grants_reversible_worker_agency(self):
         topology = get_topology("scientific")
@@ -1807,6 +1838,25 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertFalse(
                 runner.experiment_trials[0]["outcome"]["commands_pass"]
             )
+            baseline_command = (
+                runner.experiment_trials[0]["outcome"]["commands"][0]
+            )
+            self.assertRegex(
+                baseline_command["stdout_sha256"], r"^[0-9a-f]{64}$",
+            )
+            self.assertRegex(
+                runner.experiment_trials[0]["record_sha256"],
+                r"^[0-9a-f]{64}$",
+            )
+            self.assertIsNone(
+                runner.experiment_trials[0]["previous_record_sha256"],
+            )
+            self.assertEqual(
+                runner.experiment_trials[0]["outcome"][
+                    "resource_envelope"
+                ]["fingerprint"]["max_threads"],
+                1,
+            )
             self.assertEqual(runner._experiment_used(), 0)
 
             trial_path = (
@@ -1842,6 +1892,11 @@ class OrganizationProjectTests(unittest.TestCase):
                 3,
             )
             self.assertEqual(runner.experiment_trials[-1]["verdict"], "keep")
+            self.assertTrue(
+                runner.experiment_trials[-1]["outcome"]["patch_shape"][
+                    "passes"
+                ]
+            )
             self.assertIn("improved", (root / "app.py").read_text())
             self.assertEqual(runner._experiment_used(), 1)
 
@@ -1880,6 +1935,26 @@ class OrganizationProjectTests(unittest.TestCase):
                 hashlib.sha256(persisted_intent.read_bytes()).hexdigest(),
                 runner.experiment_trials[-1]["intent_sha256"],
             )
+            verified, ledger_head, error = (
+                organization_module.verify_experiment_trial_records(
+                    runner.experiment_trials
+                )
+            )
+            self.assertTrue(verified, error)
+            self.assertEqual(
+                ledger_head,
+                runner.experiment_trials[-1]["record_sha256"],
+            )
+            tampered = [
+                json.loads(json.dumps(trial))
+                for trial in runner.experiment_trials
+            ]
+            tampered[-1]["verdict"] = "keep"
+            verified, _, error = (
+                organization_module.verify_experiment_trial_records(tampered)
+            )
+            self.assertFalse(verified)
+            self.assertIn("mismatch", error)
 
     def test_experiment_metric_verdict_is_pareto_strict_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1943,6 +2018,63 @@ class OrganizationProjectTests(unittest.TestCase):
                 runner._experiment_verdict(contract, tradeoff, champion),
                 "inconclusive",
             )
+
+    def test_experiment_patch_shape_enforces_mechanical_atomicity_bounds(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            parent = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (root / "app.py").write_text(
+                "print('one')\nprint('two')\nprint('three')\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "bounded challenger"],
+                cwd=root,
+                check=True,
+            )
+            challenger = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            runner = OrganizationRunner(
+                root,
+                "Bound one trial.",
+                "claude",
+                "scientific",
+                "patch-shape",
+                root / "run",
+            )
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [], parent,
+            )
+            runner.experiment_policy = {
+                "evaluators": {
+                    "bounded": {
+                        "change_limits": {
+                            "max_changed_lines": 2,
+                            "max_diff_hunks": 2,
+                        },
+                    },
+                },
+            }
+            shape = runner._experiment_patch_shape({
+                "worker_id": "worker-a",
+                "evaluator_id": "bounded",
+            }, challenger)
+            self.assertFalse(shape["passes"])
+            self.assertGreater(shape["changed_lines"], 2)
+            self.assertIn("mechanical atomicity", shape["scope"])
 
     def test_artifact_only_scope_rejects_source_changes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3230,19 +3362,27 @@ class OrganizationRunnerTests(unittest.TestCase):
                             "manager-d", "handoff", "Adversarial review completed without veto; integrate sandbox patch.",
                             worker_candidate["sha"], "scientific-run/worker-a/r3", "high",
                         )])
-                elif agent_id == "manager-b" and session.turn == 1:
-                    reply = response([
-                        message(
-                            "worker-b", "plan",
-                            "Research the nearest model-selection control and report a bounded recommendation.",
-                            None, "scientific-run/worker-b/research", "high",
-                        ),
-                        message(
-                            "worker-d", "plan",
-                            "Audit missing-information limits and prepare an explicit uncertainty finding.",
-                            None, "scientific-run/worker-d/uncertainty", "high",
-                        ),
-                    ])
+                elif agent_id == "manager-b":
+                    if session.turn == 1:
+                        reply = response([
+                            message(
+                                "worker-b", "plan",
+                                "Research the nearest model-selection control and report a bounded recommendation.",
+                                None, "scientific-run/worker-b/research", "high",
+                            ),
+                            message(
+                                "worker-d", "plan",
+                                "Audit missing-information limits and prepare an explicit uncertainty finding.",
+                                None, "scientific-run/worker-d/uncertainty", "high",
+                            ),
+                        ])
+                    elif "Adversarial review assignment" in prompt:
+                        reply = response([message(
+                            "manager-a", "decision",
+                            "NO_VETO: no blocking falsification; no truth approval implied.",
+                            worker_candidate["sha"],
+                            "scientific-run/worker-a/r3", "high",
+                        )])
                 elif agent_id == "worker-a" and worker_candidate["sha"] is None:
                     (session.workspace.cwd / "app.py").write_text(
                         "print('reversible hypothesis')\n", encoding="utf-8",

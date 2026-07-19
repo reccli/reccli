@@ -572,15 +572,27 @@ function ExperimentLoopPanel({
           <span>{trials.length} evaluations</span>
           <span>{kept} kept</span>
           <span>{discarded} discarded</span>
+          <span>
+            {loop.ledger?.verified === false
+              ? "ledger verification failed"
+              : `ledger verified${loop.ledger?.head_sha256 ? ` ${loop.ledger.head_sha256.slice(0, 10)}` : ""}`}
+          </span>
         </div>
       </summary>
       <div className="experiment-loop-body">
         <div className="experiment-contract-strip">
           <span>Policy: {loop.policy || "run-local immutable evaluator"}</span>
           <span>One active file</span>
+          <span>One host commit + bounded patch</span>
           <span>Baseline first</span>
+          <span>Same-host thread envelope</span>
           <span>Host keep/revert</span>
         </div>
+        {loop.ledger?.verified === false && (
+          <p className="experiment-halt">
+            Trial ledger integrity failure: {loop.ledger.error || "unknown error"}
+          </p>
+        )}
         {!contracts.length ? (
           <p className="experiment-empty">
             Dormant. A primary manager may bind one worker, one mutable file,
@@ -656,6 +668,13 @@ function ExperimentLoopPanel({
                           </span>
                           <span>
                             {durationLabel(trial.outcome?.duration_ms)}
+                          </span>
+                          <span>
+                            {trial.outcome?.patch_shape
+                              ? `${trial.outcome.patch_shape.changed_lines || 0} lines · ${trial.outcome.patch_shape.diff_hunks || 0} hunks`
+                              : trial.outcome?.resource_envelope?.sha256
+                                ? `resource ${trial.outcome.resource_envelope.sha256.slice(0, 10)}`
+                                : ""}
                           </span>
                         </div>
                       );

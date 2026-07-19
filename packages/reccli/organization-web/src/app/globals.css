@@ -747,7 +747,8 @@ select:disabled {
 
 .experiment-ledger-row {
   display: grid;
-  grid-template-columns: 74px minmax(180px, 1fr) minmax(100px, 0.8fr) 58px;
+  grid-template-columns:
+    74px minmax(180px, 1fr) minmax(100px, 0.8fr) 58px minmax(92px, 0.55fr);
   align-items: center;
   gap: 8px;
   padding: 7px 8px;

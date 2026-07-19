@@ -84,6 +84,49 @@ def _tail_jsonl(path: Path, limit: int) -> List[Dict[str, Any]]:
     return result
 
 
+def _experiment_ledger_status(path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        return {
+            "verified": True,
+            "records": 0,
+            "head_sha256": None,
+            "error": None,
+        }
+    records: List[Dict[str, Any]] = []
+    try:
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                return {
+                    "verified": False,
+                    "records": len(records),
+                    "head_sha256": None,
+                    "error": f"line {line_number} is not an object",
+                }
+            records.append(value)
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "verified": False,
+            "records": len(records),
+            "head_sha256": None,
+            "error": f"ledger read failed: {exc}",
+        }
+    from .organization import verify_experiment_trial_records
+
+    verified, head, error = verify_experiment_trial_records(records)
+    return {
+        "verified": verified,
+        "records": len(records),
+        "head_sha256": head,
+        "error": error,
+    }
+
+
 def _resolve_run(working_directory: str, run_id: str) -> Optional[Path]:
     from .organization import find_run
 
@@ -374,6 +417,9 @@ def organization_snapshot(
         run_dir / "experiment-loop" / "trials.jsonl",
         max(count, 500),
     )
+    experiment_ledger = _experiment_ledger_status(
+        run_dir / "experiment-loop" / "trials.jsonl",
+    )
     topology = _topology_snapshot(run, status)
     live, active_agent_ids = process_group_activity(
         pid,
@@ -507,6 +553,7 @@ def organization_snapshot(
             ),
             "contracts": experiment_contracts,
             "trials": experiment_trials,
+            "ledger": experiment_ledger,
             "active_workers": (
                 status.get("experiment_loop_active_workers") or []
             ),

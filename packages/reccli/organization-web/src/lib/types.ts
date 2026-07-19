@@ -181,6 +181,8 @@ export interface ExperimentLoopTrial {
   challenger_candidate?: string;
   resulting_head?: string;
   budget_slot?: number | null;
+  previous_record_sha256?: string | null;
+  record_sha256?: string;
   ts?: string;
   intent?: {
     hypothesis?: string;
@@ -196,6 +198,19 @@ export interface ExperimentLoopTrial {
     notes?: string[];
     result_error?: string | null;
     duration_ms?: number;
+    resource_envelope?: {
+      sha256?: string;
+      scope?: string;
+      same_host_required?: boolean;
+      fingerprint?: Record<string, unknown>;
+    };
+    patch_shape?: {
+      changed_lines?: number;
+      diff_hunks?: number;
+      passes?: boolean;
+      scope?: string;
+      violations?: string[];
+    };
   };
 }
 
@@ -331,6 +346,12 @@ export interface RunSnapshot {
     policy?: string | null;
     contracts?: ExperimentLoopContract[];
     trials?: ExperimentLoopTrial[];
+    ledger?: {
+      verified?: boolean;
+      records?: number;
+      head_sha256?: string | null;
+      error?: string | null;
+    };
     active_workers?: string[];
     halted_workers?: string[];
   };

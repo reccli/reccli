@@ -436,6 +436,12 @@ integrate only patch-identical candidates whose adversarial review completed
 without a veto. No agent can apply the resulting proposal to the canonical
 branch or archive.
 
+Candidate-level adversarial review rotates across eligible managers A and B by
+lane, excluding the candidate's primary manager, release manager, and final
+veto reviewer while preferring a different provider. Manager C remains the
+dedicated final veto auditor. This separates broad peer falsification from the
+stable release-level audit role.
+
 Lead and manager roles are inbox-driven after delegation. A prior
 `state=working` response does not wake them by itself. Manager C receives
 `review`/`decision` traffic only when it names an exact candidate or
@@ -588,11 +594,14 @@ are assigned only by the project's authorized archive-import transaction.
 
 Scientific projects may pass a tracked `experiment_policy` to bind a bounded
 worker campaign to one mutable file and one immutable evaluator. RecCli runs an
-uncharged baseline, enforces one cohesive challenger per experiment slot,
-keeps strict improvements, host-reverts regressions, and appends a compact
-ledger. One campaign is active at a time. Routine keep/discard trials do not
-wake managers; crashes, inconclusive results, plateaus, budget exhaustion,
-cross-file needs, and final review do.
+uncharged baseline, enforces one host commit and bounded one-file patch per
+experiment slot, fixes common numerical thread pools, checks the same-host
+runtime fingerprint, keeps strict improvements, host-reverts regressions, and
+appends a SHA-256-chained compact ledger with hashed command logs. One campaign
+is active at a time. Routine keep/discard trials do not wake managers; crashes,
+inconclusive results, plateaus, budget exhaustion, cross-file needs, and final
+review do. Patch bounds do not prove semantic cohesion, and a same-host
+fingerprint is not cross-hardware equivalence.
 
 The evaluator policy and its inputs are automatically deny-write. A pass-only
 evaluator cannot rank two passing candidates and therefore returns

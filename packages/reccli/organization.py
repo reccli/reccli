@@ -11,12 +11,14 @@ import hashlib
 import json
 import math
 import os
+import platform
 import queue
 import re
 import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -80,6 +82,50 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*)"
     r"=([^\s;&|]+)",
 )
+
+
+def verify_experiment_trial_records(
+    records: List[Dict[str, Any]],
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Verify the append-only SHA-256 chain for compact trial records."""
+    previous: Optional[str] = None
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            return False, previous, f"trial record {index} is not an object"
+        claimed = record.get("record_sha256")
+        if not isinstance(claimed, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", claimed,
+        ):
+            return (
+                False,
+                previous,
+                f"trial record {index} has no valid record_sha256",
+            )
+        if record.get("previous_record_sha256") != previous:
+            return (
+                False,
+                previous,
+                f"trial record {index} does not extend the prior record",
+            )
+        payload = dict(record)
+        payload.pop("record_sha256", None)
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        actual = hashlib.sha256(canonical).hexdigest()
+        if actual != claimed:
+            return (
+                False,
+                previous,
+                f"trial record {index} SHA-256 mismatch",
+            )
+        previous = claimed
+    return True, previous, None
+
+
 _URL_TOKEN_RE = re.compile(r"(?i)([?&](?:token|key|secret|password)=)[^&\s]+")
 
 AGENT_REPLY_SCHEMA: Dict[str, Any] = {
@@ -246,6 +292,7 @@ class Topology:
     worker_ids: List[str] = field(default_factory=list)
     primary_manager_by_worker: Dict[str, str] = field(default_factory=dict)
     release_manager_id: Optional[str] = None
+    alternate_reviewer_pool: List[str] = field(default_factory=list)
     final_reviewer_pool: List[str] = field(default_factory=list)
     blind_final_review: bool = False
     review_policy: str = "approval"
@@ -418,6 +465,7 @@ def get_topology(name: str = "google-rotating") -> Topology:
             delegation_gate=True, required_approvers={"lead"},
             manager_ids=manager_ids, worker_ids=worker_ids,
             primary_manager_by_worker=primary, release_manager_id=release,
+            alternate_reviewer_pool=["manager-a", "manager-b"],
             final_reviewer_pool=["manager-c"], blind_final_review=False,
             review_policy="veto", human_promotion_required=True,
             research_director_id=research_director,
@@ -556,8 +604,15 @@ class Governance:
                 return True, "", None
             if self.topology.review_policy == "veto":
                 preferred = [
-                    manager for manager in self.topology.final_reviewer_pool
-                    if manager not in {primary, self.topology.release_manager_id}
+                    manager for manager in (
+                        self.topology.alternate_reviewer_pool
+                        or self.topology.final_reviewer_pool
+                    )
+                    if manager not in {
+                        primary,
+                        self.topology.release_manager_id,
+                        self.release_reviewer_id,
+                    }
                 ]
             else:
                 preferred = [
@@ -1910,6 +1965,67 @@ def _load_experiment_policy_definition(
                 f"command_exit evaluator {evaluator_id} cannot declare "
                 "JSON hard gates or metrics"
             )
+        raw_resource_limits = raw_evaluator.get("resource_limits", {})
+        if not isinstance(raw_resource_limits, dict):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} resource_limits must "
+                "be an object"
+            )
+        if set(raw_resource_limits) - {
+            "max_threads", "same_host_required",
+        }:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} resource_limits has "
+                "unsupported fields"
+            )
+        max_threads = raw_resource_limits.get("max_threads", 1)
+        same_host_required = raw_resource_limits.get(
+            "same_host_required", True,
+        )
+        if (
+            isinstance(max_threads, bool)
+            or not isinstance(max_threads, int)
+            or max_threads < 1
+            or max_threads > 256
+        ):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} max_threads must be "
+                "between 1 and 256"
+            )
+        if not isinstance(same_host_required, bool):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} "
+                "same_host_required must be Boolean"
+            )
+        raw_change_limits = raw_evaluator.get("change_limits", {})
+        if not isinstance(raw_change_limits, dict):
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} change_limits must "
+                "be an object"
+            )
+        if set(raw_change_limits) - {
+            "max_changed_lines", "max_diff_hunks",
+        }:
+            raise ValueError(
+                f"experiment evaluator {evaluator_id} change_limits has "
+                "unsupported fields"
+            )
+        max_changed_lines = raw_change_limits.get("max_changed_lines", 1000)
+        max_diff_hunks = raw_change_limits.get("max_diff_hunks", 100)
+        for field_name, value, maximum in (
+            ("max_changed_lines", max_changed_lines, 100_000),
+            ("max_diff_hunks", max_diff_hunks, 10_000),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 1
+                or value > maximum
+            ):
+                raise ValueError(
+                    f"experiment evaluator {evaluator_id} {field_name} "
+                    f"must be between 1 and {maximum}"
+                )
         evaluators[evaluator_id] = {
             "id": evaluator_id,
             "commands": commands,
@@ -1920,6 +2036,14 @@ def _load_experiment_policy_definition(
                 value.strip() for value in hard_gates
             )),
             "metrics": metrics,
+            "resource_limits": {
+                "max_threads": max_threads,
+                "same_host_required": same_host_required,
+            },
+            "change_limits": {
+                "max_changed_lines": max_changed_lines,
+                "max_diff_hunks": max_diff_hunks,
+            },
         }
     return {
         "schema": EXPERIMENT_POLICY_SCHEMA,
@@ -2663,6 +2787,8 @@ class OrganizationRunner:
         self.experiment_champions: Dict[str, Dict[str, Any]] = {}
         self.experiment_non_improving: Dict[str, int] = {}
         self.experiment_halted_workers: Set[str] = set()
+        self.experiment_resource_fingerprints: Dict[str, str] = {}
+        self.experiment_ledger_head_sha256: Optional[str] = None
         self._experiment_contract_started: Dict[str, float] = {}
         self._experiment_loop_lock = threading.Lock()
         self.experiment_records: List[Dict[str, Any]] = []
@@ -4271,7 +4397,11 @@ class OrganizationRunner:
                 if self.experiment_policy else None
             ),
             "one_mutable_file": True,
+            "one_host_commit_per_trial": True,
             "baseline_required": True,
+            "ledger_verified": True,
+            "ledger_head_sha256": self.experiment_ledger_head_sha256,
+            "semantic_single_change_proven": False,
             "contracts": [
                 {
                     key: record.get(key)
@@ -5336,6 +5466,7 @@ class OrganizationRunner:
         workspace: Workspace,
         *,
         result_path: Optional[Path],
+        max_threads: int,
     ) -> Dict[str, str]:
         env = os.environ.copy()
         bridge_bin = workspace.cwd / ".venv" / "bin"
@@ -5352,7 +5483,53 @@ class OrganizationRunner:
         env["RECCLI_EXPERIMENT_RUN_ID"] = self.run_id
         if result_path is not None:
             env["RECCLI_EXPERIMENT_RESULT_PATH"] = str(result_path)
+        thread_limit = str(max_threads)
+        for name in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+        ):
+            env[name] = thread_limit
+        env["PYTHONHASHSEED"] = "0"
         return env
+
+    @staticmethod
+    def _experiment_resource_envelope(
+        evaluator: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Describe the enforceable same-host runtime envelope.
+
+        This is deliberately not called hardware normalization: it detects a
+        host/runtime change and fixes common numerical thread pools, but it
+        does not make different CPUs, accelerators, or kernels equivalent.
+        """
+        limits = evaluator["resource_limits"]
+        payload = {
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+            "processor": platform.processor(),
+            "logical_cpu_count": os.cpu_count(),
+            "python_implementation": platform.python_implementation(),
+            "python_version": platform.python_version(),
+            "python_executable": str(Path(sys.executable).resolve()),
+            "max_threads": limits["max_threads"],
+            "python_hash_seed": 0,
+        }
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+        return {
+            "fingerprint": payload,
+            "sha256": hashlib.sha256(canonical).hexdigest(),
+            "same_host_required": limits["same_host_required"],
+            "scope": "same-host runtime envelope; not cross-hardware equivalence",
+        }
 
     def _run_experiment_evaluator(
         self,
@@ -5384,14 +5561,35 @@ class OrganizationRunner:
             if evaluator["result_mode"] == "json_file"
             else None
         )
+        resource_envelope = self._experiment_resource_envelope(evaluator)
+        expected_resource_sha = self.experiment_resource_fingerprints.get(
+            contract["sha256"]
+        )
+        resource_error: Optional[str] = None
+        if expected_resource_sha is None:
+            self.experiment_resource_fingerprints[
+                contract["sha256"]
+            ] = resource_envelope["sha256"]
+        elif (
+            evaluator["resource_limits"]["same_host_required"]
+            and expected_resource_sha != resource_envelope["sha256"]
+        ):
+            resource_error = (
+                "same-host experiment resource fingerprint changed: "
+                f"expected {expected_resource_sha}, got "
+                f"{resource_envelope['sha256']}"
+            )
         environment = self._experiment_environment(
             workspace,
             result_path=result_path,
+            max_threads=evaluator["resource_limits"]["max_threads"],
         )
         command_records: List[Dict[str, Any]] = []
         started = time.monotonic()
         timed_out = False
         for index, command in enumerate(evaluator["commands"], 1):
+            if resource_error:
+                break
             command_started = time.monotonic()
             stdout = ""
             stderr = ""
@@ -5415,8 +5613,14 @@ class OrganizationRunner:
                 stderr = str(exc.stderr or "")
             stdout_path = log_root / f"command-{index:02d}.stdout.txt"
             stderr_path = log_root / f"command-{index:02d}.stderr.txt"
-            stdout_path.write_text(stdout[-1_000_000:], encoding="utf-8")
-            stderr_path.write_text(stderr[-1_000_000:], encoding="utf-8")
+            stdout_bytes = stdout[-1_000_000:].encode(
+                "utf-8", errors="replace",
+            )
+            stderr_bytes = stderr[-1_000_000:].encode(
+                "utf-8", errors="replace",
+            )
+            stdout_path.write_bytes(stdout_bytes)
+            stderr_path.write_bytes(stderr_bytes)
             command_records.append({
                 "argv": list(command["argv"]),
                 "timeout_seconds": command["timeout_seconds"],
@@ -5427,6 +5631,10 @@ class OrganizationRunner:
                 ),
                 "stdout_path": str(stdout_path),
                 "stderr_path": str(stderr_path),
+                "stdout_bytes": len(stdout_bytes),
+                "stderr_bytes": len(stderr_bytes),
+                "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+                "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
                 "stdout_tail": stdout[-4_000:],
                 "stderr_tail": stderr[-4_000:],
             })
@@ -5439,14 +5647,16 @@ class OrganizationRunner:
         metrics: Dict[str, float]
         notes: List[str] = []
         result_sha256: Optional[str] = None
-        result_error: Optional[str] = None
+        result_error: Optional[str] = resource_error
         if evaluator["result_mode"] == "command_exit":
             hard_gates = {"commands_pass": commands_pass}
             metrics = {}
         else:
             hard_gates = {}
             metrics = {}
-            if result_path is None or not result_path.is_file():
+            if result_error:
+                pass
+            elif result_path is None or not result_path.is_file():
                 result_error = (
                     "immutable evaluator did not write "
                     "RECCLI_EXPERIMENT_RESULT_PATH"
@@ -5536,6 +5746,7 @@ class OrganizationRunner:
             "result_sha256": result_sha256,
             "result_error": result_error,
             "commands": command_records,
+            "resource_envelope": resource_envelope,
             "duration_ms": int((time.monotonic() - started) * 1000),
             "evaluated_at": _utc_now(),
         }
@@ -5628,6 +5839,8 @@ class OrganizationRunner:
                 "result_error",
                 "duration_ms",
                 "evaluated_at",
+                "resource_envelope",
+                "patch_shape",
             )
         }
         compact_outcome["notes"] = [
@@ -5644,6 +5857,10 @@ class OrganizationRunner:
                     "duration_ms",
                     "stdout_path",
                     "stderr_path",
+                    "stdout_bytes",
+                    "stderr_bytes",
+                    "stdout_sha256",
+                    "stderr_sha256",
                 )
             }
             for command in outcome.get("commands", [])
@@ -5675,8 +5892,50 @@ class OrganizationRunner:
             "outcome": compact_outcome,
             "ts": _utc_now(),
         }
-        self.experiment_trials.append(record)
-        self._append_jsonl("experiment-loop/trials.jsonl", record)
+        with self._experiment_loop_lock:
+            ledger_path = self.experiment_loop_root / "trials.jsonl"
+            persisted_records: List[Dict[str, Any]] = []
+            if ledger_path.is_file():
+                try:
+                    persisted_records = [
+                        json.loads(line)
+                        for line in ledger_path.read_text(
+                            encoding="utf-8",
+                        ).splitlines()
+                        if line.strip()
+                    ]
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        "experiment trial ledger is not valid JSONL"
+                    ) from exc
+            verified, persisted_head, ledger_error = (
+                verify_experiment_trial_records(persisted_records)
+            )
+            if not verified:
+                raise RuntimeError(
+                    f"experiment trial ledger verification failed: "
+                    f"{ledger_error}"
+                )
+            if (
+                len(persisted_records) != len(self.experiment_trials)
+                or persisted_head != self.experiment_ledger_head_sha256
+            ):
+                raise RuntimeError(
+                    "experiment trial ledger diverged from host memory"
+                )
+            record["previous_record_sha256"] = (
+                self.experiment_ledger_head_sha256
+            )
+            canonical = json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            record["record_sha256"] = hashlib.sha256(canonical).hexdigest()
+            self.experiment_trials.append(record)
+            self.experiment_ledger_head_sha256 = record["record_sha256"]
+            self._append_jsonl("experiment-loop/trials.jsonl", record)
         self._event(
             f"experiment_loop.{verdict}",
             round_number,
@@ -5786,6 +6045,102 @@ class OrganizationRunner:
             reason=reason,
         )
 
+    def _experiment_patch_shape(
+        self,
+        contract: Dict[str, Any],
+        challenger: str,
+    ) -> Dict[str, Any]:
+        workspace = self.workspaces[contract["worker_id"]]
+        parent = _git(
+            workspace.cwd,
+            ["rev-parse", f"{challenger}^"],
+        ).strip()
+        numstat = _git(
+            workspace.cwd,
+            ["diff", "--numstat", parent, challenger, "--"],
+        )
+        added = 0
+        deleted = 0
+        binary = False
+        for line in numstat.splitlines():
+            fields = line.split("\t", 2)
+            if len(fields) < 2 or "-" in fields[:2]:
+                binary = True
+                continue
+            added += int(fields[0])
+            deleted += int(fields[1])
+        patch = _git(
+            workspace.cwd,
+            ["diff", "--unified=0", "--no-ext-diff", parent, challenger, "--"],
+        )
+        diff_hunks = sum(
+            1 for line in patch.splitlines() if line.startswith("@@")
+        )
+        limits = self.experiment_policy["evaluators"][
+            contract["evaluator_id"]
+        ]["change_limits"]
+        changed_lines = added + deleted
+        violations: List[str] = []
+        if binary:
+            violations.append("binary changes are not allowed")
+        if changed_lines > limits["max_changed_lines"]:
+            violations.append(
+                f"changed lines {changed_lines} exceed "
+                f"{limits['max_changed_lines']}"
+            )
+        if diff_hunks > limits["max_diff_hunks"]:
+            violations.append(
+                f"diff hunks {diff_hunks} exceed "
+                f"{limits['max_diff_hunks']}"
+            )
+        return {
+            "parent": parent,
+            "candidate": challenger,
+            "added_lines": added,
+            "deleted_lines": deleted,
+            "changed_lines": changed_lines,
+            "diff_hunks": diff_hunks,
+            "binary": binary,
+            "limits": dict(limits),
+            "passes": not violations,
+            "violations": violations,
+            "scope": (
+                "mechanical atomicity bound; does not prove one semantic idea"
+            ),
+        }
+
+    def _experiment_rejected_outcome(
+        self,
+        contract: Dict[str, Any],
+        *,
+        candidate: str,
+        label: str,
+        patch_shape: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        evaluator = self.experiment_policy["evaluators"][
+            contract["evaluator_id"]
+        ]
+        return {
+            "candidate": candidate,
+            "label": label,
+            "evaluator_id": evaluator["id"],
+            "commands_pass": False,
+            "timed_out": False,
+            "hard_gates": {},
+            "metrics": {},
+            "notes": [],
+            "result_sha256": None,
+            "result_error": (
+                "experiment challenger violates the bounded patch shape: "
+                + "; ".join(patch_shape["violations"])
+            ),
+            "commands": [],
+            "patch_shape": patch_shape,
+            "resource_envelope": self._experiment_resource_envelope(evaluator),
+            "duration_ms": 0,
+            "evaluated_at": _utc_now(),
+        }
+
     def _process_experiment_trial(
         self,
         agent: AgentSpec,
@@ -5821,12 +6176,22 @@ class OrganizationRunner:
             and trial["verdict"] != "baseline"
             for trial in self.experiment_trials
         )
-        outcome = self._run_experiment_evaluator(
-            contract,
-            candidate=challenger,
-            label=f"trial-{trial_number}",
-            round_number=round_number,
-        )
+        patch_shape = self._experiment_patch_shape(contract, challenger)
+        if patch_shape["passes"]:
+            outcome = self._run_experiment_evaluator(
+                contract,
+                candidate=challenger,
+                label=f"trial-{trial_number}",
+                round_number=round_number,
+            )
+            outcome["patch_shape"] = patch_shape
+        else:
+            outcome = self._experiment_rejected_outcome(
+                contract,
+                candidate=challenger,
+                label=f"trial-{trial_number}",
+                patch_shape=patch_shape,
+            )
         champion = self.experiment_champions[contract["sha256"]]
         verdict = self._experiment_verdict(contract, outcome, champion)
         resulting_head = challenger
@@ -6024,6 +6389,11 @@ class OrganizationRunner:
         active_contract_sha = self.active_experiment_by_worker.get(
             agent.agent_id
         )
+        if active_contract_sha and provider_head != previous_head:
+            raise RuntimeError(
+                "an active experiment trial must leave Git history to the "
+                "RecCli host; provider-authored commits are not allowed"
+            )
         normal_turn_paths = {
             path for path in turn_paths if not self._artifact_path(path)
         }
@@ -6614,6 +6984,8 @@ Indexed reference library (read relevant entries on demand):
                             "result_mode": evaluator["result_mode"],
                             "hard_gates": evaluator["hard_gates"],
                             "metrics": evaluator["metrics"],
+                            "resource_limits": evaluator["resource_limits"],
+                            "change_limits": evaluator["change_limits"],
                         }
                         for evaluator in
                         self.experiment_policy["evaluators"].values()
@@ -6662,6 +7034,9 @@ and direct communication with every other manager."""
                 )
                 if contract_sha:
                     contract = self.experiment_contracts[contract_sha]
+                    evaluator = self.experiment_policy["evaluators"][
+                        contract["evaluator_id"]
+                    ]
                     recent_trials = [
                         trial for trial in self.experiment_trials
                         if trial["contract_sha256"] == contract_sha
@@ -6683,6 +7058,12 @@ Recent host-owned baseline/trial results:
 
 For each challenger, make exactly one cohesive change and modify exactly:
 `{contract['mutable_file']}`
+
+RecCli will enforce one host-created commit plus these mechanical patch bounds:
+{json.dumps(evaluator['change_limits'], ensure_ascii=False)}.
+It will run with this same-host resource envelope:
+{json.dumps(evaluator['resource_limits'], ensure_ascii=False)}.
+These bounds do not prove semantic cohesion or cross-hardware equivalence.
 
 Also write exactly one intent to:
 `{self.artifact_staging_prefix}/experiment-loop/trials/current.json`
