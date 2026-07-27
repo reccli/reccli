@@ -25,6 +25,18 @@ mcp = FastMCP("reccli")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def _real_session_files(sessions_dir: Path, newest_first: bool = True):
+    """Recorded sessions, excluding live in-progress snapshots.
+
+    pathlib's glob matches dotfiles, so "*.devsession" picks up ".live_*" too. A
+    reader looking for "the latest session" would then select the snapshot of the
+    conversation currently running, rather than the last finished one.
+    """
+    files = [p for p in sessions_dir.glob("*.devsession") if not p.name.startswith(".live_")]
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=newest_first)
+
+
 def _resolve_root(working_directory: str) -> Optional[Path]:
     from .project.devproject import discover_project_root
     return discover_project_root(Path(working_directory).expanduser().resolve())
@@ -147,6 +159,71 @@ def _detect_provider_from_process_tree() -> Optional[str]:
 
 _CODEX_MODEL_LINE_RE = __import__("re").compile(r'^model\s*=\s*"([^"]+)"')
 
+# Re-exported from session.devsession so the hooks recorder, this module's
+# announcer, and its writer all share one bound. They drifted once (4 vs 2) and
+# sessions in the gap were invisible to the announcer while being first in line
+# for the writer.
+from .session.devsession import MIN_SUMMARIZABLE_MESSAGES as _MIN_SUMMARIZABLE_MESSAGES
+
+def _is_unsummarized(session) -> bool:
+    """True if the session carries no real summary (absent or a known stub)."""
+    from .session.devsession import is_stub_overview
+    return is_stub_overview((session.summary or {}).get("overview", ""))
+
+
+def _is_superseded_snapshot(session, session_path, sessions_dir) -> bool:
+    """True if this session is a stale prefix of a longer, already-summarized sibling.
+
+    A single Claude session can flush more than once, leaving an earlier partial
+    file alongside the complete one. Both share ``claude_session_id``. The partial
+    never gets summarized, so it sits at the head of the "needs summarizing" queue
+    forever and sends agents off to re-summarize content the complete file covers.
+
+    Sharing ``claude_session_id`` is NOT sufficient on its own: one Claude session
+    legitimately spans several distinct devsessions. The superseding sibling must
+    also be at least as long AND already summarized.
+
+    Prefiltered on file size so this does not parse every session in the directory.
+    """
+    csid = (session.metadata or {}).get("claude_session_id")
+    if not csid:
+        return False
+    try:
+        own_len = len(session.conversation)
+    except Exception:
+        return False
+
+    needle = f'"claude_session_id": "{csid}"'
+    compact = f'"claude_session_id":"{csid}"'
+
+    from .session.devsession import DevSession
+    for sf in sessions_dir.glob("*.devsession"):
+        if sf == session_path or sf.name.startswith(".live_"):
+            continue
+        try:
+            # Cheap prefilter: metadata sits near the top of the document, so scan a
+            # header slice for the id instead of parsing multi-MB files. Do NOT
+            # prefilter on file size - a session with MORE messages can be SMALLER on
+            # disk once its tool_response payloads have been extracted to sidecars.
+            with open(sf, "r", encoding="utf-8", errors="ignore") as fh:
+                head = fh.read(65536)
+            if needle not in head and compact not in head:
+                continue
+            other = DevSession.load(sf)
+            if (other.metadata or {}).get("claude_session_id") != csid:
+                continue
+            if _is_unsummarized(other):
+                continue
+            # Delegate to the single definition of "superseded" so this filter and
+            # `reccli doctor` cannot drift apart. They did drift once: the diagnostic
+            # copy omitted the prefix test and flagged real sessions for archival.
+            from .doctor import is_prefix_superseded
+            if is_prefix_superseded(session_path, own_len, sf, len(other.conversation)):
+                return True
+        except Exception:
+            continue
+    return False
+
 
 def _detect_default_model(provider: str) -> Optional[str]:
     """Return the model name configured for the host CLI, or None.
@@ -259,7 +336,7 @@ def _tail_text(path: Path, lines: int) -> str:
 
 def _build_resume_from(sessions_dir: Path) -> Optional[str]:
     """Build a concise 'Resume From' block from the latest session's open issues and next steps."""
-    session_files = sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True)
+    session_files = _real_session_files(sessions_dir)
     if not session_files:
         return None
     try:
@@ -293,7 +370,7 @@ def _collect_pinned_items(sessions_dir: Path, limit: int = 10, max_sessions: int
     from .session.devsession import DevSession
     pinned = []
     session_files = sorted(
-        sessions_dir.glob("*.devsession"),
+        _real_session_files(sessions_dir),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -354,7 +431,9 @@ def _ensure_index(sessions_dir: Path) -> None:
 
     index_path = sessions_dir / "index.json"
     session_files = sorted(
-        list(sessions_dir.glob("*.devsession")) + list(sessions_dir.glob(".live_*.devsession"))
+        # pathlib's glob matches dotfiles, so '*.devsession' already includes
+        # '.live_*.devsession'. Concatenating both scanned every live snapshot twice.
+        sessions_dir.glob("*.devsession")
     )
 
     if not session_files:
@@ -389,7 +468,7 @@ def _ensure_index(sessions_dir: Path) -> None:
 
 def _latest_session_summary(sessions_dir: Path) -> Optional[str]:
     """Load summary from the most recent .devsession file."""
-    session_files = sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True)
+    session_files = _real_session_files(sessions_dir)
     if not session_files:
         return None
     try:
@@ -602,7 +681,13 @@ def load_project_context(working_directory: str) -> str:
             sections.append("## Pinned Memory")
             for p in pinned_items:
                 lock_marker = " [locked]" if p["locked"] else ""
-                sections.append(f"- `{p['id']}`{lock_marker} ({p['category']}): {p['text']}")
+                # Include the session stem: item ids are per-session sequential, so
+                # pin_memory/edit_summary_item now refuse an ambiguous id. Printing
+                # the id alone made unpinning unreachable from the only surface that
+                # shows pinned items.
+                sections.append(
+                    f"- `{p['id']}`{lock_marker} ({p['category']}, session `{p.get('session', '?')}`): {p['text']}"
+                )
             sections.append("")
 
         sections.append("## Last Session")
@@ -613,16 +698,19 @@ def load_project_context(working_directory: str) -> str:
     try:
         from .session.devsession import DevSession
         for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if sf.name.startswith(".live_"):
+                continue  # live snapshots are not summarizable targets
             s = DevSession.load(sf)
-            overview = (s.summary or {}).get("overview", "")
-            is_stub = not overview or overview in ("Session summarized without LLM", "Placeholder summary")
-            if is_stub and len(s.conversation) >= 4:
+            if (_is_unsummarized(s) and len(s.conversation) >= _MIN_SUMMARIZABLE_MESSAGES
+                    and not _is_superseded_snapshot(s, sf, sessions_dir)):
                 sections.append("## ACTION REQUIRED: Previous Session Unsummarized")
                 sections.append(
                     f"The previous session ({sf.name}, {len(s.conversation)} messages) has no structured summary. "
                     "Please read the session conversation using expand_search_result or by reading the file directly, "
                     "analyze the key decisions, code changes, and problems solved, then call "
-                    "summarize_previous_session with your analysis. This links the summary to the full conversation."
+                    f"summarize_previous_session with your analysis AND session_id=\"{sf.stem}\". "
+                    "Always pass session_id so the summary lands on this exact session. "
+                    "This links the summary to the full conversation."
                 )
                 sections.append("")
             break  # Only check the most recent
@@ -2401,7 +2489,7 @@ def list_sessions(
 
     sessions_dir = _sessions_dir(project_root)
     session_files = sorted(
-        sessions_dir.glob("*.devsession"),
+        _real_session_files(sessions_dir),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -2642,6 +2730,7 @@ def save_session_notes(
 
     # Try to get the real conversation from the active WAL
     real_conversation = None
+    wal_session_id = None
     try:
         from .hooks.session_recorder import _find_project_root, _devsession_dir
         sessions_dir = _devsession_dir(project_root)
@@ -2649,6 +2738,13 @@ def save_session_notes(
             lines = wal.read_text(encoding="utf-8").strip().split("\n")
             if len(lines) < 2:
                 continue
+            # Header line carries the Claude session id. Capturing it lets
+            # end_session identify this file by exact id instead of falling back to
+            # a created_at window that any concurrent session also satisfies.
+            try:
+                wal_session_id = (json.loads(lines[0]) or {}).get("session_id") or None
+            except Exception:
+                wal_session_id = None
             records = []
             for line in lines[1:]:
                 if line.strip():
@@ -2678,6 +2774,8 @@ def save_session_notes(
     session.metadata["project_root"] = str(project_root)
     session.metadata["working_directory"] = str(project_root)
     session.metadata["source"] = "mcp_hooks" if real_conversation else "mcp_agent_reported"
+    if wal_session_id:
+        session.metadata["claude_session_id"] = wal_session_id
 
     # Build summary from structured input, with BM25-matched message ranges
     conv_len = len(session.conversation)
@@ -2779,7 +2877,10 @@ def save_session_notes(
 
     # Pre-compute ranges for each summary item
     decision_ranges = [_bm25_message_range(d, conv) for d in (decisions or [])]
-    change_ranges = [_bm25_message_range(f, conv) for f in (files_changed or [])]
+    # Drop null/empty entries before building parallel range lists, so indices stay
+    # aligned and no code_changes item is emitted with files: [None].
+    files_changed = [f for f in (files_changed or []) if f]
+    change_ranges = [_bm25_message_range(f, conv) for f in files_changed]
     problem_ranges = [_bm25_message_range(p, conv) for p in (problems_solved or [])]
     issue_ranges = [_bm25_message_range(issue, conv) for issue in (open_issues or [])]
     step_ranges = [_bm25_message_range(step, conv) for step in (next_steps or [])]
@@ -2993,12 +3094,18 @@ def summarize_previous_session(
     open_issues: list[str] | None = None,
     next_steps: list[str] | None = None,
     files_changed: list[str] | None = None,
+    session_id: str = "",
 ) -> str:
-    """Update the most recent unsummarized session with a structured summary.
+    """Update a specific unsummarized session with a structured summary.
 
     Call this when load_project_context indicates the previous session needs
     summarization. You should read the previous session's conversation first,
     analyze it, then call this with your structured analysis.
+
+    ALWAYS pass session_id. load_project_context names the exact session in its
+    ACTION REQUIRED block; pass that value back. Without it this falls back to
+    "most recent unsummarized on disk", which can resolve to a different session
+    than the one you read, and the summary lands on the wrong file.
 
     Args:
         working_directory: Path to the project.
@@ -3008,6 +3115,8 @@ def summarize_previous_session(
         open_issues: Issues that remained open.
         next_steps: Planned next actions.
         files_changed: Files that were modified.
+        session_id: Session stem (e.g. "07122026_1907") naming the exact target.
+            Strongly recommended. Omit only when no target is known.
     """
     from .session.devsession import DevSession
     from .summarization.summary_schema import ensure_summary_span_links
@@ -3018,31 +3127,62 @@ def summarize_previous_session(
 
     sessions_dir = _sessions_dir(project_root)
 
-    # Find the most recent .devsession with a stub summary (exclude live snapshots)
     target = None
     target_path = None
-    for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
-        if sf.name.startswith(".live_"):
-            continue
+
+    if session_id:
+        # Positive targeting: resolve the named session and refuse to write anywhere else.
+        stem = session_id[:-len(".devsession")] if session_id.endswith(".devsession") else session_id
+        candidate = sessions_dir / f"{stem}.devsession"
+        if not candidate.exists():
+            return f"Session not found: {stem}.devsession. Not writing (no fallback target was chosen)."
         try:
-            s = DevSession.load(sf)
-            summary_overview = (s.summary or {}).get("overview", "")
-            is_stub = not summary_overview or summary_overview in (
-                "Session summarized without LLM", "Placeholder summary"
+            s = DevSession.load(candidate)
+        except Exception as e:
+            return f"Could not load {candidate.name}: {e}. Not writing."
+        if not _is_unsummarized(s):
+            return (
+                f"{candidate.name} already has a summary; refusing to overwrite. "
+                "If you intended to replace it, clear summary in the file first."
             )
-            if is_stub and len(s.conversation) >= 2:
-                target = s
-                target_path = sf
-                break
-        except Exception:
-            continue
+        target, target_path = s, candidate
+    else:
+        # Fallback: most recent unsummarized session on disk (excluding live snapshots).
+        # Shares _MIN_SUMMARIZABLE_MESSAGES with load_project_context so this can never
+        # select a session the announcer considered too short to mention.
+        for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if sf.name.startswith(".live_"):
+                continue
+            try:
+                s = DevSession.load(sf)
+                if (_is_unsummarized(s) and len(s.conversation) >= _MIN_SUMMARIZABLE_MESSAGES
+                        and not _is_superseded_snapshot(s, sf, sessions_dir)):
+                    target = s
+                    target_path = sf
+                    break
+            except Exception:
+                continue
 
     if target is None:
         return "No unsummarized session found."
 
+    # Compare-and-swap: a background summarizer may have finished between the
+    # ACTION REQUIRED announcement and this call. Re-read from disk and bail if
+    # the target is no longer unsummarized, rather than clobbering fresh work.
+    try:
+        if not _is_unsummarized(DevSession.load(target_path)):
+            return (
+                f"{target_path.name} was summarized by another writer just now; "
+                "refusing to overwrite. Re-read it before deciding whether to revise."
+            )
+    except Exception:
+        pass
+
     timestamp = datetime.now().isoformat()
     conv_len = len(target.conversation)
     end_msg = f"msg_{conv_len:03d}"
+    # Never emit code_changes with files: [None] (crashes downstream text composers).
+    files_changed = [f for f in (files_changed or []) if f]
 
     def _make_range():
         return {"start": "msg_001", "end": end_msg, "start_index": 0, "end_index": conv_len}
@@ -3398,6 +3538,37 @@ def preview_context(working_directory: str) -> str:
 
 
 @mcp.tool()
+def doctor(working_directory: str, verbose: bool = False) -> str:
+    """Check this project's memory integrity and report anything failing silently.
+
+    Read-only. Surfaces the failure modes that otherwise produce no signal:
+    sessions on disk that are missing from the search index, summary links that no
+    longer resolve into their conversation, stale partial snapshots, checksums
+    stranded on emptied structures, unflushed write-ahead logs, and feature-map
+    boundary collisions.
+
+    Run this when search results seem incomplete, when a session's history seems to
+    have gone missing, or before relying on project memory for anything important.
+
+    Args:
+        working_directory: Path to the project or any subdirectory within it.
+        verbose: Include every finding and the checks that passed.
+    """
+    from .doctor import run_diagnostics, format_report
+
+    project_root = _resolve_root(working_directory)
+    if project_root is None:
+        return "No project root found."
+
+    try:
+        result = run_diagnostics(project_root)
+    except Exception as e:
+        return f"Diagnostics failed: {e}"
+
+    return format_report(result, verbose=verbose)
+
+
+@mcp.tool()
 def rebuild_index(working_directory: str) -> str:
     """Force a full rebuild of the unified vector index.
 
@@ -3432,12 +3603,22 @@ def rebuild_index(working_directory: str) -> str:
     emb = index.get("embedding", {})
     model = emb.get("model", "?")
     dims = emb.get("dimensions", "?")
-    return (
-        f"Unified index rebuilt.\n"
-        f"  Sessions: {sessions}\n"
-        f"  Vectors: {total}\n"
-        f"  Embedding: {model} ({dims}D)"
-    )
+    lines = [
+        "Unified index rebuilt.",
+        f"  Sessions: {sessions}",
+        f"  Vectors: {total}",
+        f"  Embedding: {model} ({dims}D)",
+    ]
+    # Sessions that failed to load are EXCLUDED from the index. Silently dropping
+    # them made a checksum mismatch look like a clean rebuild, so surface them.
+    skipped = index.get("skipped_sessions") or []
+    if skipped:
+        lines.append(f"  ⚠️  Skipped {len(skipped)} session(s) - NOT searchable:")
+        for s in skipped[:10]:
+            lines.append(f"       {s.get('file')}: {s.get('reason')}")
+        if len(skipped) > 10:
+            lines.append(f"       ... and {len(skipped) - 10} more")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -3503,11 +3684,26 @@ def delete_session(
     return f"Session '{session_id}' {action}.{sidecar_note}{index_note}"
 
 
-def _find_session_with_item(sessions_dir: Path, item_id: str):
-    """Locate the .devsession file containing a given summary item ID."""
+def _find_sessions_with_item(sessions_dir: Path, item_id: str, session_id: str = ""):
+    """Every session containing a given summary item ID.
+
+    Summary item ids are sequential PER SESSION (dec_001, iss_000, ...), not
+    globally unique, so the same id routinely exists in dozens of sessions.
+    Returning all matches lets callers refuse an ambiguous write instead of
+    silently editing whichever file the filesystem happened to yield first.
+    """
     from .session.devsession import DevSession
-    for sf in sessions_dir.glob("*.devsession"):
-        if sf.name.startswith(".live_"):
+
+    if session_id:
+        stem = session_id[:-len(".devsession")] if session_id.endswith(".devsession") else session_id
+        candidates = [sessions_dir / f"{stem}.devsession"]
+    else:
+        candidates = [p for p in sorted(sessions_dir.glob("*.devsession"))
+                      if not p.name.startswith(".live_")]
+
+    matches = []
+    for sf in candidates:
+        if not sf.exists():
             continue
         try:
             s = DevSession.load(sf, verify_checksums=False)
@@ -3518,7 +3714,19 @@ def _find_session_with_item(sessions_dir: Path, item_id: str):
         for cat in ("decisions", "code_changes", "problems_solved", "open_issues", "next_steps"):
             for item in s.summary.get(cat, []):
                 if isinstance(item, dict) and item.get("id") == item_id:
-                    return sf, s, cat, item
+                    matches.append((sf, s, cat, item))
+    return matches
+
+
+def _find_session_with_item(sessions_dir: Path, item_id: str, session_id: str = ""):
+    """Locate the one .devsession containing an item ID, or nothing if ambiguous.
+
+    Refusing on ambiguity is deliberate: picking the first match wrote a
+    correction onto an unrelated session eight days older than the intended one.
+    """
+    matches = _find_sessions_with_item(sessions_dir, item_id, session_id)
+    if len(matches) == 1:
+        return matches[0]
     return None, None, None, None
 
 
@@ -3539,6 +3747,7 @@ def edit_summary_item(
     new_confidence: str = "",
     new_reasoning: str = "",
     new_solution: str = "",
+    session_id: str = "",
 ) -> str:
     """Edit the text or metadata of a specific summary item.
 
@@ -3554,15 +3763,27 @@ def edit_summary_item(
         new_confidence: Optional new confidence level: "low", "medium", "high".
         new_reasoning: Optional new reasoning (for decisions only).
         new_solution: Optional new solution (for problems_solved only).
+        session_id: Session stem (e.g. "07122026_1907") identifying which session's
+            item to edit. Summary item ids are sequential PER SESSION, not globally
+            unique, so pass this whenever you know it. Without it, an id present in
+            more than one session is refused rather than guessed at.
     """
     project_root = _resolve_root(working_directory)
     if project_root is None:
         return "No project root found."
 
     sessions_dir = _sessions_dir(project_root)
-    sf, session, cat, item = _find_session_with_item(sessions_dir, item_id)
-    if item is None:
-        return f"Summary item '{item_id}' not found across any session."
+    matches = _find_sessions_with_item(sessions_dir, item_id, session_id)
+    if not matches:
+        where = f" in {session_id}" if session_id else " across any session"
+        return f"Summary item '{item_id}' not found{where}."
+    if len(matches) > 1:
+        names = ", ".join(sorted(m[0].stem for m in matches)[:8])
+        return (
+            f"'{item_id}' exists in {len(matches)} sessions ({names}). "
+            "Refusing to guess which one you meant - pass session_id to choose."
+        )
+    sf, session, cat, item = matches[0]
 
     if item.get("locked"):
         return f"Item '{item_id}' is locked. Edit rejected — unlock by setting `locked: false` in {sf.name} if this is intentional."
@@ -3602,6 +3823,7 @@ def pin_memory(
     item_id: str,
     working_directory: str,
     unpin: bool = False,
+    session_id: str = "",
 ) -> str:
     """Pin or unpin a summary item so context injection always includes it.
 
@@ -3613,15 +3835,26 @@ def pin_memory(
         item_id: The summary item ID (e.g. "dec_000").
         working_directory: Path to the project.
         unpin: If True, remove the pin instead of adding one.
+        session_id: Session stem identifying which session's item to pin. Item ids
+            are sequential per session, so pass this when known; an ambiguous id is
+            refused rather than guessed at.
     """
     project_root = _resolve_root(working_directory)
     if project_root is None:
         return "No project root found."
 
     sessions_dir = _sessions_dir(project_root)
-    sf, session, cat, item = _find_session_with_item(sessions_dir, item_id)
-    if item is None:
-        return f"Summary item '{item_id}' not found across any session."
+    matches = _find_sessions_with_item(sessions_dir, item_id, session_id)
+    if not matches:
+        where = f" in {session_id}" if session_id else " across any session"
+        return f"Summary item '{item_id}' not found{where}."
+    if len(matches) > 1:
+        names = ", ".join(sorted(m[0].stem for m in matches)[:8])
+        return (
+            f"'{item_id}' exists in {len(matches)} sessions ({names}). "
+            "Refusing to guess which one you meant - pass session_id to choose."
+        )
+    sf, session, cat, item = matches[0]
 
     if item.get("locked") and unpin:
         return f"Item '{item_id}' is locked. Unpinning rejected."
@@ -3665,13 +3898,14 @@ def retry_summarization(
         target_path = candidate
     else:
         from .session.devsession import DevSession
-        for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
-            if sf.name.startswith(".live_"):
-                continue
+        # Same guard triple the other two "most recent unsummarized" readers use, so
+        # this one cannot select a fragment or a superseded partial they refuse.
+        for sf in _real_session_files(sessions_dir):
             try:
                 s = DevSession.load(sf, verify_checksums=False)
-                overview = (s.summary or {}).get("overview", "")
-                if not overview or overview in ("Session summarized without LLM", "Placeholder summary"):
+                if (_is_unsummarized(s)
+                        and len(s.conversation) >= _MIN_SUMMARIZABLE_MESSAGES
+                        and not _is_superseded_snapshot(s, sf, sessions_dir)):
                     target_path = sf
                     break
             except Exception:
@@ -3689,7 +3923,7 @@ def retry_summarization(
             "from reccli.session.devsession import DevSession\n"
             "s = DevSession.load(path)\n"
             "if not s.summary or not s.summary.get('overview','').strip() "
-            "or s.summary.get('overview','') in ('Session summarized without LLM','Placeholder summary'):\n"
+            "or __import__('reccli.session.devsession', fromlist=['x']).is_stub_overview(s.summary.get('overview','')):\n"
             "    s.generate_summary()\n"
             "s.generate_embeddings(force=False, storage_mode='external')\n"
             "for span in s.spans:\n"

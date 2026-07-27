@@ -69,6 +69,16 @@ def main():
         if prompt:
             session_recorder.record_user_prompt(session_id, prompt, cwd)
 
+        # Drain any continuation/drift hint left by the previous Stop hook.
+        # Printed first so it lands above any other reminder in the same turn.
+        try:
+            hint = session_recorder.consume_continuation_hint(session_id, cwd)
+            if hint:
+                print(hint)
+        except Exception:
+            _log_issue("hooks/UserPromptSubmit", "Failed continuation hint consumption",
+                       project_root=project_root)
+
         # Check if approaching compaction threshold — inject pre-compaction reminder
         try:
             reminder = session_recorder.check_precompaction_threshold(session_id, cwd)
@@ -104,6 +114,14 @@ def main():
         message = event.get("last_assistant_message", "")
         if message and not event.get("stop_hook_active"):
             session_recorder.record_assistant_response(session_id, message, cwd)
+            # After persisting the response (incl. extracted session-signal),
+            # compute whether to nudge the next turn with a continuation or
+            # zoom-out hint. Sidecar is consumed by next UserPromptSubmit.
+            try:
+                session_recorder.compute_continuation_hint(session_id, cwd)
+            except Exception:
+                _log_issue("hooks/Stop", "Failed continuation hint computation",
+                           project_root=project_root)
 
     elif hook_name == "PostToolUse":
         tool_name = event.get("tool_name", "")

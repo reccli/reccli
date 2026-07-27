@@ -222,15 +222,15 @@ def _collect_session_context(project_root: Path, feature: Dict[str, Any], limit:
             "path": _rel_path(project_root, session_file),
             "overview": _scrub(summary.get("overview", "")),
             "decisions": [
-                _scrub(item.get("decision") or str(item))
+                _scrub((item.get("decision") if isinstance(item, dict) else None) or str(item))
                 for item in summary.get("decisions", [])[:3]
             ],
             "open_issues": [
-                _scrub(item.get("issue") or str(item))
+                _scrub((item.get("issue") if isinstance(item, dict) else None) or str(item))
                 for item in summary.get("open_issues", [])[:3]
             ],
             "next_steps": [
-                _scrub(item.get("action") or str(item))
+                _scrub((item.get("action") if isinstance(item, dict) else None) or str(item))
                 for item in summary.get("next_steps", [])[:3]
             ],
             "redacted": True,

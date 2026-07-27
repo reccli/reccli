@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -325,12 +326,42 @@ def exec_tool(name, args, sessions_dir, provider):
 
 
 # ---------------------------------------------------------------------------
-# Agentic loop
+# Agentic loop — provider-agnostic dispatcher with one helper per provider.
+# Both share TOOLS, SYSTEM_PROMPT, exec_tool. Only request/response shape differs.
 # ---------------------------------------------------------------------------
 
-def run_agentic(question, sessions_dir, provider, client, model, max_turns=8,
-                max_tokens_per_turn=2000):
-    """Run the agent loop and return (final_answer, turn_count, tool_call_count)."""
+def _openai_tools_from_anthropic(tools):
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            },
+        }
+        for t in tools
+    ]
+
+
+def run_agentic(question, sessions_dir, embed_provider, client, model,
+                llm_provider, max_turns=8, max_tokens_per_turn=2000):
+    """Dispatch to the provider-specific loop. Returns (answer, turns, tool_calls)."""
+    if llm_provider == "anthropic":
+        return _run_agentic_anthropic(
+            question, sessions_dir, embed_provider, client, model,
+            max_turns, max_tokens_per_turn,
+        )
+    if llm_provider == "openai":
+        return _run_agentic_openai(
+            question, sessions_dir, embed_provider, client, model,
+            max_turns, max_tokens_per_turn,
+        )
+    raise ValueError(f"Unsupported llm_provider: {llm_provider}")
+
+
+def _run_agentic_anthropic(question, sessions_dir, embed_provider, client, model,
+                            max_turns, max_tokens_per_turn):
     messages = [{"role": "user", "content": question}]
     tool_calls = 0
 
@@ -345,18 +376,16 @@ def run_agentic(question, sessions_dir, provider, client, model, max_turns=8,
         )
 
         if response.stop_reason == "end_turn":
-            # Extract final text
             text_parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
             return ("\n".join(text_parts).strip() or "(empty)", turn + 1, tool_calls)
 
         if response.stop_reason == "tool_use":
-            # Capture the assistant turn, then execute tools and feed results back
             messages.append({"role": "assistant", "content": response.content})
             tool_results = []
             for block in response.content:
                 if getattr(block, "type", None) == "tool_use":
                     tool_calls += 1
-                    result_text = exec_tool(block.name, block.input, sessions_dir, provider)
+                    result_text = exec_tool(block.name, block.input, sessions_dir, embed_provider)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -365,10 +394,68 @@ def run_agentic(question, sessions_dir, provider, client, model, max_turns=8,
             messages.append({"role": "user", "content": tool_results})
             continue
 
-        # Stopped for other reason (max_tokens, refusal, etc.)
         text_parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
         return (
             f"(stopped: {response.stop_reason}) " + "\n".join(text_parts).strip(),
+            turn + 1,
+            tool_calls,
+        )
+
+    return ("(max turns exceeded)", max_turns, tool_calls)
+
+
+def _run_agentic_openai(question, sessions_dir, embed_provider, client, model,
+                         max_turns, max_tokens_per_turn):
+    openai_tools = _openai_tools_from_anthropic(TOOLS)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": question},
+    ]
+    tool_calls = 0
+
+    for turn in range(max_turns):
+        response = client.chat.completions.create(
+            model=model,
+            max_completion_tokens=max_tokens_per_turn,
+            temperature=0,
+            tools=openai_tools,
+            messages=messages,
+        )
+        choice = response.choices[0]
+        msg = choice.message
+
+        if choice.finish_reason == "stop" or not msg.tool_calls:
+            return ((msg.content or "").strip() or "(empty)", turn + 1, tool_calls)
+
+        if choice.finish_reason == "tool_calls":
+            messages.append({
+                "role": "assistant",
+                "content": msg.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+            for tc in msg.tool_calls:
+                tool_calls += 1
+                try:
+                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except json.JSONDecodeError:
+                    args = {}
+                result_text = exec_tool(tc.function.name, args, sessions_dir, embed_provider)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result_text,
+                })
+            continue
+
+        return (
+            f"(stopped: {choice.finish_reason}) " + (msg.content or "").strip(),
             turn + 1,
             tool_calls,
         )
@@ -380,7 +467,9 @@ def run_agentic(question, sessions_dir, provider, client, model, max_turns=8,
 # Ingest (shared pattern with run_benchmark.py)
 # ---------------------------------------------------------------------------
 
-def ingest_sessions(sessions, dates, session_ids, sessions_dir, provider):
+def ingest_sessions(sessions, dates, session_ids, sessions_dir, provider, summarize=False):
+    summary_ok = 0
+    summary_fail = 0
     for i, (session_msgs, date_str, sid) in enumerate(zip(sessions, dates, session_ids)):
         ds = DevSession(session_id=sid)
         ds.metadata["created_at"] = date_str
@@ -391,38 +480,57 @@ def ingest_sessions(sessions, dates, session_ids, sessions_dir, provider):
                 "content": msg["content"],
                 "timestamp": date_str,
             })
+        if summarize:
+            try:
+                if ds.generate_summary():
+                    summary_ok += 1
+                else:
+                    summary_fail += 1
+            except Exception:
+                summary_fail += 1
         try:
             ds.generate_embeddings(provider=provider, storage_mode="external")
         except Exception:
             pass
         path = sessions_dir / f"session_{i:04d}.devsession"
         ds.save(path, skip_validation=True)
+    return summary_ok, summary_fail
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def run_benchmark(data_path, output_path, limit=None, model="claude-sonnet-4-6", max_turns=6):
-    from reccli.runtime.config import Config
+def run_benchmark(data_path, output_path, limit=None, model=None, max_turns=6,
+                  summarize=False, llm_provider="auto"):
+    from reccli.runtime.config import select_llm_client
 
-    config = Config()
-    anthropic_key = config.get_api_key("anthropic")
-    if not anthropic_key:
-        print("ERROR: Anthropic key required for the agentic runner.")
+    # Propagate explicit CLI choice to all downstream LLM call sites
+    # (summarization, retries) by setting the env var.
+    if llm_provider and llm_provider != "auto":
+        os.environ["RECCLI_LLM_PROVIDER"] = llm_provider
+
+    try:
+        client, default_model, llm_provider_name = select_llm_client(prefer=llm_provider)
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
         sys.exit(1)
 
-    import anthropic
-    client = anthropic.Anthropic(api_key=anthropic_key)
+    if not model:
+        model = default_model
+    print(f"LLM provider: {llm_provider_name} (model={model})")
     provider = get_embedding_provider()
 
     data = json.load(open(data_path))
     if limit:
         data = data[:limit]
-    print(f"Running {len(data)} questions through the agentic RecCli loop (max_turns={max_turns}, model={model})")
+    print(f"Running {len(data)} questions through the agentic RecCli loop "
+          f"(max_turns={max_turns}, model={model}, summarize={summarize})")
 
     results = []
     total_tool_calls = 0
+    total_summary_ok = 0
+    total_summary_fail = 0
     start = time.time()
 
     for i, entry in enumerate(data):
@@ -436,17 +544,21 @@ def run_benchmark(data_path, output_path, limit=None, model="claude-sonnet-4-6",
         sessions_dir.mkdir()
 
         try:
-            ingest_sessions(
+            sok, sfail = ingest_sessions(
                 entry["haystack_sessions"],
                 entry["haystack_dates"],
                 entry["haystack_session_ids"],
                 sessions_dir,
                 provider,
+                summarize=summarize,
             )
+            total_summary_ok += sok
+            total_summary_fail += sfail
             build_unified_index(sessions_dir, verbose=False)
 
             hypothesis, turns, tool_calls = run_agentic(
-                question, sessions_dir, provider, client, model, max_turns=max_turns
+                question, sessions_dir, provider, client, model,
+                llm_provider=llm_provider_name, max_turns=max_turns,
             )
             total_tool_calls += tool_calls
             print(f"→ [turns={turns} tools={tool_calls}] {hypothesis[:60]}")
@@ -473,6 +585,8 @@ def run_benchmark(data_path, output_path, limit=None, model="claude-sonnet-4-6",
     avg_tools = total_tool_calls / len(results) if results else 0
     print(f"\nDone. {len(results)} answers in {elapsed:.1f}s "
           f"(avg {avg_tools:.1f} tool calls/question, total {total_tool_calls})")
+    if summarize:
+        print(f"Summaries: {total_summary_ok} ok, {total_summary_fail} failed")
     print(f"Output: {output_path}")
 
 
@@ -481,9 +595,18 @@ if __name__ == "__main__":
     parser.add_argument("--data", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=None,
+                        help="Override the provider's default model. If unset, uses "
+                             "claude-sonnet-4-6 (anthropic) or gpt-5.4 (openai).")
+    parser.add_argument("--llm-provider", default="auto",
+                        choices=["auto", "anthropic", "openai"],
+                        help="Which LLM provider to use. 'auto' picks the first configured key, "
+                             "preferring Anthropic. Honors RECCLI_LLM_PROVIDER env var.")
     parser.add_argument("--max-turns", type=int, default=8,
                         help="Max agent turns per question (default 8).")
+    parser.add_argument("--summarize", action="store_true",
+                        help="Generate summaries for each ingested session before indexing.")
     args = parser.parse_args()
 
-    run_benchmark(args.data, args.output, args.limit, args.model, args.max_turns)
+    run_benchmark(args.data, args.output, args.limit, args.model, args.max_turns,
+                  summarize=args.summarize, llm_provider=args.llm_provider)

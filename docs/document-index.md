@@ -75,6 +75,8 @@ Dates below are **first seen in git**, not guaranteed filesystem creation dates.
 | Path | First seen | Purpose | Bucket | Action | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `docs/integrations/playwright.md` | 2026-04-26 (working tree) | Playwright screenshot/UX-test integration patterns | reference | keep current | Two flavors: Bash + CLI for single-shot iteration, `@playwright/mcp` for persistent context. RecCli does not bundle Playwright; agent installs on demand. |
+| `docs/integrations/agent-orchestrator.md` | 2026-04-27 (working tree) | Pointer to the external Agent Orchestrator package that composes with RecCli over MCP | reference | keep current | External system at `~/coding-projects/agent-orchestrator/`. Calls `load_project_context`, `audit_feature`, `propose_patch`. Issue-driven loop with executable atomicity contract. Lives outside RecCli to keep memory-engine scope clean. |
+| `docs/integrations/organization-console.md` | 2026-07-17 (working tree) | Local Next.js viewer, durable steering protocol, and hierarchical assignment barrier for organization runs | reference | keep current | Documents the one-command console, eight work streams, operator chat, safe boundary controls, and lead→manager→worker activation contract. |
 
 ## Implementation
 

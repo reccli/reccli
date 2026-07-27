@@ -294,6 +294,78 @@ def _resolve_project_root_arg(project_root_arg: str = None) -> Optional[Path]:
     return discover_project_root(Path.cwd())
 
 
+def cmd_project_repair_boundaries(args):
+    """Narrow feature boundaries that claim another feature's declared territory."""
+    from ..project.devproject import DevProjectManager
+
+    project_root = _resolve_project_root_arg(getattr(args, 'project_root', None))
+    if project_root is None:
+        print("No project root found. Pass --project-root or run inside a project.")
+        return 1
+
+    apply_changes = getattr(args, 'apply', False)
+    report = DevProjectManager(project_root).repair_feature_boundaries(dry_run=not apply_changes)
+
+    if report.get("refused"):
+        print(report["refused"])
+        print(f"\nBoundary overlaps left at {report['overlaps_before']}. Nothing was written.")
+        return 1
+
+    if not report["changed"] and not report["unresolvable"]:
+        # Report the overlap count even when nothing changed, so this cannot print a
+        # clean bill of health for a file `reccli doctor` is warning about.
+        print(f"No repairable boundary conflicts in {report['features']} feature(s).")
+        if report["overlaps_before"]:
+            print(f"{report['overlaps_before']} overlap(s) remain that this tool cannot resolve; "
+                  f"run `reccli doctor --verbose` to see them.")
+        return 0
+
+    print(f"{'Applied' if apply_changes else 'Would change'} {len(report['changed'])} feature(s):\n")
+    for change in report["changed"]:
+        print(f"  {change['feature_id']}  ({change['files']} files)")
+        for boundary in change["before"]:
+            if boundary not in change["after"]:
+                print(f"    - {boundary}")
+        for boundary in change["after"]:
+            if boundary not in change["before"]:
+                print(f"    + {boundary}")
+        print()
+
+    for item in report["unresolvable"]:
+        print(f"  UNRESOLVED  {item['feature_id']}: {item['boundary']}")
+        print(f"              also claimed by {', '.join(item['claimed_also_by'])}")
+        print("              no files_touched of its own to narrow to; left untouched.\n")
+
+    print(f"Boundary overlaps: {report['overlaps_before']} -> {report['overlaps_after']}")
+    if not apply_changes:
+        print("\nDry run. Re-run with --apply to write these changes.")
+    return 0
+
+
+def cmd_doctor(args):
+    """Report memory-integrity problems that otherwise fail silently."""
+    from ..doctor import run_diagnostics, format_report
+
+    project_root = _resolve_project_root_arg(getattr(args, 'project_root', None))
+    if project_root is None:
+        print("No project root found. Pass --project-root or run inside a project.")
+        return 1
+
+    result = run_diagnostics(project_root)
+
+    if getattr(args, 'json', False):
+        print(json.dumps(result, indent=2))
+    else:
+        print(format_report(result, verbose=getattr(args, 'verbose', False)))
+
+    # Non-zero on real problems so this can gate a hook or CI step.
+    if result["counts"]["fail"]:
+        return 1
+    if result["counts"]["warn"] and getattr(args, 'strict', False):
+        return 1
+    return 0
+
+
 def cmd_watch(args):
     """Watch for new terminal windows and auto-launch GUI"""
     return watch_terminals()
@@ -1750,6 +1822,16 @@ Examples:
     export_parser.set_defaults(func=cmd_export)
 
     # Watch command (NEW - Auto-launch GUI for terminals)
+    doctor_parser = subparsers.add_parser(
+        'doctor',
+        help='Check memory integrity: sessions missing from search, broken links, stale index',
+    )
+    doctor_parser.add_argument('--project-root', help='Project root to check (default: discover from cwd)')
+    doctor_parser.add_argument('--verbose', action='store_true', help='Show every finding and passing checks')
+    doctor_parser.add_argument('--json', action='store_true', help='Emit structured JSON')
+    doctor_parser.add_argument('--strict', action='store_true', help='Exit non-zero on warnings too')
+    doctor_parser.set_defaults(func=cmd_doctor)
+
     watch_parser = subparsers.add_parser('watch', help='Watch for new terminal windows and auto-launch GUI')
     watch_parser.set_defaults(func=cmd_watch)
 
@@ -1928,6 +2010,15 @@ Examples:
     project_apply_parser.add_argument('proposal_id', help='Pending proposal ID')
     project_apply_parser.add_argument('--project-root', help='Project root containing .devproject')
     project_apply_parser.set_defaults(func=cmd_project_apply)
+
+    project_repair_parser = project_subparsers.add_parser(
+        'repair-boundaries',
+        help='Narrow feature boundaries that claim another feature\'s declared territory',
+    )
+    project_repair_parser.add_argument('--project-root', help='Project root containing .devproject')
+    project_repair_parser.add_argument('--apply', action='store_true',
+                                       help='Write the changes (default is a dry run)')
+    project_repair_parser.set_defaults(func=cmd_project_repair_boundaries)
 
     project_reject_parser = project_subparsers.add_parser('reject', help='Reject a pending .devproject proposal')
     project_reject_parser.add_argument('proposal_id', help='Pending proposal ID')

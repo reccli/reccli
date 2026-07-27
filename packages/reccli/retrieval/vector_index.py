@@ -193,11 +193,12 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         }
     }
 
-    # Get all session files (including live snapshots), sorted chronologically
-    session_files = sorted(
-        list(sessions_dir.glob('*.devsession')) + list(sessions_dir.glob('.live_*.devsession')),
-        key=lambda f: f.name
-    )
+    # Get all session files (including live snapshots), sorted chronologically.
+    # NOTE: pathlib's glob matches dotfiles, unlike shell/glob.glob, so '*.devsession'
+    # already includes '.live_*.devsession'. Globbing both and concatenating counted
+    # every live snapshot twice.
+    session_files = sorted(sessions_dir.glob('*.devsession'), key=lambda f: f.name)
+    skipped_sessions: List[Dict[str, str]] = []
 
     if not session_files:
         if verbose:
@@ -219,6 +220,11 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
             if getattr(session, "embedding_storage", {}).get("mode") == "external" and not getattr(session, "embedding_storage", {}).get("loaded"):
                 session.load_external_message_embeddings()
         except Exception as e:
+            # Record every skip. This used to be verbose-only, and rebuild_index
+            # calls this with verbose=False, so a session that failed checksum
+            # verification silently disappeared from the index with no output at
+            # any level. Callers must be able to report what was dropped.
+            skipped_sessions.append({"file": session_file.name, "reason": str(e)})
             if verbose:
                 print(f"    ⚠️  Failed to load: {e}")
             continue
@@ -353,7 +359,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         if session.summary:
             TEXT_COMPOSERS = {
                 "decisions": lambda item: f"Decision: {item.get('decision', '')}. Reasoning: {item.get('reasoning', '')}",
-                "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(item.get('files') or [])}",
+                "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(f for f in (item.get('files') or []) if f)}",
                 "problems_solved": lambda item: f"Problem: {item.get('problem', '')}. Solution: {item.get('solution', '')}",
                 "open_issues": lambda item: f"Issue ({item.get('severity', 'medium')}): {item.get('issue', '')}",
                 "next_steps": lambda item: f"Next step (priority {item.get('priority', '?')}): {item.get('action', '')}",
@@ -373,7 +379,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
                     text = composer(item)
                     if len(text.strip()) < 10:
                         continue
-                    mr = item.get("message_range", {})
+                    mr = item.get("message_range") or {}
                     t_first = item.get("t_first") or ""
                     t_last = item.get("t_last", "")
 
@@ -457,6 +463,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
     # Finalize statistics
     index['total_messages'] = vector_offset
     index['total_vectors'] = vector_offset
+    index['skipped_sessions'] = skipped_sessions
     index['statistics']['total_duration_hours'] = round(total_duration / 3600, 2)
 
     if index['total_sessions'] > 0:
@@ -472,9 +479,16 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
         if verbose:
             print(f"  Building numpy embedding cache...")
 
-        embeddings_list = [v['embedding'] for v in index['unified_vectors'] if 'embedding' in v]
+        # The matrix is built from the SUBSET of vectors carrying an inline
+        # embedding, so matrix row i is the i-th such vector, NOT unified_vectors[i].
+        # Record that mapping: without it, search had no way to get back to the right
+        # document and silently assumed row i == vector i.
+        embedding_rows = [i for i, v in enumerate(index['unified_vectors'])
+                          if 'embedding' in v and v['embedding']]
+        embeddings_list = [index['unified_vectors'][i]['embedding'] for i in embedding_rows]
 
         if embeddings_list:
+            index['embedding_row_map'] = embedding_rows
             embeddings_matrix = np.array(embeddings_list, dtype=np.float32)
 
             # Save as binary .npy file (FAST loading with memory-mapping)
@@ -665,7 +679,7 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
     if session.summary:
         _TEXT_COMPOSERS = {
             "decisions": lambda item: f"Decision: {item.get('decision', '')}. Reasoning: {item.get('reasoning', '')}",
-            "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(item.get('files') or [])}",
+            "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(f for f in (item.get('files') or []) if f)}",
             "problems_solved": lambda item: f"Problem: {item.get('problem', '')}. Solution: {item.get('solution', '')}",
             "open_issues": lambda item: f"Issue ({item.get('severity', 'medium')}): {item.get('issue', '')}",
             "next_steps": lambda item: f"Next step (priority {item.get('priority', '?')}): {item.get('action', '')}",
@@ -684,7 +698,7 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
                     'id': f"{session_id}_{item_id}",
                     'session': session_id,
                     'message_id': item_id,
-                    'message_index': item.get("message_range", {}).get("start_index", 0),
+                    'message_index': (item.get("message_range") or {}).get("start_index", 0),
                     'timestamp': t_first or (session.metadata.get('created_at', '') if session.metadata else ''),
                     'section': session.metadata.get('section', 'default') if session.metadata else 'default',
                     'episode_id': None,

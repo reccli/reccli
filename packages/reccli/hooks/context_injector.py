@@ -312,8 +312,12 @@ def _build_project_context(project_root: Path, header: str) -> str:
     try:
         sessions_dir = project_root / "devsession"
         if sessions_dir.exists():
+            # Exclude live snapshots: pathlib globs match dotfiles, so the
+            # in-progress conversation's own snapshot would shadow the newest
+            # finished session in the "Last Session" block.
             session_files = sorted(
-                list(sessions_dir.glob("*.devsession")),
+                [p for p in sessions_dir.glob("*.devsession")
+                 if not p.name.startswith(".live_")],
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
@@ -330,12 +334,15 @@ def _build_project_context(project_root: Path, header: str) -> str:
                         if items:
                             sections.append(f"### {cat.replace('_', ' ').title()}")
                             for item in items[:5]:
-                                text = (
-                                    item.get("decision")
-                                    or item.get("description")
-                                    or item.get("problem")
-                                    or item.get("issue", "")
-                                )
+                                if isinstance(item, dict):
+                                    text = (
+                                        item.get("decision")
+                                        or item.get("description")
+                                        or item.get("problem")
+                                        or item.get("issue", "")
+                                    )
+                                else:
+                                    text = str(item)
                                 sections.append(f"- {text[:100]}")
                     sections.append("")
     except Exception:

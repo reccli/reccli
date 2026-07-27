@@ -5,6 +5,7 @@ Focused regression tests for core persistence and retrieval paths.
 
 import sys
 import tempfile
+import types
 import unittest
 import shutil
 from unittest import mock
@@ -1001,6 +1002,103 @@ class DevSessionRegressionTests(unittest.TestCase):
                 "models/user.py",
                 "config/oauth.py",
             })
+
+    def test_select_llm_client_respects_default_model_provider(self):
+        from reccli.runtime import config as runtime_config
+
+        class FakeConfig:
+            def get_default_model(self):
+                return "gpt5"
+
+            def get_api_key(self, provider):
+                return f"{provider}-key"
+
+        class FakeOpenAI:
+            def __init__(self, api_key):
+                self.api_key = api_key
+
+        class FakeAnthropic:
+            def __init__(self, api_key):
+                self.api_key = api_key
+
+        runtime_config._BROKEN_PROVIDERS.clear()
+        with mock.patch.object(runtime_config, "Config", FakeConfig), \
+                mock.patch.dict(sys.modules, {
+                    "openai": types.SimpleNamespace(OpenAI=FakeOpenAI),
+                    "anthropic": types.SimpleNamespace(Anthropic=FakeAnthropic),
+                }), \
+                mock.patch.dict("os.environ", {}, clear=True):
+            client, model, provider = runtime_config.select_llm_client()
+
+        self.assertEqual(provider, "openai")
+        self.assertEqual(model, "gpt5")
+        self.assertIsInstance(client, FakeOpenAI)
+
+    def test_select_llm_client_env_provider_overrides_default_model_provider(self):
+        from reccli.runtime import config as runtime_config
+
+        class FakeConfig:
+            def get_default_model(self):
+                return "claude"
+
+            def get_api_key(self, provider):
+                return f"{provider}-key"
+
+        class FakeOpenAI:
+            def __init__(self, api_key):
+                self.api_key = api_key
+
+        runtime_config._BROKEN_PROVIDERS.clear()
+        with mock.patch.object(runtime_config, "Config", FakeConfig), \
+                mock.patch.dict(sys.modules, {
+                    "openai": types.SimpleNamespace(OpenAI=FakeOpenAI),
+                }), \
+                mock.patch.dict("os.environ", {"RECCLI_LLM_PROVIDER": "openai"}, clear=True):
+            client, model, provider = runtime_config.select_llm_client()
+
+        self.assertEqual(provider, "openai")
+        self.assertEqual(model, "gpt-5.4")
+        self.assertIsInstance(client, FakeOpenAI)
+
+    def test_devproject_init_uses_provider_selection_when_no_model_given(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            (project_root / ".git").mkdir()
+            (project_root / "README.md").write_text(
+                "# Demo Project\n\nA demo provider-selection project.\n",
+                encoding="utf-8",
+            )
+            (project_root / "src").mkdir()
+            (project_root / "src" / "app.py").write_text("def run():\n    return True\n", encoding="utf-8")
+
+            llm_payload = {
+                "project": {
+                    "name": "Demo Project",
+                    "description": "Provider-selection demo project.",
+                },
+                "features": [
+                    {
+                        "title": "Application Runtime",
+                        "description": "Main application runtime files.",
+                        "files": ["src/app.py"],
+                    }
+                ],
+            }
+            fake_client = _FakeLLMClient(llm_payload)
+
+            manager = DevProjectManager(project_root)
+            with mock.patch(
+                "reccli.runtime.config.select_llm_client",
+                return_value=(fake_client, "gpt5", "openai"),
+            ) as mocked_select:
+                document = manager.initialize_from_codebase(
+                    force=True,
+                    use_llm=True,
+                )
+
+            mocked_select.assert_called_once()
+            self.assertEqual(document["project"]["description"], "Provider-selection demo project.")
+            self.assertEqual(document["features"][0]["title"], "Application Runtime")
 
     def test_devproject_inventory_includes_import_clusters(self):
         with tempfile.TemporaryDirectory() as td:

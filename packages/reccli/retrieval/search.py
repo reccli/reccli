@@ -380,8 +380,23 @@ def dense_search(
     # Convert query to numpy
     query_vector = np.array(query_embedding, dtype=np.float32)
 
-    # All vectors are valid when using pre-built matrix
-    valid_indices = np.arange(len(vectors))
+    # Map matrix rows back to their source vectors.
+    #
+    # The matrix holds only the vectors that carry an inline embedding, so row i is
+    # the i-th SUCH vector, not vectors[i]. `np.arange(len(vectors))` assumed they
+    # were the same, which returned a different document for essentially every hit
+    # and left most of the index unreachable (2.4% on one real store).
+    row_map = index.get('embedding_row_map') if isinstance(index, dict) else None
+    if row_map and len(row_map) == embeddings_matrix.shape[0]:
+        valid_indices = np.asarray(row_map, dtype=int)
+    else:
+        # Older index without the map: recompute with the same predicate the builder
+        # used. If it does not line up, the matrix does not describe these vectors,
+        # and returning confidently wrong documents is worse than returning none.
+        recomputed = [i for i, v in enumerate(vectors) if 'embedding' in v and v['embedding']]
+        if len(recomputed) != embeddings_matrix.shape[0]:
+            return []
+        valid_indices = np.asarray(recomputed, dtype=int)
 
     # Compute ALL cosine similarities at once (single matrix-vector multiplication)
     # This is the key optimization: O(1) operation instead of O(n) loop
@@ -1208,7 +1223,9 @@ def search_by_file(
     results = []
 
     session_files = sorted(
-        list(sessions_dir.glob("*.devsession")) + list(sessions_dir.glob(".live_*.devsession")),
+        # pathlib's glob matches dotfiles, so '*.devsession' already includes
+        # '.live_*.devsession'. Concatenating both scanned every live snapshot twice.
+        sessions_dir.glob("*.devsession"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -1275,7 +1292,9 @@ def search_by_time_range(
     results = []
 
     session_files = sorted(
-        list(sessions_dir.glob("*.devsession")) + list(sessions_dir.glob(".live_*.devsession")),
+        # pathlib's glob matches dotfiles, so '*.devsession' already includes
+        # '.live_*.devsession'. Concatenating both scanned every live snapshot twice.
+        sessions_dir.glob("*.devsession"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -1333,7 +1352,7 @@ def _find_summary_item(summary: Optional[Dict], item_id: str) -> Optional[Dict]:
         return None
     for category in ("decisions", "code_changes", "problems_solved", "open_issues", "next_steps"):
         for item in summary.get(category, []):
-            if item.get("id") == item_id:
+            if isinstance(item, dict) and item.get("id") == item_id:
                 return item
     return None
 

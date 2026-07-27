@@ -5,6 +5,7 @@ Stage 2: Reasoned summary (better model)
 """
 
 import json
+import sys
 import re
 from copy import deepcopy
 from datetime import datetime
@@ -323,7 +324,7 @@ Rules:
             elif hasattr(self.llm_client, "chat"):
                 response = self.llm_client.chat.completions.create(
                     model=span_model,
-                    max_tokens=max_tokens,
+                    max_completion_tokens=max_tokens,
                     temperature=0,
                     messages=[
                         {"role": "system", "content": self.SPAN_DETECTION_PROMPT},
@@ -647,7 +648,7 @@ Rules:
                 # OpenAI client
                 response = self.llm_client.chat.completions.create(
                     model=model,
-                    max_tokens=max_tokens,
+                    max_completion_tokens=max_tokens,
                     temperature=0,
                     messages=[
                         {"role": "system", "content": self.REASONED_SUMMARY_PROMPT},
@@ -660,8 +661,11 @@ Rules:
 
             return self._extract_json_payload(raw_text)
         except Exception as e:
-            print(f"⚠️  LLM summarization failed: {e}")
+            print(f"⚠️  LLM summarization failed: {e}", file=sys.stderr)
             return {
+                # Structured detail so callers can tell a rate limit from a dead key
+                # instead of pattern-matching the overview string.
+                "_failure": {"type": type(e).__name__, "message": str(e)},
                 "overview": f"Summarization failed: {e}",
                 "decisions": [],
                 "code_changes": [],
@@ -679,6 +683,8 @@ Rules:
         categories = ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]
         for cat in categories:
             for item in llm_summary.get(cat, []):
+                if not isinstance(item, dict):
+                    continue
                 mr = item.get("message_range")
                 if not mr or not isinstance(mr, dict):
                     continue
@@ -814,6 +820,8 @@ Rules:
         ordered_ids: List[str] = []
 
         for item in existing + incoming:
+            if not isinstance(item, dict):
+                continue
             item_id = item.get("id")
             if not item_id:
                 continue
@@ -911,6 +919,20 @@ Rules:
         # Normalize LLM output: end_index must be exclusive (LLMs often return inclusive)
         self._normalize_range_indices(llm_summary, len(working))
 
+        # Coerce non-dict items to dicts up front. LLMs occasionally emit a bare string
+        # per item (e.g. "next_steps": ["Fix the parser"]). Every consumer below
+        # dereferences items as dicts - augment_llm_code_changes does change.copy() and
+        # _shift_summary_item_links does item.get(...) - so a string raised AttributeError
+        # out of the detached background finalize subprocess (stderr=DEVNULL), leaving the
+        # session with no summary and never indexed, silently.
+        for _category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:
+            _items = llm_summary.get(_category)
+            if isinstance(_items, list) and any(not isinstance(i, dict) for i in _items):
+                llm_summary[_category] = [
+                    i if isinstance(i, dict) else self._normalize_category_aliases(_category, i)
+                    for i in _items
+                ]
+
         if llm_summary.get("code_changes"):
             llm_summary["code_changes"] = detector.augment_llm_code_changes(
                 llm_summary["code_changes"],
@@ -928,8 +950,18 @@ Rules:
             "next_steps": [],
         }
         for category in ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]:
+            # Normalize BEFORE shifting. _shift_summary_item_links dereferences the
+            # item as a dict, so a bare string from the LLM (e.g. "next_steps":
+            # ["Fix the parser"]) raised AttributeError here. _normalize_category_aliases
+            # already coerces non-dicts into the category's canonical text field, but it
+            # only runs downstream inside _canonicalize_item, so the guard never fired.
             patch[category] = [
-                self._canonicalize_item(category, self._shift_summary_item_links(item, base_index))
+                self._canonicalize_item(
+                    category,
+                    self._shift_summary_item_links(
+                        self._normalize_category_aliases(category, item), base_index
+                    ),
+                )
                 for item in llm_summary.get(category, [])
             ]
         return patch
@@ -1004,7 +1036,8 @@ Rules:
     def _snapshot_summary_ids(self, summary: Dict[str, Any]) -> Dict[str, set]:
         categories = ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]
         return {
-            category: {item.get("id") for item in summary.get(category, []) if item.get("id")}
+            category: {item.get("id") for item in summary.get(category, [])
+                       if isinstance(item, dict) and item.get("id")}
             for category in categories
         }
 
@@ -1118,6 +1151,11 @@ Rules:
         return expanded
 
     def _normalize_category_aliases(self, category: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(item, dict):
+            # LLMs occasionally emit a bare string instead of an item object —
+            # treat it as the category's canonical text field.
+            from .summary_schema import SUMMARY_TEXT_FIELDS
+            item = {SUMMARY_TEXT_FIELDS.get(category, "description"): str(item)}
         normalized = deepcopy(item)
 
         if category == "decisions":

@@ -189,3 +189,149 @@ class Config:
                 return "License key is invalid or expired."
         except Exception:
             return "Could not reach license server. Key saved — will validate next time."
+
+
+# Module-level memoization of providers that have failed during this process.
+# Prevents wasted retries against credit-depleted or auth-broken accounts.
+_BROKEN_PROVIDERS: set = set()
+
+
+def _provider_for_model(model: Optional[str]) -> Optional[str]:
+    """Infer the configured provider from a model alias/name."""
+    model_lower = (model or "").strip().lower()
+    if model_lower.startswith("claude"):
+        return "anthropic"
+    if model_lower.startswith("gpt"):
+        return "openai"
+    return None
+
+
+def _default_model_for_provider(provider: str) -> str:
+    if provider == "anthropic":
+        return "claude-sonnet-4-6"
+    if provider == "openai":
+        return "gpt-5.4"
+    raise RuntimeError(f"Unsupported LLM provider: {provider}")
+
+
+def mark_provider_broken(provider: str) -> None:
+    """Mark a provider unusable for the rest of this process so future
+    select_llm_client() calls skip it. Call this after a failed LLM API
+    call when the failure is provider-fatal (auth, credit, permission)
+    rather than transient (rate-limit, network)."""
+    _BROKEN_PROVIDERS.add(provider)
+
+
+# A provider-fatal failure will recur on every retry; a transient one will not.
+# Calling mark_provider_broken() on a 429 disabled the provider for the rest of
+# the process, and with a single provider configured that made the retry path
+# unreachable: the first rate limit of the session ended summarization entirely.
+_FATAL_MARKERS = (
+    "401", "403", "402",
+    "authentication", "invalid api key", "invalid x-api-key", "no api key",
+    "permission", "unauthorized", "credit balance", "billing", "account is not active",
+)
+_TRANSIENT_MARKERS = (
+    "429", "500", "502", "503", "504",
+    "rate limit", "rate_limit", "overloaded", "capacity",
+    "timeout", "timed out", "connection", "temporarily unavailable", "try again",
+)
+
+
+def is_provider_fatal(error_text: Optional[str]) -> bool:
+    """True only when a failure will recur on every retry with this provider.
+
+    Unknown failures are treated as NOT fatal on purpose. Wrongly disabling a
+    working provider costs the whole session's summarization, while wrongly
+    retrying a genuinely dead one costs one extra call.
+    """
+    text = (error_text or "").lower()
+    if not text:
+        return False
+    if any(marker in text for marker in _TRANSIENT_MARKERS):
+        return False
+    return any(marker in text for marker in _FATAL_MARKERS)
+
+
+def select_llm_client(prefer: str = "auto"):
+    """Pick an LLM client based on configured keys + preference.
+
+    Resolution priority:
+      1. RECCLI_LLM_PROVIDER env var (anthropic | openai) — explicit override
+      2. The `prefer` argument, when it names a provider
+      3. Provider implied by the configured default_model
+      4. Anthropic if its key is configured
+      5. OpenAI if its key is configured
+
+    Skips any provider marked broken via mark_provider_broken().
+
+    Returns (client, default_model, provider_name).
+    Raises RuntimeError if no usable provider is available.
+    """
+    import os
+
+    config = Config()
+    default_model = config.get_default_model()
+    env_pref = (os.environ.get("RECCLI_LLM_PROVIDER") or "").strip().lower()
+    arg_pref = (prefer or "auto").strip().lower()
+
+    def _model_for_provider(provider: str) -> str:
+        if _provider_for_model(default_model) == provider:
+            return default_model
+        return _default_model_for_provider(provider)
+
+    def _try(provider: str):
+        if provider in _BROKEN_PROVIDERS:
+            return None
+        if provider == "anthropic":
+            key = config.get_api_key("anthropic")
+            if not key:
+                return None
+            try:
+                import anthropic
+            except ImportError:
+                return None
+            return anthropic.Anthropic(api_key=key), _model_for_provider(provider), "anthropic"
+        if provider == "openai":
+            key = config.get_api_key("openai")
+            if not key:
+                return None
+            try:
+                from openai import OpenAI
+            except ImportError:
+                return None
+            return OpenAI(api_key=key), _model_for_provider(provider), "openai"
+        return None
+
+    explicit_pref = env_pref or (arg_pref if arg_pref not in {"", "auto"} else "")
+    if explicit_pref:
+        if explicit_pref not in {"anthropic", "openai"}:
+            raise RuntimeError(
+                f"Unsupported LLM provider '{explicit_pref}'. "
+                "Supported providers: anthropic, openai."
+            )
+        result = _try(explicit_pref)
+        if result:
+            return result
+        raise RuntimeError(
+            f"Preferred LLM provider '{explicit_pref}' is not available "
+            f"(no key configured, package missing, or marked broken this run)."
+        )
+
+    provider_order = []
+    default_provider = _provider_for_model(default_model)
+    if default_provider:
+        provider_order.append(default_provider)
+    for provider in ("anthropic", "openai"):
+        if provider not in provider_order:
+            provider_order.append(provider)
+
+    for provider in provider_order:
+        result = _try(provider)
+        if result:
+            return result
+
+    raise RuntimeError(
+        "No LLM provider available. Configure ANTHROPIC_API_KEY or OPENAI_API_KEY "
+        "via 'reccli config' or env vars."
+    )

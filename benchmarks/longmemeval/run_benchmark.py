@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -120,26 +121,25 @@ def answer_question(question, context, client, model):
     return "Error: no LLM client"
 
 
-def run_benchmark(data_path, output_path, limit=None, answer_model="claude-sonnet-4-6"):
+def run_benchmark(data_path, output_path, limit=None, answer_model=None,
+                  llm_provider="auto"):
     """Run the full LongMemEval benchmark."""
-    from reccli.runtime.config import Config
+    from reccli.runtime.config import select_llm_client
 
-    config = Config()
+    if llm_provider and llm_provider != "auto":
+        os.environ["RECCLI_LLM_PROVIDER"] = llm_provider
+
     provider = get_embedding_provider()
 
-    # Set up LLM client for answering
-    anthropic_key = config.get_api_key("anthropic")
-    openai_key = config.get_api_key("openai")
-
-    if anthropic_key:
-        import anthropic
-        llm_client = anthropic.Anthropic(api_key=anthropic_key)
-    elif openai_key:
-        from openai import OpenAI
-        llm_client = OpenAI(api_key=openai_key)
-    else:
-        print("ERROR: No API key for answer generation. Need Anthropic or OpenAI.")
+    try:
+        llm_client, default_model, llm_provider_name = select_llm_client(prefer=llm_provider)
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
         sys.exit(1)
+
+    if not answer_model:
+        answer_model = default_model
+    print(f"LLM provider: {llm_provider_name} (model={answer_model})")
 
     # Load dataset
     print(f"Loading {data_path}...")
@@ -218,7 +218,12 @@ if __name__ == "__main__":
     parser.add_argument("--data", required=True, help="Path to longmemeval JSON file")
     parser.add_argument("--output", required=True, help="Path to output JSONL file")
     parser.add_argument("--limit", type=int, default=None, help="Limit to first N questions")
-    parser.add_argument("--model", default="claude-sonnet-4-6", help="LLM model for answer generation")
+    parser.add_argument("--model", default=None,
+                        help="Override the provider's default answer model.")
+    parser.add_argument("--llm-provider", default="auto",
+                        choices=["auto", "anthropic", "openai"],
+                        help="Which LLM provider to use (default: auto).")
     args = parser.parse_args()
 
-    run_benchmark(args.data, args.output, args.limit, args.model)
+    run_benchmark(args.data, args.output, args.limit, args.model,
+                  llm_provider=args.llm_provider)

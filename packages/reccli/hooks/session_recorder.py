@@ -26,6 +26,13 @@ from ..project.devproject import discover_project_root, default_devsession_path
 # Issue logging — replaces silent `except: pass` in critical paths
 # ---------------------------------------------------------------------------
 
+
+def _min_summarizable() -> int:
+    """Shared summarizable-length bound; see session.devsession."""
+    from ..session.devsession import MIN_SUMMARIZABLE_MESSAGES
+    return MIN_SUMMARIZABLE_MESSAGES
+
+
 def _log_issue(
     component: str,
     message: str,
@@ -136,6 +143,26 @@ def cleanup_bg_tasks(project_root: Path, stale_hours: int = 24) -> int:
         lines = f.read_text().strip().splitlines()
     except Exception:
         return 0
+
+    # Promote background-writer stderr into the issue log before reaping. Capturing
+    # stderr to a file only helps if something reads it; otherwise it is the same
+    # silence in a different location.
+    try:
+        for err_file in (project_root / "devsession").glob(".bg_finalize_*.err"):
+            try:
+                text = err_file.read_text(encoding="utf-8", errors="ignore").strip()
+            except Exception:
+                continue
+            if text:
+                _log_issue(
+                    "session_recorder/background",
+                    f"{err_file.stem.replace('.bg_finalize_', '')} finalize failed: {text[-400:]}",
+                    severity="error",
+                    project_root=project_root,
+                )
+            err_file.unlink(missing_ok=True)
+    except Exception:
+        pass
 
     now = datetime.now()
     kept: List[str] = []
@@ -319,6 +346,49 @@ _PRECOMPACT_TOKEN_THRESHOLD = 800_000
 _PRECOMPACT_BYTE_THRESHOLD = _PRECOMPACT_TOKEN_THRESHOLD * _BYTES_PER_TOKEN  # ~3.2MB WAL
 _REMINDER_SENT_SUFFIX = ".precompact_reminded"
 
+# Continuation hint — Stop hook writes, UserPromptSubmit hook reads + clears.
+# Mirrors the pre-compaction reminder pattern (sidecar file next to WAL) since
+# Stop-hook stdout is not reliably injected into the next turn's context.
+_CONTINUATION_HINT_SUFFIX = ".continuation_hint.json"
+
+# Drift detector: after this many consecutive turns on the same goal, fire a
+# zoom-out re-evaluation prompt instead of a continuation prompt. Default
+# calibrated from observed sessions where meta-loops became noticeable around
+# ~7-10 turns. Override with RECCLI_DRIFT_THRESHOLD env var.
+_DRIFT_TURN_THRESHOLD = int(os.environ.get("RECCLI_DRIFT_THRESHOLD", "10"))
+
+# Heuristic verb list for "this user prompt is asking for code execution" —
+# liberal by design (false positives just nudge the agent toward continuation,
+# which it can ignore; false negatives lose the autonomy benefit entirely).
+_CODE_INTENT_VERBS = {
+    "implement", "fix", "add", "patch", "run", "build", "ship", "apply",
+    "delete", "remove", "modify", "refactor", "write", "edit", "rename",
+    "extract", "inline", "split", "merge", "create", "make", "configure",
+    "update", "wire", "set up", "set-up", "scaffold", "generate", "rewrite",
+    "test", "deploy", "migrate", "rollback", "revert",
+}
+
+# Open-item phrases that mean "this is waiting for user input." Items matching
+# these are stripped before the continuation check fires, since auto-continuing
+# on them would just produce a hint pointing at something the agent can't
+# autonomously act on. Surfaced empirically by the first two live triggers of
+# the continuation hook pointing at "user decides ..." items.
+_USER_DECISION_PHRASES = (
+    "user decides", "user picks", "user chooses", "user confirms",
+    "user approves", "user signs off", "user reviews", "user wants",
+    "user prefers", "ask user", "ask the user", "wait for user",
+    "needs user", "pending user", "user input", "user feedback",
+    "user direction", "user to decide", "user signal", "awaiting user",
+)
+
+
+def _is_user_decision_item(item: str) -> bool:
+    """True if the open item describes work that waits on user input."""
+    if not item:
+        return False
+    p = item.lower()
+    return any(phrase in p for phrase in _USER_DECISION_PHRASES)
+
 
 def check_precompaction_threshold(session_id: str, cwd: str) -> Optional[str]:
     """Check if the WAL is approaching the compaction threshold.
@@ -361,6 +431,255 @@ def check_precompaction_threshold(session_id: str, cwd: str) -> Optional[str]:
         "problems solved this session. This also updates the .devproject feature map. "
         "After saving, you can continue working normally."
     )
+
+
+# ---------------------------------------------------------------------------
+# Continuation + drift detection (autonomous-continuation autopilot)
+# ---------------------------------------------------------------------------
+# The Stop hook computes whether the agent should be nudged to either:
+#   a) drive its own open items forward (continuation), or
+#   b) zoom out and re-evaluate path relevance (drift).
+# The hint is persisted to a sidecar file next to the WAL. The next
+# UserPromptSubmit hook reads, prints (Claude Code injects stdout into the
+# turn context), and clears the file. This mirrors how the pre-compaction
+# reminder works — Stop-hook stdout is not reliably injected, but
+# UserPromptSubmit-hook stdout is.
+
+def _continuation_hint_path(wal: Path) -> Path:
+    return wal.with_suffix(_CONTINUATION_HINT_SUFFIX)
+
+
+def _is_code_intent_prompt(prompt: str) -> bool:
+    """Liberal heuristic: does this user prompt ask for code-side execution?"""
+    if not prompt:
+        return False
+    p = prompt.lower()[:400]
+    return any(v in p for v in _CODE_INTENT_VERBS)
+
+
+def _last_user_prompt_in_wal(wal: Path) -> Optional[str]:
+    """Most recent user prompt in the WAL, or None."""
+    if not wal.exists():
+        return None
+    try:
+        last_prompt: Optional[str] = None
+        for line in wal.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") == "user_prompt":
+                last_prompt = rec.get("content", "")
+        return last_prompt
+    except Exception:
+        return None
+
+
+def _consecutive_same_goal_turns(wal: Path) -> int:
+    """Count consecutive trailing assistant_response records sharing the same goal.
+
+    Goals are compared loosely: lowercased + first 80 chars. Empty goals don't
+    count toward the streak (they reset it).
+    """
+    if not wal.exists():
+        return 0
+    goals: List[str] = []
+    try:
+        for line in wal.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") != "assistant_response":
+                continue
+            sig = rec.get("session_signal") or {}
+            g = (sig.get("goal") or "").strip().lower()[:80]
+            goals.append(g)
+    except Exception:
+        return 0
+
+    if not goals:
+        return 0
+    last = goals[-1]
+    if not last:
+        return 0
+    count = 0
+    for g in reversed(goals):
+        if g == last:
+            count += 1
+        else:
+            break
+    return count
+
+
+def _filter_open_items_by_goal(goal: str, open_items: List[str]) -> Dict[str, Any]:
+    """Filter `open_items` to those plausibly related to `goal`.
+
+    Mirrors the logic in mcp_server.evaluate_continuation but lives here so
+    the Stop hook can call it without importing the heavy mcp_server module.
+    Returns a dict with keys: action, next, remaining, filtered.
+    """
+    if not open_items:
+        return {"action": "done", "next": None, "remaining": [], "filtered": []}
+
+    if not goal:
+        return {
+            "action": "continue", "next": open_items[0],
+            "remaining": list(open_items[1:]), "filtered": [],
+        }
+
+    _STOP = {
+        "the","a","an","and","or","but","in","on","at","to","for","of","with",
+        "by","from","as","is","are","was","were","be","been","being","this","that",
+    }
+    goal_lower = goal.lower()
+    goal_words = {w for w in goal_lower.split() if w not in _STOP and len(w) > 2}
+
+    try:
+        from ..retrieval.query_expansion import _SYNONYM_MAP
+        expanded = set(goal_words)
+        for w in list(goal_words):
+            if w in _SYNONYM_MAP:
+                expanded |= _SYNONYM_MAP[w]
+        goal_words = expanded
+    except Exception:
+        pass
+
+    actionable: List[str] = []
+    filtered: List[str] = []
+    for item in open_items:
+        item_lower = item.lower()
+        item_words = {w for w in item_lower.split() if w not in _STOP and len(w) > 2}
+        overlap = goal_words & item_words
+        substring_match = any(w in item_lower for w in goal_words if len(w) > 3)
+        if overlap or substring_match:
+            actionable.append(item)
+        else:
+            filtered.append(item)
+
+    if not actionable:
+        return {"action": "wait", "next": None, "remaining": [], "filtered": filtered}
+    return {
+        "action": "continue", "next": actionable[0],
+        "remaining": actionable[1:], "filtered": filtered,
+    }
+
+
+def compute_continuation_hint(session_id: str, cwd: str) -> None:
+    """Compute and persist a continuation/drift hint. Called by Stop hook.
+
+    Two checks (drift takes precedence):
+    1. Drift: N consecutive turns on the same goal → zoom-out hint.
+    2. Continuation: prior user prompt was code-intent AND open items exist
+       AND open items pass the goal-relevance filter → continuation hint.
+    """
+    project_root = _find_project_root(cwd, session_id)
+    if project_root is None:
+        return
+    wal = _wal_path(project_root, session_id)
+    if not wal.exists():
+        return
+
+    # Read most recent assistant_response (just appended) for the latest signal.
+    sig: Optional[Dict[str, Any]] = None
+    try:
+        for line in wal.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") == "assistant_response" and rec.get("session_signal"):
+                sig = rec["session_signal"]  # last write wins → latest
+    except Exception:
+        return
+    if sig is None:
+        return
+
+    goal = (sig.get("goal") or "").strip()
+    open_items = sig.get("open") or []
+    if isinstance(open_items, str):
+        open_items = [s.strip() for s in open_items.split(",") if s.strip()]
+
+    # ---- Drift check (takes precedence over continuation) ----
+    streak = _consecutive_same_goal_turns(wal)
+    if streak >= _DRIFT_TURN_THRESHOLD:
+        hint = {
+            "kind": "zoomout",
+            "streak": streak,
+            "goal": goal,
+            "text": (
+                f"[RecCli zoom-out] {streak} consecutive turns on goal '{goal[:80]}'. "
+                "Before continuing, briefly assess whether this is still the highest-leverage "
+                "thing to be working on. Check: (a) project-level priorities (.devproject "
+                "in-progress features, recent open issues across sessions), (b) whether the "
+                "current path has hit diminishing returns. If a pivot is warranted, propose it "
+                "to the user. If the current path is still right, say so explicitly and continue."
+            ),
+        }
+        try:
+            _continuation_hint_path(wal).write_text(json.dumps(hint), encoding="utf-8")
+        except Exception:
+            _log_issue("hooks/Stop", "Failed to write zoomout hint", project_root=project_root)
+        return
+
+    # ---- Continuation check ----
+    if not open_items:
+        return
+
+    # Strip items that wait on user input — auto-continuing on those would
+    # just point the agent at work it can't autonomously execute.
+    actionable_items = [it for it in open_items if not _is_user_decision_item(it)]
+    if not actionable_items:
+        return
+
+    last_prompt = _last_user_prompt_in_wal(wal) or ""
+    if not _is_code_intent_prompt(last_prompt):
+        return
+
+    decision = _filter_open_items_by_goal(goal, actionable_items)
+    if decision["action"] != "continue" or not decision.get("next"):
+        return
+
+    hint = {
+        "kind": "continue",
+        "goal": goal,
+        "next": decision["next"],
+        "remaining": decision.get("remaining", []),
+        "text": (
+            f"[RecCli continuation] Open item to drive next: '{decision['next']}'. "
+            f"Remaining open items after this one: {len(decision.get('remaining', []))}. "
+            "Proceed to execute. If you reach a natural decision point, ask the user; "
+            "otherwise keep going to the next item."
+        ),
+    }
+    try:
+        _continuation_hint_path(wal).write_text(json.dumps(hint), encoding="utf-8")
+    except Exception:
+        _log_issue("hooks/Stop", "Failed to write continuation hint", project_root=project_root)
+
+
+def consume_continuation_hint(session_id: str, cwd: str) -> Optional[str]:
+    """Read + delete a pending continuation hint. Called by UserPromptSubmit hook."""
+    project_root = _find_project_root(cwd, session_id)
+    if project_root is None:
+        return None
+    wal = _wal_path(project_root, session_id)
+    hint_path = _continuation_hint_path(wal)
+    if not hint_path.exists():
+        return None
+    try:
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+    except Exception:
+        try:
+            hint_path.unlink()
+        except Exception:
+            pass
+        return None
+    try:
+        hint_path.unlink()
+    except Exception:
+        pass
+    return data.get("text")
 
 
 def _recover_orphan_wals(project_root: Path, current_session_id: str) -> None:
@@ -428,7 +747,7 @@ def _recover_orphan_wals(project_root: Path, current_session_id: str) -> None:
             live.unlink(missing_ok=True)
 
             # Background finalize (summarize + embed + index)
-            if len(conversation) >= 4:
+            if len(conversation) >= _min_summarizable():
                 _spawn_background_finalize(output_path)
 
         except Exception:
@@ -882,9 +1201,14 @@ def compact_session(session_id: str, cwd: str) -> Optional[Path]:
         output_path = default_devsession_path(project_root)
         session.save(output_path, skip_validation=True)
 
-        # Background summarize the compacted session
-        if len(session.conversation) >= 4:
-            _spawn_background_summarize(output_path)
+        # Background summarize the compacted session.
+        # This called _spawn_background_summarize, which does not exist anywhere in
+        # the package - a rename that missed this site. Every PostCompact raised
+        # NameError, and handle_event logged it as a routine "Failed to compact
+        # session" warning, so post-compaction summarization had never once run.
+        from ..session.devsession import MIN_SUMMARIZABLE_MESSAGES
+        if len(session.conversation) >= MIN_SUMMARIZABLE_MESSAGES:
+            _spawn_background_finalize(output_path)
 
         return output_path
 
@@ -913,6 +1237,9 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
 
     if len(lines) < 2:
         # Header only, no messages recorded
+        # Remove the continuation-hint sidecar with its WAL; leaving it behind
+        # meant a stale hint from a finished session could be consumed by a later one.
+        _continuation_hint_path(wal).unlink(missing_ok=True)
         wal.unlink(missing_ok=True)
         return None
 
@@ -926,6 +1253,9 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
                 continue
 
     if not records:
+        # Remove the continuation-hint sidecar with its WAL; leaving it behind
+        # meant a stale hint from a finished session could be consumed by a later one.
+        _continuation_hint_path(wal).unlink(missing_ok=True)
         wal.unlink(missing_ok=True)
         return None
 
@@ -950,14 +1280,41 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     sessions_dir = _devsession_dir(project_root)
     existing_session = None
     existing_path = None
+
+    # The merge target must belong to THIS session. Selecting purely by mtime let a
+    # session overwrite an unrelated session's conversation while keeping that
+    # session's summary, destroying a transcript and leaving every span_id and
+    # message_range in the surviving summary pointing into the wrong conversation.
+    #
+    # Two ways to establish ownership, in order of strength:
+    #   1. claude_session_id matches exactly.
+    #   2. The file carries no claude_session_id (save_session_notes does not record
+    #      one) but was created at or after this session started, so it cannot be a
+    #      pre-existing session's file.
+    session_started_at = str(header.get("started_at") or "")
+
+    def _belongs_to_this_session(candidate) -> bool:
+        meta = candidate.metadata or {}
+        candidate_sid = meta.get("claude_session_id")
+        if candidate_sid:
+            return candidate_sid == session_id
+        if not session_started_at:
+            return False  # cannot establish ownership; refuse rather than guess
+        created_at = str(meta.get("created_at") or "")
+        return bool(created_at) and created_at >= session_started_at
+
     for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if sf.name.startswith(".live_"):
+            continue
         try:
             candidate = DevSession.load(sf)
-            if candidate.summary and candidate.summary.get("overview", "").strip():
-                # Found a recent file with a real summary — merge into it
-                existing_session = candidate
-                existing_path = sf
-                break
+            if not (candidate.summary and candidate.summary.get("overview", "").strip()):
+                continue
+            if not _belongs_to_this_session(candidate):
+                continue
+            existing_session = candidate
+            existing_path = sf
+            break
         except Exception:
             continue
 
@@ -998,7 +1355,7 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
     breadcrumb.unlink(missing_ok=True)
 
     # Spawn background: summarize (if no summary yet) + embed + index
-    if len(conversation) >= 4:
+    if len(conversation) >= _min_summarizable():
         _spawn_background_finalize(output_path)
 
     return output_path
@@ -1016,7 +1373,7 @@ def _spawn_background_finalize(session_path: Path) -> None:
         "    sys.exit(0)\n"
         "changed = False\n"
         "# Summarize only if no summary exists\n"
-        "if not s.summary or s.summary.get('overview','') in ('','Session summarized without LLM','Placeholder summary'):\n"
+        "if not s.summary or __import__('reccli.session.devsession', fromlist=['x']).is_stub_overview(s.summary.get('overview','')):\n"
         "    s.generate_summary()\n"
         "    changed = True\n"
         "# Always embed — catches new messages from WAL merge\n"
@@ -1029,18 +1386,30 @@ def _spawn_background_finalize(session_path: Path) -> None:
         "if s.summary:\n"
         "    for cat in ['decisions','code_changes','problems_solved','open_issues','next_steps']:\n"
         "        for item in s.summary.get(cat, []):\n"
-        "            item.pop('embedding', None)\n"
+        "            if isinstance(item, dict):\n"
+        "                item.pop('embedding', None)\n"
         "    changed = True\n"
         "if changed:\n"
         "    s.save(path)\n"
         "    from reccli.retrieval.vector_index import build_unified_index\n"
         "    build_unified_index(path.parent, verbose=False)\n"
     )
+    # Capture stderr to a file rather than discarding it. This subprocess does the
+    # summarize + embed + reindex work, and with stderr=DEVNULL a crash inside it
+    # was completely invisible: the session ended up with no summary, was never
+    # indexed, and nothing anywhere recorded why. The doctor's issues.logged check
+    # surfaces whatever lands here.
+    project_root = _find_project_root(Path(str(session_path))) or Path(str(session_path)).parent.parent
+    err_path = _devsession_dir(project_root) / f".bg_finalize_{Path(str(session_path)).stem}.err"
+    try:
+        err_handle = open(err_path, "w", encoding="utf-8")
+    except Exception:
+        err_handle = subprocess.DEVNULL
     try:
         proc = subprocess.Popen(
             [sys.executable, "-c", script, str(session_path)],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=err_handle,
             start_new_session=True,
         )
         register_bg_task(

@@ -5,11 +5,38 @@ Handles reading, writing, and managing .devsession files
 
 import json
 import hashlib
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from ..project.devproject import default_devsession_path
+
+
+# Minimum conversation length for a session to be worth summarizing.
+# Lives here because every consumer already imports this module: the hooks
+# recorder, the MCP server's announcer, and its writer. When two of them held
+# their own literals they drifted (4 vs 2), and sessions in the gap were
+# invisible to the announcer while being first in line for the writer.
+MIN_SUMMARIZABLE_MESSAGES = 4
+
+# Overviews that mean "this session was never really summarized".
+# "Summarization failed: <api error>" is written by the summarizer's own except
+# branch and needs a PREFIX test, which is why it was missing from five of the six
+# guards that used a plain membership tuple: a session whose summarization crashed
+# looked completed forever, was never announced, and was never retried.
+STUB_OVERVIEWS = ("Session summarized without LLM", "Placeholder summary")
+STUB_OVERVIEW_PREFIXES = ("Summarization failed:",)
+
+
+def is_stub_overview(overview: Optional[str]) -> bool:
+    """True if an overview indicates an absent or failed summary."""
+    text = (overview or "").strip()
+    if not text:
+        return True
+    if text in STUB_OVERVIEWS:
+        return True
+    return any(text.startswith(prefix) for prefix in STUB_OVERVIEW_PREFIXES)
 
 
 class DevSession:
@@ -177,7 +204,7 @@ class DevSession:
         for key in current:
             if key in self.checksums:
                 if current[key] != self.checksums[key]:
-                    print(f"⚠️  Checksum mismatch for {key}: data may be corrupted")
+                    print(f"⚠️  Checksum mismatch for {key}: data may be corrupted", file=sys.stderr)
                     return False
 
         return True
@@ -251,6 +278,14 @@ class DevSession:
 
         self.path = path
 
+        # Coerce malformed summary items even when validation is skipped —
+        # every internal caller uses skip_validation=True, and a bare-string
+        # item persisted here crashes every downstream reader.
+        if self.summary:
+            from ..summarization.summary_schema import coerce_summary_items
+            for warning in coerce_summary_items(self.summary, len(self.conversation or [])):
+                print(f"🔧 Summary item coerced before save: {warning}", file=sys.stderr)
+
         # Validate summary before writing (Safeguard #7)
         if not skip_validation and self.summary and self.conversation:
             from ..summarization.summary_verification import SummaryVerifier
@@ -266,25 +301,25 @@ class DevSession:
 
             if not is_valid:
                 # Try auto-fix
-                print("⚠️  Summary validation failed before save:")
+                print("⚠️  Summary validation failed before save:", file=sys.stderr)
                 for category, category_errors in errors.items():
                     if category_errors:
-                        print(f"  {category}:")
+                        print(f"  {category}:", file=sys.stderr)
                         for err in category_errors:
-                            print(f"    - {err}")
+                            print(f"    - {err}", file=sys.stderr)
 
                 fixed_summary, warnings = verifier.auto_fix_summary(self.summary)
 
                 if warnings:
-                    print("🔧 Auto-fixing summary:")
+                    print("🔧 Auto-fixing summary:", file=sys.stderr)
                     for warning in warnings:
-                        print(f"  - {warning}")
+                        print(f"  - {warning}", file=sys.stderr)
 
                 # Validate fixed summary
                 is_valid_after_fix, errors_after_fix = verifier.verify_summary(fixed_summary)
 
                 if is_valid_after_fix:
-                    print("✅ Summary fixed successfully")
+                    print("✅ Summary fixed successfully", file=sys.stderr)
                     self.summary = fixed_summary
                 else:
                     raise ValueError(
@@ -471,10 +506,10 @@ class DevSession:
             categories = ["decisions", "code_changes", "problems_solved", "open_issues", "next_steps"]
             frontier_end = max(
                 (
-                    item.get("message_range", {}).get("end_index")
+                    (item.get("message_range") or {}).get("end_index")
                     for category in categories
                     for item in self.summary.get(category, [])
-                    if isinstance(item.get("message_range", {}).get("end_index"), int)
+                    if isinstance((item.get("message_range") or {}).get("end_index"), int)
                 ),
                 default=None,
             )
@@ -740,59 +775,79 @@ class DevSession:
         if not self.conversation:
             # Try to parse from terminal events first
             if not self.auto_parse_conversation():
-                print("⚠️  No conversation to summarize")
+                print("⚠️  No conversation to summarize", file=sys.stderr)
                 return False
 
         # Calculate session hash for provenance
         session_str = json.dumps(self.conversation, sort_keys=True)
         session_hash = hashlib.blake2b(session_str.encode(), digest_size=16).hexdigest()
 
-        # Auto-create LLM client: try Anthropic first, fall back to OpenAI
+        # Auto-pick LLM client unless caller provided one. When auto-picked, we
+        # remember the provider name so we can mark it broken and fall back if
+        # the call silently stubs out (the summarizer catches API errors and
+        # returns a stub summary with overview="Summarization failed: ...").
+        from ..runtime.config import select_llm_client, mark_provider_broken
         model = None
+        provider_name = None
         if llm_client is None:
-            from ..runtime.config import Config
-            config = Config()
-
-            # Try Anthropic
             try:
-                import anthropic
-                api_key = config.get_api_key("anthropic")
-                if api_key:
-                    llm_client = anthropic.Anthropic(api_key=api_key)
-                    model = "claude-sonnet-4-6"
-            except Exception:
-                pass
+                llm_client, model, provider_name = select_llm_client()
+            except RuntimeError as e:
+                print(f"⚠️  No LLM provider available: {e}", file=sys.stderr)
+                return False
 
-            # Fall back to OpenAI
-            if llm_client is None:
+        def _is_stub(s):
+            return bool(s) and isinstance(s.get("overview"), str) \
+                and s["overview"].startswith("Summarization failed")
+
+        def _run(client, mdl):
+            kwargs = {"llm_client": client}
+            if mdl:
+                kwargs["model"] = mdl
+            summarizer = SessionSummarizer(**kwargs)
+            print(f"📝 Generating summary for {len(self.conversation)} messages...", file=sys.stderr)
+            return summarizer.summarize_session(
+                self.conversation,
+                session_hash=session_hash,
+                redact_secrets=redact_secrets,
+            )
+
+        self.summary = _run(llm_client, model)
+
+        # Retry once on failure, but only disable the provider when the failure is
+        # actually provider-fatal. Marking it broken on any stub meant a single 429
+        # took the provider out for the rest of the process, and with one provider
+        # configured that left no alternate to fall back to - so the first rate
+        # limit of a session ended summarization entirely.
+        if _is_stub(self.summary) and provider_name:
+            from ..runtime.config import is_provider_fatal
+            failure = (self.summary or {}).get("_failure") or {}
+            detail = failure.get("message") or (self.summary or {}).get("overview", "")
+
+            if is_provider_fatal(detail):
+                mark_provider_broken(provider_name)
+                print(f"⚠️  Provider '{provider_name}' is unusable ({detail[:120]}); "
+                      f"retrying with alternate provider", file=sys.stderr)
                 try:
-                    from openai import OpenAI
-                    api_key = config.get_api_key("openai")
-                    if api_key:
-                        llm_client = OpenAI(api_key=api_key)
-                        model = "gpt-5.4"
-                except Exception:
-                    pass
+                    alt_client, alt_model, alt_name = select_llm_client()
+                    self.summary = _run(alt_client, alt_model)
+                    provider_name = alt_name
+                except RuntimeError as e:
+                    print(f"⚠️  No alternate provider available: {e}", file=sys.stderr)
+            else:
+                print(f"⚠️  Provider '{provider_name}' failed transiently ({detail[:120]}); "
+                      f"retrying on the same provider", file=sys.stderr)
+                self.summary = _run(llm_client, model)
 
-        # Create summarizer
-        kwargs = {"llm_client": llm_client}
-        if model:
-            kwargs["model"] = model
-        summarizer = SessionSummarizer(**kwargs)
-
-        # Generate summary
-        print(f"📝 Generating summary for {len(self.conversation)} messages...")
-        self.summary = summarizer.summarize_session(
-            self.conversation,
-            session_hash=session_hash,
-            redact_secrets=redact_secrets
-        )
         from ..summarization.summary_schema import ensure_summary_span_links
 
         self.spans = ensure_summary_span_links(self.summary, self.spans)
         self.refresh_summary_sync()
 
-        print("✅ Summary generated successfully")
+        if _is_stub(self.summary):
+            print("❌ Summary generation failed across all available providers", file=sys.stderr)
+            return False
+        print("✅ Summary generated successfully", file=sys.stderr)
         return True
 
     def generate_embeddings(self, provider=None, force: bool = False, storage_mode: Optional[str] = None) -> int:
@@ -813,7 +868,7 @@ class DevSession:
         from datetime import datetime
 
         if not self.conversation:
-            print("⚠️  No conversation to embed")
+            print("⚠️  No conversation to embed", file=sys.stderr)
             return 0
 
         # Get provider
@@ -829,8 +884,8 @@ class DevSession:
                     existing_model = first_msg['embed_model']
 
             if existing_model == provider.model_name:
-                print(f"⚠️  Embeddings already exist for model {existing_model}")
-                print(f"   Use force=True to re-embed")
+                print(f"⚠️  Embeddings already exist for model {existing_model}", file=sys.stderr)
+                print(f"   Use force=True to re-embed", file=sys.stderr)
                 return 0
 
         # Filter messages to embed (skip if already embedded and not forcing)
@@ -845,17 +900,17 @@ class DevSession:
                 indices_to_embed.append(i)
 
         if not messages_to_embed:
-            print("✓ All messages already embedded")
+            print("✓ All messages already embedded", file=sys.stderr)
             return 0
 
         # Batch embed all messages
         texts = [msg['content'] for msg in messages_to_embed]
-        print(f"🔮 Generating embeddings for {len(texts)} messages using {provider.model_name}...")
+        print(f"🔮 Generating embeddings for {len(texts)} messages using {provider.model_name}...", file=sys.stderr)
 
         try:
             embeddings = provider.embed_batch(texts)
         except Exception as e:
-            print(f"❌ Embedding failed: {e}")
+            print(f"❌ Embedding failed: {e}", file=sys.stderr)
             return 0
 
         # Attach embeddings to messages
@@ -879,7 +934,7 @@ class DevSession:
             self.externalize_message_embeddings()
 
         total = len(embeddings) + span_count + summary_count
-        print(f"✓ Generated {total} embeddings ({provider.dimensions}D): {len(embeddings)} messages, {span_count} spans, {summary_count} summary items")
+        print(f"✓ Generated {total} embeddings ({provider.dimensions}D): {len(embeddings)} messages, {span_count} spans, {summary_count} summary items", file=sys.stderr)
         return total
 
     def _embed_spans(self, provider, embed_ts: str, force: bool) -> int:
@@ -932,7 +987,7 @@ class DevSession:
 
         TEXT_COMPOSERS = {
             "decisions": lambda item: f"Decision: {item.get('decision', '')}. Reasoning: {item.get('reasoning', '')}",
-            "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(item.get('files') or [])}",
+            "code_changes": lambda item: f"Code change: {item.get('description', '')}. Files: {', '.join(f for f in (item.get('files') or []) if f)}",
             "problems_solved": lambda item: f"Problem: {item.get('problem', '')}. Solution: {item.get('solution', '')}",
             "open_issues": lambda item: f"Issue ({item.get('severity', 'medium')}): {item.get('issue', '')}",
             "next_steps": lambda item: f"Next step (priority {item.get('priority', '?')}): {item.get('action', '')}",

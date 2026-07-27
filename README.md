@@ -1,6 +1,6 @@
-# reccli
+# RecCli
 
-reccli is a temporal memory engine for coding agents.
+RecCli ("reck-lee") is a temporal memory engine for coding agents.
 
 Its core idea is a tri-layer memory system:
 
@@ -12,7 +12,7 @@ with temporal-semantic links between the layers so an agent can recover exact pr
 
 ## MCP Server
 
-reccli runs as an MCP server, giving compatible coding agents persistent project memory.
+RecCli runs as an MCP server, giving compatible coding agents persistent project memory.
 
 ### Codex / ChatGPT
 
@@ -165,7 +165,7 @@ The result: session #10 on a project is dramatically better than session #1, bec
 
 ## Standalone CLI
 
-reccli also works as a standalone CLI for direct session management:
+RecCli also works as a standalone CLI for direct session management:
 
 ```bash
 PYTHONPATH=packages python3 -m reccli.runtime.cli --help

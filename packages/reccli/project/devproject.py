@@ -9,10 +9,11 @@ import importlib
 import json
 import math
 import re
+import sys
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 FORMAT_VERSION = "2.1.0"
@@ -30,6 +31,14 @@ IGNORED_DIRS = {
     "__pycache__", ".pytest_cache", ".mypy_cache",
     ".venv", "venv", "coverage", ".coverage",
 }
+
+# RecCli's own session storage, excluded ONLY at the project root. It is never
+# project source: scanning it pulled agent-organization context-pack copies and
+# evidence snapshots into the feature map (11% of scan2param's inventory), where
+# duplicated test files inflated the "testing" domain.
+# Matched root-relative on purpose - a nested source dir such as src/devsession/
+# is legitimate project code and must still be inventoried.
+ROOT_ONLY_IGNORED_DIRS = {"devsession"}
 JS_LIKE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
 PYTHON_EXTENSIONS = {".py"}
 KEY_FILE_NAMES = {
@@ -427,6 +436,27 @@ class DevProjectManager:
         _, proposal = self.generate_sync_proposal_from_codebase()
         if proposal is not None:
             document, _ = self.apply_proposal(proposal["proposal_id"])
+
+        # DEVPROJECT_FORMAT.md requires a warning when features claim the same
+        # boundary, but the check was only wired into apply_proposal, never into the
+        # scan path that creates these features. So an auto-generated boundary could
+        # subsume eight other features and be written with no signal at all.
+        # Attached to the returned document (after save, so it is not persisted) for
+        # callers to surface.
+        try:
+            overlaps = self.detect_boundary_overlaps(document)
+        except Exception:
+            overlaps = []
+        if overlaps:
+            document["_boundary_overlaps"] = overlaps
+            # NEVER print to stdout here: this is reachable from the project_init MCP
+            # tool, and mcp_server runs on stdio transport where stdout IS the
+            # JSON-RPC channel. Callers surface the warning from _boundary_overlaps.
+            print(
+                f"⚠️  {len(overlaps)} boundary overlap(s) detected: feature ownership is "
+                f"ambiguous and agent dispatch cannot route safely. Run `reccli doctor` for detail.",
+                file=sys.stderr,
+            )
         return document
 
     def validate_and_fix_file_paths(self) -> Dict[str, Any]:
@@ -1586,10 +1616,24 @@ class DevProjectManager:
             ))
         return features
 
+    def _is_root_ignored(self, path: Path) -> bool:
+        """True if path sits under a directory ignored only at the project root.
+
+        Root-relative on purpose: 'devsession' at the root is RecCli's own storage,
+        but a nested 'src/devsession/' is legitimate project source.
+        """
+        try:
+            rel = path.relative_to(self.project_root)
+        except ValueError:
+            return False
+        return bool(rel.parts) and rel.parts[0] in ROOT_ONLY_IGNORED_DIRS
+
     def _should_include_code_file(self, path: Path) -> bool:
         if not path.is_file():
             return False
         if any(part in IGNORED_DIRS for part in path.parts):
+            return False
+        if self._is_root_ignored(path):
             return False
         if path.name.startswith(".") and path.suffix not in CODE_EXTENSIONS:
             return False
@@ -1599,6 +1643,8 @@ class DevProjectManager:
         if not path.is_file():
             return False
         if any(part in IGNORED_DIRS for part in path.parts):
+            return False
+        if self._is_root_ignored(path):
             return False
         suffix = path.suffix.lower()
         if path.name.startswith(".") and suffix not in CODE_EXTENSIONS and suffix not in DOC_EXTENSIONS:
@@ -2496,11 +2542,16 @@ class DevProjectManager:
             add("route", match)
             if "webhook" in match.lower():
                 add("webhook", match)
-        for match in re.findall(r"\w+\.(?:get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]", text):
+        # Non-decorator route registration, e.g. app.get("/users", handler).
+        # The captured literal MUST look like a URL path. Without the leading-slash
+        # requirement these match ordinary member calls - receipt.get("watertight"),
+        # region.get("name"), JS map.get("key") - and a single bogus "route" artifact
+        # is enough to seed a project into the api_routes domain on its own.
+        for match in re.findall(r"\w+\.(?:get|post|put|patch|delete)\(\s*['\"](/[^'\"]+)['\"]", text):
             add("route", match)
             if "webhook" in match.lower():
                 add("webhook", match)
-        for match in re.findall(r"\w+\.route\(\s*['\"]([^'\"]+)['\"]", text):
+        for match in re.findall(r"\w+\.route\(\s*['\"](/[^'\"]+)['\"]", text):
             add("route", match)
             if "webhook" in match.lower():
                 add("webhook", match)
@@ -2820,9 +2871,14 @@ class DevProjectManager:
         from ..runtime.config import Config
         from ..summarization.summarizer import SessionSummarizer
 
-        cfg = Config()
-        resolved_model = model or cfg.get_default_model()
-        client = llm_client or create_llm_client_for_model(resolved_model)
+        if llm_client is None and model is None:
+            from ..runtime.config import select_llm_client
+
+            client, resolved_model, _provider_name = select_llm_client()
+        else:
+            cfg = Config()
+            resolved_model = model or cfg.get_default_model()
+            client = llm_client or create_llm_client_for_model(resolved_model)
         summarizer = SessionSummarizer(llm_client=client, model=resolved_model)
 
         readme_content = self._read_readme_for_clustering()
@@ -3425,6 +3481,15 @@ Return valid JSON only:
         refined: List[Dict[str, Any]] = []
         generic_titles = {"runtime", "core", "engine", "backend", "system"}
 
+        # Every file claimed anywhere in the map. Used to decide whether a directory
+        # is exclusive to the feature being minted, so a derived glob cannot silently
+        # swallow a neighbouring feature's code.
+        all_claimed_files: set = set()
+        for feature in features:
+            all_claimed_files |= set(feature.get("files_touched", []))
+        for candidate in candidate_map.values():
+            all_claimed_files |= set(candidate.get("files", []))
+
         for feature in features:
             title_terms = set(_normalize_text(feature.get("title", "")).split())
             feature_files = set(feature.get("files_touched", []))
@@ -3451,7 +3516,14 @@ Return valid JSON only:
                     title=candidate["title"],
                     description=f"Code contributing to {candidate['title'].lower()}.",
                     files=sorted(overlap),
-                    file_boundaries=candidate["boundaries"] or self._candidate_boundaries(sorted(overlap)),
+                    # Derive boundaries from the files this feature actually owns.
+                    # candidate["boundaries"] describes the whole cross-repo domain
+                    # group, so using it here declared a scope far wider than the
+                    # feature's contents - that mismatch is what produced a boundary
+                    # subsuming eight other features.
+                    file_boundaries=self._candidate_boundaries(
+                        sorted(overlap), others=all_claimed_files - overlap
+                    ),
                     source=feature.get("source", "auto"),
                     status=feature.get("status", "in-progress"),
                 ))
@@ -3460,7 +3532,9 @@ Return valid JSON only:
             if remainder:
                 residual = deepcopy(feature)
                 residual["files_touched"] = remainder
-                residual["file_boundaries"] = self._candidate_boundaries(remainder)
+                residual["file_boundaries"] = self._candidate_boundaries(
+                    remainder, others=all_claimed_files - set(remainder)
+                )
                 refined.append(residual)
 
         return self._deduplicate_features(refined)
@@ -4387,6 +4461,260 @@ Return valid JSON only:
 
         return overlaps
 
+    def _tracked_files(self) -> List[str]:
+        """Repo-relative paths that actually exist, for coverage accounting."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "-C", str(self.project_root), "ls-files"],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            tracked = [line for line in result.stdout.splitlines() if line.strip()]
+            if tracked:
+                return tracked
+        except Exception:
+            pass
+        # Not a git repo: walk the filesystem. Falling back to files_touched would
+        # make the coverage invariant VACUOUS, because a narrowed boundary still
+        # covers its own evidence by construction - that is precisely why the
+        # ownership loss went undetected in the first place.
+        files: List[str] = []
+        for path in self.project_root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                rel = path.relative_to(self.project_root)
+            except ValueError:
+                continue
+            if any(part in IGNORED_DIRS for part in rel.parts):
+                continue
+            if rel.parts and rel.parts[0] in ROOT_ONLY_IGNORED_DIRS:
+                continue
+            if rel.suffix == ".devproject":
+                continue
+            files.append(rel.as_posix())
+        return sorted(files)
+
+    def _count_covered_files(
+        self,
+        document: Dict[str, Any],
+        boundaries_by_feature: Dict[Any, List[str]],
+    ) -> int:
+        """How many real files at least one feature declares ownership of."""
+        prefixes = []
+        for boundaries in boundaries_by_feature.values():
+            for boundary in boundaries:
+                text = str(boundary)
+                prefixes.append(text[:-2].rstrip("/") if text.endswith("/**") else text)
+        if not prefixes:
+            return 0
+        return sum(
+            1 for path in self._tracked_files()
+            if any(path == p or path.startswith(p + "/") for p in prefixes)
+        )
+
+    def repair_feature_boundaries(self, dry_run: bool = True) -> Dict[str, Any]:
+        """Narrow only those boundaries that demonstrably claim another feature's code.
+
+        A boundary is left alone unless it actually conflicts. Re-deriving every
+        boundary from ``files_touched`` is tempting but wrong: the spec is explicit
+        that ``files_touched`` records what sessions modified while
+        ``file_boundaries`` declares what a feature should own. Deriving authority
+        from evidence inverts that, and in practice it strips correct declarations
+        that simply have no session evidence yet, and pulls in files that belong to
+        a neighbour.
+
+        So the rule here is narrow: a boundary is rewritten only when another
+        feature claims paths beneath it, and only ever to the subset this feature
+        has its own evidence for. A conflicting boundary with no such evidence is
+        reported as unresolvable rather than guessed at.
+
+        Returns a report. With ``dry_run`` (the default) nothing is written.
+        """
+        document = self.load_or_create()
+        features = document.get("features") or []
+
+        files_by_feature = {
+            f.get("feature_id"): set(f.get("files_touched") or []) for f in features
+        }
+        all_files: set = set()
+        for owned in files_by_feature.values():
+            all_files |= owned
+
+        before_overlaps = len(self.detect_boundary_overlaps(document))
+        changes: List[Dict[str, Any]] = []
+        unresolvable: List[Dict[str, Any]] = []
+        reassigned: List[Dict[str, Any]] = []
+
+        # Snapshot every feature's DECLARED boundaries before touching anything.
+        # Reading them live while rewriting in the same loop meant a later feature
+        # saw earlier features' already-narrowed boundaries, so dry_run (which never
+        # writes) and apply produced different results from identical input.
+        declared_snapshot = {
+            f.get("feature_id"): [str(b) for b in (f.get("file_boundaries") or [])]
+            for f in features
+        }
+        declared_by_others: Dict[Any, set] = {}
+        for owner_id in declared_snapshot:
+            scope: set = set()
+            for other_id, boundaries in declared_snapshot.items():
+                if other_id == owner_id:
+                    continue
+                for text in boundaries:
+                    scope.add(text[:-2] if text.endswith("/**") else text)
+            declared_by_others[owner_id] = scope
+
+        for feature in features:
+            fid = feature.get("feature_id")
+            own_files = files_by_feature.get(fid, set())
+            current = sorted(feature.get("file_boundaries") or [])
+            kept: List[str] = []
+            rewrote = False
+
+            for boundary in current:
+                if not boundary.endswith("/**"):
+                    kept.append(boundary)
+                    continue
+                scope = boundary[:-2]                     # "a/**" -> "a/"
+
+                # Exact duplicate: two features declaring the identical territory.
+                # There is no narrowing that helps here, but there IS a correct
+                # answer - give it to whichever feature has more evidence under it
+                # and drop it from the others. Coverage is preserved exactly,
+                # because one feature still claims the whole region.
+                duplicate_claimants = sorted(
+                    other_id for other_id, boundaries in declared_snapshot.items()
+                    if other_id != fid and boundary in boundaries
+                )
+                if duplicate_claimants:
+                    contenders = [fid] + duplicate_claimants
+                    def _evidence(candidate_id):
+                        owned = files_by_feature.get(candidate_id, set())
+                        return (sum(1 for p in owned if p.startswith(scope)), str(candidate_id))
+                    winner = max(contenders, key=_evidence)
+                    if winner == fid:
+                        kept.append(boundary)
+                    else:
+                        rewrote = True   # drop it; the better-evidenced claimant keeps it
+                        reassigned.append({
+                            "boundary": boundary, "from": fid, "to": winner,
+                            "evidence": _evidence(winner)[0],
+                        })
+                    continue
+                # A conflict is another feature DECLARING ownership inside this glob.
+                # Another feature merely having files_touched underneath is not a
+                # conflict: files_touched is evidence of cross-cutting work, which
+                # the spec expects, and treating it as a conflict shatters legitimate
+                # broad ownership like tests/** into one entry per file.
+                # Read the pre-repair snapshot, never the live features, or a later
+                # feature would judge conflicts against boundaries this same pass
+                # already narrowed.
+                intruded = {
+                    other_id for other_id, boundaries in declared_snapshot.items()
+                    if other_id != fid
+                    # `b == boundary` counts: two features declaring the identical
+                    # glob is the dominant real-world conflict shape (16 of 16 in
+                    # one project), and requiring b != boundary made it invisible
+                    # to repair while doctor kept warning about it.
+                    and any(b == boundary or b.startswith(scope) for b in boundaries)
+                }
+                if not intruded:
+                    kept.append(boundary)
+                    continue
+
+                # What remains is nesting: this glob contains another feature's more
+                # specific declaration. That is NOT a defect. _find_owning_feature
+                # sorts by _boundary_specificity and takes the most specific match,
+                # so `src/**` plus `src/charts/**` routes coherently - charts files to
+                # charts, everything else to the parent.
+                #
+                # Narrowing it was the wrong remedy and the expensive lesson of this
+                # work: shrinking the parent to dodge the nesting orphaned 374 tracked
+                # files across five projects, trading real ownership for a tidier
+                # overlap count. Report it and leave the declaration intact.
+                kept.append(boundary)
+                unresolvable.append({
+                    "feature_id": fid,
+                    "boundary": boundary,
+                    "claimed_also_by": sorted(intruded),
+                    "reason": "nested declaration; resolved at routing time by most-specific match",
+                })
+
+            proposed = sorted(set(kept))
+            if rewrote and proposed != current:
+                changes.append({
+                    "feature_id": fid,
+                    "before": current,
+                    "after": proposed,
+                    "files": len(own_files),
+                })
+                if not dry_run:
+                    feature["file_boundaries"] = proposed
+                    feature["feature_version"] = feature.get("feature_version", 1) + 1
+
+        # Safety gate: narrowing a boundary removes real files from a feature's
+        # declared territory, and an unowned file is worse than an ambiguously-owned
+        # one because session evidence touching it routes nowhere. An earlier version
+        # of this method stripped ownership of 374 tracked files across five projects
+        # while faithfully reducing the overlap count it was optimising for.
+        #
+        # Coverage is therefore a hard invariant, checked against the files that
+        # actually exist rather than against files_touched (which a narrowed boundary
+        # still covers by construction, so it cannot detect this).
+        coverage_before = self._count_covered_files(document, declared_snapshot)
+        proposed_declared = dict(declared_snapshot)
+        for change in changes:
+            proposed_declared[change["feature_id"]] = change["after"]
+        coverage_after = self._count_covered_files(document, proposed_declared)
+        coverage_lost = max(0, coverage_before - coverage_after)
+
+        if coverage_lost:
+            # Refuse rather than trade ownership for a tidier overlap count.
+            return {
+                "dry_run": dry_run,
+                "features": len(features),
+                "changed": [],
+                "unresolvable": unresolvable,
+                "reassigned": reassigned,
+                "overlaps_before": before_overlaps,
+                "overlaps_after": before_overlaps,
+                "refused": (
+                    f"Refusing: these changes would leave {coverage_lost} tracked file(s) "
+                    f"owned by no feature ({coverage_before} covered before, {coverage_after} after). "
+                    "Boundary conflicts must be resolved by reassigning ownership, not by "
+                    "shrinking one claimant."
+                ),
+                "coverage_before": coverage_before,
+                "coverage_after": coverage_after,
+            }
+
+        after_overlaps = before_overlaps
+        if changes and not dry_run:
+            document["updated_at"] = _utc_now()
+            self.save(document)
+            after_overlaps = len(self.detect_boundary_overlaps(document))
+        elif changes:
+            preview = deepcopy(document)
+            for change in changes:
+                for feature in preview.get("features") or []:
+                    if feature.get("feature_id") == change["feature_id"]:
+                        feature["file_boundaries"] = change["after"]
+            after_overlaps = len(self.detect_boundary_overlaps(preview))
+
+        return {
+            "dry_run": dry_run,
+            "features": len(features),
+            "changed": changes,
+            "unresolvable": unresolvable,
+            "reassigned": reassigned,
+            "overlaps_before": before_overlaps,
+            "overlaps_after": after_overlaps,
+            # Always reported, not just on refusal, so the invariant that matters is
+            # visible on every run rather than only when it is about to be violated.
+            "coverage_before": coverage_before,
+            "coverage_after": coverage_after,
+        }
+
     def _candidate_title(self, files: List[str], description: str) -> str:
         if description:
             return " ".join(description.strip().rstrip(".").split()[:8])
@@ -4394,15 +4722,86 @@ Return valid JSON only:
             return Path(files[0]).stem.replace("_", " ").replace("-", " ").title()
         return "Project Feature"
 
-    def _candidate_boundaries(self, files: List[str]) -> List[str]:
-        boundaries = set()
-        for path_str in files:
-            path = Path(path_str)
-            if len(path.parts) > 1:
-                boundaries.add(Path(*path.parts[:-1]).as_posix() + "/**")
-            else:
-                boundaries.add(path.as_posix())
-        return sorted(boundaries)
+    def _candidate_boundaries(
+        self,
+        files: List[str],
+        others: Optional[Iterable[str]] = None,
+    ) -> List[str]:
+        """Derive file_boundaries for a feature that owns ``files``.
+
+        Emitting ``parent + "/**"`` for every file is how a feature came to declare
+        ``src/scan2param/**`` on the strength of three files, subsuming the
+        boundaries of eight unrelated features. Two rules prevent that:
+
+        1. A directory glob is only emitted when the directory is *exclusive* to
+           this feature. ``others`` carries paths known to belong to other
+           features; if any of them live under the directory, the individual owned
+           files are listed instead of a glob that would silently claim a
+           neighbour's code.
+        2. Nested globs are collapsed. Emitting both ``a/**`` and ``a/b/**`` is
+           redundant, and explicit files already covered by a retained glob are
+           dropped for the same reason.
+
+        Passing no ``others`` keeps the permissive behaviour, so callers that
+        genuinely have no cross-feature context are unaffected.
+        """
+        others = {str(o) for o in (others or ())}
+
+        def emit(paths: List[str], depth: int) -> set:
+            """Emit the broadest glob that stays clear of `others`, recursing deeper.
+
+            A contested directory does not force enumeration: descend one level and
+            try again, so an uncontested subtree still gets a glob. Enumerating files
+            the moment a parent is contested turns a boundary into a frozen list, and
+            anything added to that directory later silently falls outside the feature.
+            """
+            out: set = set()
+            by_dir: Dict[str, List[str]] = {}
+            for path_str in paths:
+                parts = Path(path_str).parts
+                if len(parts) <= depth + 1:
+                    out.add(Path(path_str).as_posix())   # file sits at this level
+                else:
+                    by_dir.setdefault("/".join(parts[: depth + 1]), []).append(path_str)
+
+            for directory, group in by_dir.items():
+                prefix = directory + "/"
+                # An exactly-declared directory is the most contested case, not the
+                # least. Excluding it made repair emit a glob byte-identical to a
+                # neighbour's declaration, converting a repairable overlap into a
+                # permanent one that the next run reports as "nothing to do".
+                contested = any(
+                    other.rstrip("/") == directory or other.startswith(prefix)
+                    for other in others
+                )
+                # A glob may never be broader than some file's own parent directory,
+                # or a single deep file would claim its whole top-level tree.
+                is_parent_of_a_file = any(
+                    Path(p).parent.as_posix() == directory for p in group
+                )
+                if not contested and is_parent_of_a_file:
+                    out.add(directory + "/**")
+                else:
+                    out |= emit(group, depth + 1)
+            return out
+
+        boundaries = emit([Path(f).as_posix() for f in files], 0)
+
+        globs = sorted(b for b in boundaries if b.endswith("/**"))
+        redundant: set = set()
+        for outer in globs:
+            scope = outer[:-2]                    # "a/**" -> "a/"
+            for inner in globs:
+                if inner != outer and inner.startswith(scope):
+                    redundant.add(inner)
+        retained = [g for g in globs if g not in redundant]
+        for boundary in boundaries:
+            if boundary.endswith("/**"):
+                continue
+            if any(boundary.startswith(g[:-2]) for g in retained):
+                redundant.add(boundary)
+
+        return sorted(boundaries - redundant)
 
     def _normalize_file_path(self, value: str) -> str:
         path = Path(value)

@@ -32,6 +32,64 @@ def _normalize_text(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+ITEM_ID_PREFIX_BY_CATEGORY = {
+    "decisions": "dec_",
+    "code_changes": "chg_",
+    "problems_solved": "prb_",
+    "open_issues": "iss_",
+    "next_steps": "nxt_",
+}
+
+
+def coerce_summary_items(
+    summary: Dict[str, Any],
+    conversation_len: Optional[int] = None,
+) -> List[str]:
+    """Coerce non-dict summary items (e.g. bare strings) into canonical dicts, in place.
+
+    Returns a list of warning strings, one per coerced item. Every reader of
+    summary categories assumes dict items; a bare string written by an external
+    editor or a misbehaving producer must not poison the read paths.
+
+    Per the spec's safe-fallback cascade, the coerced item gets the degraded
+    full-conversation range when conversation_len is known, never a fabricated
+    narrow one.
+    """
+    warnings = []
+    for category in SUMMARY_CATEGORIES:
+        items = summary.get(category)
+        if not isinstance(items, list):
+            continue
+        for i, item in enumerate(items):
+            if isinstance(item, dict):
+                continue
+            text = str(item)
+            text_field = SUMMARY_TEXT_FIELDS[category]
+            prefix = ITEM_ID_PREFIX_BY_CATEGORY[category]
+            if conversation_len:
+                message_range = {
+                    "start": "msg_001",
+                    "end": f"msg_{conversation_len:03d}",
+                    "start_index": 0,
+                    "end_index": conversation_len,
+                    "degraded": True,
+                }
+            else:
+                message_range = None
+            items[i] = {
+                "id": prefix + generate_item_id([], text),
+                text_field: text,
+                "span_ids": [],
+                "references": [],
+                "message_range": message_range,
+                "confidence": "low",
+                "pinned": False,
+                "locked": False,
+            }
+            warnings.append(f"{category}[{i}]: coerced non-dict item to canonical form")
+    return warnings
+
+
 def generate_item_id(
     references: List[str],
     text: str,
@@ -189,7 +247,8 @@ def sort_spans(spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _iter_summary_items(summary: Dict[str, Any]):
     for category in SUMMARY_CATEGORIES:
         for item in summary.get(category, []):
-            yield category, item
+            if isinstance(item, dict):
+                yield category, item
 
 
 def _summary_item_topic(category: str, item: Dict[str, Any]) -> str:
@@ -542,6 +601,17 @@ def validate_summary_schema(summary: Dict[str, Any]) -> List[str]:
             errors.append(f"Missing required array: {field}")
         elif not isinstance(summary[field], list):
             errors.append(f"{field} must be an array")
+
+    # Reject non-dict items up front — category-specific checks assume dicts
+    for category in SUMMARY_CATEGORIES:
+        items = summary.get(category, [])
+        if not isinstance(items, list):
+            continue
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                errors.append(f"{category} item {i} must be an object, got {type(item).__name__}")
+    if any("must be an object" in e for e in errors):
+        return errors
 
     # Validate decision items
     for i, decision in enumerate(summary.get("decisions", [])):

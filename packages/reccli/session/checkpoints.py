@@ -129,7 +129,7 @@ class CheckpointManager:
                     spans_since.append({
                         'type': 'code_change',
                         'id': code.get('id'),
-                        'content': f"{code.get('description')} ({', '.join(code.get('files', []))})",
+                        'content': f"{code.get('description') or ''} ({', '.join(f for f in (code.get('files') or []) if f)})",
                         'timestamp': self._get_span_timestamp(code)
                     })
 
