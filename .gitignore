@@ -101,3 +101,7 @@ apps/web/build/
 apps/web/.vercel/
 packages/reccli-core/ui/node_modules/
 packages/reccli-core/ui/package-lock.json
+
+# Generated benchmark output. These are run artifacts, not source, and several
+# committed-by-accident ones contained only serialized API errors rather than results.
+benchmarks/longmemeval/results/*.jsonl
