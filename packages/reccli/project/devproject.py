@@ -4588,17 +4588,45 @@ Return valid JSON only:
                 )
                 if duplicate_claimants:
                     contenders = [fid] + duplicate_claimants
-                    def _evidence(candidate_id):
+
+                    def _evidence_count(candidate_id):
                         owned = files_by_feature.get(candidate_id, set())
-                        return (sum(1 for p in owned if p.startswith(scope)), str(candidate_id))
-                    winner = max(contenders, key=_evidence)
+                        return sum(1 for p in owned if p.startswith(scope))
+
+                    scores = {c: _evidence_count(c) for c in contenders}
+                    best = max(scores.values())
+                    leaders = [c for c in contenders if scores[c] == best]
+
+                    # Reassign ONLY on a strict, non-zero evidence win. Falling back to
+                    # max()'s tiebreak handed the boundary to the lexicographically
+                    # largest feature_id, which is not evidence of anything, and could
+                    # leave the loser with file_boundaries: [] - a feature permanently
+                    # unable to own a file. The docstring already promised the right
+                    # behaviour here: report rather than guess.
+                    if best == 0 or len(leaders) > 1:
+                        kept.append(boundary)
+                        unresolvable.append({
+                            "feature_id": fid,
+                            "boundary": boundary,
+                            "claimed_also_by": sorted(duplicate_claimants),
+                            "reason": ("no claimant has evidence under it" if best == 0
+                                       else f"{len(leaders)} claimants tie on evidence"),
+                        })
+                        continue
+
+                    winner = leaders[0]
                     if winner == fid:
                         kept.append(boundary)
                     else:
-                        rewrote = True   # drop it; the better-evidenced claimant keeps it
+                        # The loser may end with no declared boundary, and that is an
+                        # acceptable outcome of a strict evidence win: it keeps its
+                        # files_touched so a later re-sync can re-derive a boundary,
+                        # and the coverage invariant already guarantees no real file
+                        # is left owned by nobody.
+                        rewrote = True   # the strictly better-evidenced claimant keeps it
                         reassigned.append({
                             "boundary": boundary, "from": fid, "to": winner,
-                            "evidence": _evidence(winner)[0],
+                            "evidence": scores[winner],
                         })
                     continue
                 # A conflict is another feature DECLARING ownership inside this glob.

@@ -119,6 +119,20 @@ def register_bg_task(project_root: Path, pid: int, purpose: str) -> None:
         pass
 
 
+
+_FAILURE_MARKERS = ("Traceback (most recent call last)", "Error:", "Exception:",
+                    "CRITICAL", "FATAL")
+
+
+def _looks_like_failure(text: str) -> bool:
+    """True if background-writer stderr indicates an actual failure.
+
+    The finalize subprocess also prints normal progress to stderr, so presence of
+    output alone means nothing.
+    """
+    return any(marker in text for marker in _FAILURE_MARKERS)
+
+
 def _pid_alive(pid: int) -> bool:
     """Return True if the given PID is still alive."""
     try:
@@ -147,22 +161,42 @@ def cleanup_bg_tasks(project_root: Path, stale_hours: int = 24) -> int:
     # Promote background-writer stderr into the issue log before reaping. Capturing
     # stderr to a file only helps if something reads it; otherwise it is the same
     # silence in a different location.
+    # Never reap while a background writer is still running: its sidecar is an open
+    # file handle, and deleting it loses whatever the process has yet to write.
+    any_alive = False
     try:
-        for err_file in (project_root / "devsession").glob(".bg_finalize_*.err"):
+        for line in lines:
             try:
-                text = err_file.read_text(encoding="utf-8", errors="ignore").strip()
+                rec = json.loads(line)
             except Exception:
                 continue
-            if text:
-                _log_issue(
-                    "session_recorder/background",
-                    f"{err_file.stem.replace('.bg_finalize_', '')} finalize failed: {text[-400:]}",
-                    severity="error",
-                    project_root=project_root,
-                )
-            err_file.unlink(missing_ok=True)
+            if isinstance(rec.get("pid"), int) and _pid_alive(rec["pid"]):
+                any_alive = True
+                break
     except Exception:
         pass
+
+    if not any_alive:
+        try:
+            for err_file in (project_root / "devsession").glob(".bg_finalize_*.err"):
+                try:
+                    text = err_file.read_text(encoding="utf-8", errors="ignore").strip()
+                except Exception:
+                    continue
+                # Progress output goes to stderr too, so "wrote anything" is not
+                # "failed". Only a real traceback or error line counts, otherwise a
+                # successful finalize was reported as a failure in both the issue log
+                # and doctor.
+                if text and _looks_like_failure(text):
+                    _log_issue(
+                        "session_recorder/background",
+                        f"{err_file.stem.replace('.bg_finalize_', '')} finalize failed: {text[-400:]}",
+                        severity="error",
+                        project_root=project_root,
+                    )
+                err_file.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     now = datetime.now()
     kept: List[str] = []
@@ -1303,10 +1337,22 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
         created_at = str(meta.get("created_at") or "")
         return bool(created_at) and created_at >= session_started_at
 
+    # Only files written during this session can be ours. Without this bound the
+    # loop no longer stopped at the first summarized file and a SessionEnd with no
+    # notes file - the common case - DevSession.load()ed the entire store.
+    session_start_mtime = 0.0
+    if session_started_at:
+        try:
+            session_start_mtime = datetime.fromisoformat(session_started_at).timestamp()
+        except Exception:
+            session_start_mtime = 0.0
+
     for sf in sorted(sessions_dir.glob("*.devsession"), key=lambda p: p.stat().st_mtime, reverse=True):
         if sf.name.startswith(".live_"):
             continue
         try:
+            if session_start_mtime and sf.stat().st_mtime < session_start_mtime - 1:
+                break   # older than this session; everything after is older still
             candidate = DevSession.load(sf)
             if not (candidate.summary and candidate.summary.get("overview", "").strip()):
                 continue
@@ -1344,6 +1390,9 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
         pass
 
     # Clean up WAL and live snapshot
+    # The normal path unlinked the WAL but not the hint sidecar, so every
+    # finished session leaked one file that a later session could consume.
+    _continuation_hint_path(wal).unlink(missing_ok=True)
     wal.unlink(missing_ok=True)
     live_snapshot = _devsession_dir(project_root) / f".live_{session_id}.devsession"
     live_snapshot.unlink(missing_ok=True)
@@ -1373,7 +1422,7 @@ def _spawn_background_finalize(session_path: Path) -> None:
         "    sys.exit(0)\n"
         "changed = False\n"
         "# Summarize only if no summary exists\n"
-        "if not s.summary or __import__('reccli.session.devsession', fromlist=['x']).is_stub_overview(s.summary.get('overview','')):\n"
+        "if __import__('reccli.session.devsession', fromlist=['x']).is_stub_summary(s.summary):\n"
         "    s.generate_summary()\n"
         "    changed = True\n"
         "# Always embed — catches new messages from WAL merge\n"

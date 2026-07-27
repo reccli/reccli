@@ -26,6 +26,9 @@ mcp = FastMCP("reccli")
 # ---------------------------------------------------------------------------
 
 
+from .session.devsession import is_stub_overview  # shared stub predicate
+
+
 def _real_session_files(sessions_dir: Path, newest_first: bool = True):
     """Recorded sessions, excluding live in-progress snapshots.
 
@@ -478,7 +481,10 @@ def _latest_session_summary(sessions_dir: Path) -> Optional[str]:
             return None
         summary = session.summary
         parts = []
-        if summary.get("overview"):
+        # A crashed summarization writes "Summarization failed: <api error>" into
+        # overview. Rendering it verbatim injected a raw provider error as the
+        # session's remembered history into the first tool every session calls.
+        if summary.get("overview") and not is_stub_overview(summary.get("overview")):
             parts.append(f"**Last session overview**: {summary['overview']}")
         for category, label in [
             ("decisions", "Decisions"),
@@ -2512,7 +2518,7 @@ def list_sessions(
             continue
         msg_count = len(s.conversation)
         overview_text = (s.summary or {}).get("overview", "") if s.summary else ""
-        is_summarized = bool(overview_text.strip())
+        is_summarized = not is_stub_overview(overview_text)
         first_ts = s.conversation[0].get("timestamp", "") if s.conversation else ""
 
         if has_summary is not None and has_summary != is_summarized:
@@ -3696,7 +3702,17 @@ def _find_sessions_with_item(sessions_dir: Path, item_id: str, session_id: str =
 
     if session_id:
         stem = session_id[:-len(".devsession")] if session_id.endswith(".devsession") else session_id
-        candidates = [sessions_dir / f"{stem}.devsession"]
+        # Reject anything that is not a bare stem. Joining a caller-supplied string
+        # onto sessions_dir let "../../other-project/devsession/x" resolve outside the
+        # project and edit a different project's session.
+        if not stem or "/" in stem or "\\" in stem or stem.startswith("."):
+            return []
+        candidate = (sessions_dir / f"{stem}.devsession").resolve()
+        try:
+            candidate.relative_to(sessions_dir.resolve())
+        except ValueError:
+            return []
+        candidates = [candidate]
     else:
         candidates = [p for p in sorted(sessions_dir.glob("*.devsession"))
                       if not p.name.startswith(".live_")]
@@ -3777,10 +3793,11 @@ def edit_summary_item(
     if not matches:
         where = f" in {session_id}" if session_id else " across any session"
         return f"Summary item '{item_id}' not found{where}."
-    if len(matches) > 1:
-        names = ", ".join(sorted(m[0].stem for m in matches)[:8])
+    distinct_sessions = {m[0].stem for m in matches}
+    if len(distinct_sessions) > 1:
+        names = ", ".join(sorted(distinct_sessions)[:8])
         return (
-            f"'{item_id}' exists in {len(matches)} sessions ({names}). "
+            f"'{item_id}' exists in {len(distinct_sessions)} sessions ({names}). "
             "Refusing to guess which one you meant - pass session_id to choose."
         )
     sf, session, cat, item = matches[0]
@@ -3848,10 +3865,11 @@ def pin_memory(
     if not matches:
         where = f" in {session_id}" if session_id else " across any session"
         return f"Summary item '{item_id}' not found{where}."
-    if len(matches) > 1:
-        names = ", ".join(sorted(m[0].stem for m in matches)[:8])
+    distinct_sessions = {m[0].stem for m in matches}
+    if len(distinct_sessions) > 1:
+        names = ", ".join(sorted(distinct_sessions)[:8])
         return (
-            f"'{item_id}' exists in {len(matches)} sessions ({names}). "
+            f"'{item_id}' exists in {len(distinct_sessions)} sessions ({names}). "
             "Refusing to guess which one you meant - pass session_id to choose."
         )
     sf, session, cat, item = matches[0]
@@ -3923,7 +3941,7 @@ def retry_summarization(
             "from reccli.session.devsession import DevSession\n"
             "s = DevSession.load(path)\n"
             "if not s.summary or not s.summary.get('overview','').strip() "
-            "or __import__('reccli.session.devsession', fromlist=['x']).is_stub_overview(s.summary.get('overview','')):\n"
+            "or __import__('reccli.session.devsession', fromlist=['x']).is_stub_summary(s.summary):\n"
             "    s.generate_summary()\n"
             "s.generate_embeddings(force=False, storage_mode='external')\n"
             "for span in s.spans:\n"

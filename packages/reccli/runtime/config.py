@@ -226,13 +226,15 @@ def mark_provider_broken(provider: str) -> None:
 # Calling mark_provider_broken() on a 429 disabled the provider for the rest of
 # the process, and with a single provider configured that made the retry path
 # unreachable: the first rate limit of the session ended summarization entirely.
+# Phrases only. Bare HTTP codes were matched as unanchored substrings against the
+# whole error text, so a token count, request id or timestamp containing "429" or
+# "402" silently decided provider health.
 _FATAL_MARKERS = (
-    "401", "403", "402",
     "authentication", "invalid api key", "invalid x-api-key", "no api key",
-    "permission", "unauthorized", "credit balance", "billing", "account is not active",
+    "permission denied", "unauthorized", "credit balance", "billing",
+    "account is not active", "insufficient_quota", "insufficient quota",
 )
 _TRANSIENT_MARKERS = (
-    "429", "500", "502", "503", "504",
     "rate limit", "rate_limit", "overloaded", "capacity",
     "timeout", "timed out", "connection", "temporarily unavailable", "try again",
 )
@@ -248,9 +250,12 @@ def is_provider_fatal(error_text: Optional[str]) -> bool:
     text = (error_text or "").lower()
     if not text:
         return False
-    if any(marker in text for marker in _TRANSIENT_MARKERS):
-        return False
-    return any(marker in text for marker in _FATAL_MARKERS)
+    # Fatal wins over transient. Checking transient first meant a permanent death
+    # delivered on an HTTP 429 - "429 ... your credit balance is too low" - was
+    # classified transient and retried forever against a dead account.
+    if any(marker in text for marker in _FATAL_MARKERS):
+        return True
+    return False if any(marker in text for marker in _TRANSIENT_MARKERS) else False
 
 
 def select_llm_client(prefer: str = "auto"):

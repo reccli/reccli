@@ -927,6 +927,17 @@ def filter_deleted_results(sessions_dir: Path, results: List[Dict]) -> List[Dict
     filtered: List[Dict] = []
 
     for result in results:
+        # Span and summary-item hits are not conversation messages. Their
+        # message_index is the START of the range they describe, so resolving them
+        # through conversation[message_index] replaced the curated text (a decision,
+        # an open issue, a span topic) with whatever raw message sat at that index,
+        # and dropped the hit entirely when the range pointed past the end.
+        # _enrich_and_rerank already guards this; this stage did not, and it runs on
+        # every search() result, so ~20% of hits reached the user corrupted.
+        if result.get("role") in ("span", "summary"):
+            filtered.append(result)
+            continue
+
         session_id = result.get("session")
         message_id = result.get("message_id")
         if not session_id or not message_id:

@@ -446,9 +446,14 @@ def _check_issue_log(sessions_dir: Path) -> Dict[str, Any]:
                 text = err_file.read_text(encoding="utf-8", errors="ignore").strip()
             except Exception:
                 continue
-            if text:
+            # The finalize subprocess prints progress to stderr as well, so output
+            # alone is not a failure. Reporting it as one made every successful
+            # background finalize look like a crash.
+            if text and any(m in text for m in
+                            ("Traceback (most recent call last)", "Error:", "Exception:",
+                             "CRITICAL", "FATAL")):
                 unreaped.append(_finding(
-                    err_file.name, f"background finalize wrote to stderr: {text[-200:]}",
+                    err_file.name, f"background finalize failed: {text[-200:]}",
                     "That session may have no summary and may not be indexed.",
                 ))
     except Exception:
@@ -649,13 +654,13 @@ def _check_devproject(project_root: Path) -> List[Dict[str, Any]]:
 def run_diagnostics(project_root: Path) -> Dict[str, Any]:
     """Run every integrity check against a project. Read-only."""
     project_root = Path(project_root).expanduser().resolve()
-    # Resolve the directory without creating it: mcp_server._sessions_dir() mkdirs,
-    # and a diagnostic must never mutate the thing it is inspecting.
-    try:
-        from .project.devproject import default_devsession_dir
-        sessions_dir = Path(default_devsession_dir(project_root))
-    except Exception:
-        sessions_dir = project_root / "devsession"
+    # Use the root we were handed. default_devsession_dir() calls discover_project_root
+    # and searches UPWARD, so a root with no .git and no .devproject silently resolved
+    # to some ancestor's store - or to ~/reccli/devsession - while the report still
+    # named the directory the caller asked about. Diagnosing a different store than
+    # the one you named is indistinguishable from diagnosing yours and finding it fine.
+    # Never created here: a diagnostic must not mutate what it inspects.
+    sessions_dir = project_root / "devsession"
 
     def _safely(check_id: str, title: str, fn, *args):
         """Run one check in isolation.
@@ -677,12 +682,19 @@ def run_diagnostics(project_root: Path) -> Dict[str, Any]:
                 why="A check that cannot run tells you nothing about what it was meant to verify.",
             )]
 
-    scan = _safely("scan", "Session scan", _scan_sessions, sessions_dir)
-    scan = scan[0] if isinstance(scan[0], dict) and "loaded" in scan[0] else {
-        "files": [], "unreadable": [], "empty": [], "loaded": {}
-    }
-
     checks: List[Dict[str, Any]] = []
+
+    # If the scan itself fails, every downstream check runs against an empty store
+    # and passes. Discarding the failure record here made doctor print a clean bill
+    # of health for a store it had never read, which is worse than any bug it exists
+    # to find: it converts "I could not look" into "I looked and it was fine".
+    scan_result = _safely("scan", "Session scan", _scan_sessions, sessions_dir)
+    if isinstance(scan_result[0], dict) and "loaded" in scan_result[0]:
+        scan = scan_result[0]
+    else:
+        scan = {"files": [], "unreadable": [], "empty": [], "loaded": {}}
+        checks.extend(scan_result)   # keep the FAIL; never silently swallow it
+
     for check_id, title, fn, args in (
         ("sessions.unreadable", "Sessions that fail to load", _check_unreadable, (scan,)),
         ("sessions.empty", "Zero-byte session files", _check_empty, (scan,)),

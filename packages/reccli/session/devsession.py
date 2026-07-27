@@ -29,14 +29,49 @@ STUB_OVERVIEWS = ("Session summarized without LLM", "Placeholder summary")
 STUB_OVERVIEW_PREFIXES = ("Summarization failed:",)
 
 
-def is_stub_overview(overview: Optional[str]) -> bool:
-    """True if an overview indicates an absent or failed summary."""
-    text = (overview or "").strip()
+_SUMMARY_ITEM_CATEGORIES = (
+    "decisions", "code_changes", "problems_solved", "open_issues", "next_steps",
+)
+
+
+def is_stub_overview(overview: Any) -> bool:
+    """True if an overview string indicates an absent or failed summary.
+
+    Non-string values count as absent rather than raising: overviews come off disk
+    and out of LLM output, so a dict or a number is malformed input, not a crash.
+    """
+    if not isinstance(overview, str):
+        # A dict, number or bytes is malformed input, not a usable overview.
+        # Treat it as absent rather than raising: overviews come off disk and out
+        # of LLM output, and the callers are diagnostics that must not crash.
+        return True
+    text = overview.strip()
     if not text:
         return True
     if text in STUB_OVERVIEWS:
         return True
     return any(text.startswith(prefix) for prefix in STUB_OVERVIEW_PREFIXES)
+
+
+def is_stub_summary(summary: Optional[Dict[str, Any]]) -> bool:
+    """True if a whole summary should be treated as never really produced.
+
+    Use this, not is_stub_overview, before anything DESTRUCTIVE like re-running
+    summarization. A summary carrying real items is real work regardless of what
+    its overview says, and generate_summary() assigns unconditionally: gating a
+    re-summarize on the overview alone let a provider error replace a genuine
+    summary with a failure stub and write it to disk, exit code 0, no warning.
+
+    A user can also legitimately write an overview that begins with a stub prefix
+    while describing actual work, which the string test cannot distinguish.
+    """
+    if not summary or not isinstance(summary, dict):
+        return True
+    for category in _SUMMARY_ITEM_CATEGORIES:
+        items = summary.get(category)
+        if isinstance(items, list) and items:
+            return False          # real content: never treat as a stub
+    return is_stub_overview(summary.get("overview"))
 
 
 class DevSession:
