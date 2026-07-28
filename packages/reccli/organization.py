@@ -8478,11 +8478,11 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         work_item = str(message.get("workItem") or "")
 
         if sender in self.topology.worker_ids:
-            primary = self.topology.primary_manager_by_worker.get(sender)
+            primary = _supervisor_of(self.topology, sender)
             if recipient != primary:
                 return (
                     False,
-                    f"worker traffic must go through primary manager {primary}",
+                    f"worker traffic must go through {primary}",
                 )
             goal = self.worker_goals.get(sender)
             if not goal:

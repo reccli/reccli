@@ -628,6 +628,32 @@ def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Terminal states meaning "this run produced nothing to build on". Continuing
+# from one is reasonable once; doing it repeatedly is a loop.
+BARREN_TERMINAL_STATUSES = {"no_experiment_contract", "stalled"}
+MAX_CONSECUTIVE_BARREN_CONTINUATIONS = 2
+
+
+def _consecutive_barren_terminals(root: Path, statuses: set) -> int:
+    """How many of the most recent terminal runs ended without producing work."""
+    try:
+        listed = list_organization_runs(str(root), limit=100)
+    except Exception:
+        return 0
+    count = 0
+    for run in listed.get("runs", []) or []:
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "")
+        if status not in TERMINAL_STATUSES:
+            continue
+        if status in statuses:
+            count += 1
+            continue
+        break
+    return count
+
+
 def _rejected_candidates(root: Path) -> List[Dict[str, Any]]:
     """Every candidate a human has rejected anywhere in this project's history.
 
@@ -852,6 +878,26 @@ def _apply_terminal_continuation(
         return arguments, {
             **selection,
             "skipped_retryable_run_ids": skipped_retryable_runs,
+        }
+    # Stop an unproductive chain from continuing itself forever. Nothing else
+    # bounds successive auto-continuations, and a run that ends without
+    # authoring an experiment contract is now continuation-eligible, so a
+    # configuration that cannot author one will reproduce that outcome every
+    # time. Continuing from the same barren status repeatedly is not progress;
+    # it is the loop this policy exists to avoid, entered one generation at a
+    # time. A human relaunching explicitly is unaffected: this only declines to
+    # AUTO-continue, and returns the base mission instead of raising.
+    barren = _consecutive_barren_terminals(root, BARREN_TERMINAL_STATUSES)
+    if barren >= MAX_CONSECUTIVE_BARREN_CONTINUATIONS:
+        return arguments, {
+            **selection,
+            "skipped_retryable_run_ids": skipped_retryable_runs,
+            "continuation_declined": (
+                f"{barren} consecutive runs ended in "
+                f"{sorted(BARREN_TERMINAL_STATUSES)} without producing work; "
+                "starting from the project's own mission instead of continuing "
+                "the chain"
+            ),
         }
     conclusion = terminal["conclusion"]
     readiness = str(conclusion.get("promotion_readiness") or "")

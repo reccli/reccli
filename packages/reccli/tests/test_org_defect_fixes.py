@@ -439,6 +439,64 @@ class FlatTopologyTests(unittest.TestCase):
             scheduled = {agent.agent_id for agent in runner._select_agents(2)}
             self.assertEqual(scheduled, {"worker-a", "worker-b"})
 
+    def test_a_flat_worker_can_hand_its_candidate_back(self):
+        """Without this, a flat run can never produce anything.
+
+        Worker traffic was routed against primary_manager_by_worker, None in a
+        flat topology, so every handoff was dropped with "must go through primary
+        manager None". A flat run then authored no contract, tripped
+        no_experiment_contract, and (now that the status is continuation-eligible)
+        auto-launched a successor that did the same thing again.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "Find defects.", "claude", "flat", "flat-handoff",
+                root / "run", max_experiments=3,
+            )
+            runner._deliver_message("lead", {
+                "from": "lead", "to": "worker-a", "tag": "plan",
+                "content": "Answer whether the tolerance check ignores units.",
+                "candidate": None, "workItem": "tol", "risk": "routine",
+            }, 1)
+            runner._deliver_message("worker-a", {
+                "from": "worker-a", "to": "lead", "tag": "handoff",
+                "content": "Found it.", "candidate": "c0ffee",
+                "workItem": "tol", "risk": "routine",
+            }, 2)
+            messages = [
+                json.loads(line) for line in
+                (runner.run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            handoffs = [m for m in messages if m.get("tag") == "handoff"]
+            self.assertTrue(handoffs)
+            self.assertEqual(handoffs[0]["status"], "delivered",
+                             handoffs[0].get("reason"))
+
+    def test_a_worker_still_cannot_message_a_peer(self):
+        """Relaxing the routing must not open worker-to-worker traffic."""
+        for topology in ("flat", "scientific"):
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                _init_project(root)
+                runner = OrganizationRunner(
+                    root, "m", "claude", topology, f"peer-{topology}",
+                    root / "run", max_experiments=3,
+                )
+                runner._deliver_message("worker-a", {
+                    "from": "worker-a", "to": "worker-b", "tag": "handoff",
+                    "content": "x", "candidate": "c2", "workItem": "t",
+                    "risk": "routine",
+                }, 2)
+                messages = [
+                    json.loads(line) for line in
+                    (runner.run_dir / "messages.jsonl").read_text().splitlines()
+                ]
+                peer = [m for m in messages if m.get("to") == "worker-b"]
+                self.assertTrue(peer, topology)
+                self.assertEqual(peer[0]["status"], "dropped", topology)
+
     def test_supervisor_resolves_to_the_lead_without_managers(self):
         self.assertEqual(_supervisor_of(get_topology("flat"), "worker-a"), "lead")
         self.assertEqual(
@@ -505,6 +563,46 @@ class NoExperimentContractTests(unittest.TestCase):
             "eligible_promotion_readiness": ["not_ready", "no_candidate"],
         }})
         self.assertIn("no_experiment_contract", policy["eligible_statuses"])
+
+    def test_a_barren_chain_stops_continuing_itself(self):
+        """Eligibility without a bound is a loop.
+
+        Nothing limited successive auto-continuations. A configuration that
+        cannot author an experiment contract reproduces that outcome every time,
+        so making the status eligible turned a single stuck run into an
+        indefinite chain of them.
+        """
+        from reccli.organization_project_launch import (
+            BARREN_TERMINAL_STATUSES,
+            MAX_CONSECUTIVE_BARREN_CONTINUATIONS,
+            _consecutive_barren_terminals,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            orgs = root / "devsession" / "agent-organizations"
+            orgs.mkdir(parents=True)
+
+            def record(name, status, stamp):
+                run_dir = orgs / f"{stamp}_org_{name}"
+                run_dir.mkdir()
+                payload = json.dumps({"run_id": name, "status": status})
+                (run_dir / "run.json").write_text(payload)
+                (run_dir / "status.json").write_text(payload)
+
+            for index in range(MAX_CONSECUTIVE_BARREN_CONTINUATIONS):
+                record(f"barren{index}", "no_experiment_contract",
+                       f"2026010{index + 1}T000000Z")
+            self.assertGreaterEqual(
+                _consecutive_barren_terminals(root, BARREN_TERMINAL_STATUSES),
+                MAX_CONSECUTIVE_BARREN_CONTINUATIONS,
+            )
+
+            # A run that produced something must reset the count.
+            record("good", "completed_no_promotion", "20260109T000000Z")
+            self.assertEqual(
+                _consecutive_barren_terminals(root, BARREN_TERMINAL_STATUSES), 0,
+            )
 
     def test_trips_only_after_the_deadline(self):
         with tempfile.TemporaryDirectory() as td:
