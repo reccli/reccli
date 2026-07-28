@@ -1239,8 +1239,13 @@ def start_organization(
             project launch.
         launch_mode: ``auto`` (recommended), ``project``, or ``custom``.
         provider: "auto", "mixed", "claude", or "codex". Uses installed native CLIs.
-        topology: "google-rotating" (recommended), "google" (baseline), or
+        topology: "flat" (one coordinator, six workers, two independent
+            auditors, no management layer), "google-rotating" (hierarchical with
+            rotating cross-manager review), "google" (hierarchical baseline), or
             "scientific" (autonomous reversible scientific exploration).
+            Prefer "flat" when the work is a set of independently answerable
+            questions: in a recorded hierarchical run, management consumed 78%
+            of all turns and one worker took a single turn in twelve rounds.
         max_rounds: Maximum synchronized organization work rounds (default 8).
             One round may run several agent turns in parallel; this is not a
             total-agent-turn count. RecCli may add up to four review-only

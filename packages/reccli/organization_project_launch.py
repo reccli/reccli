@@ -613,6 +613,76 @@ def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _scrub_rejected_candidate(
+    view: Dict[str, Any],
+    operator_decision: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Remove a rejected candidate from what a successor run inherits.
+
+    A recorded operator decision put it plainly: a rejected candidate "must not
+    seed or satisfy a successor mission." A prose warning appended after the
+    parent conclusion was not enough, because the conclusion itself was still
+    handed over intact, and its `next_action` was written by a run whose entire
+    subject was that candidate. Two successors then spent every turn
+    re-adjudicating a dead artifact: reconciling authority documents, arguing
+    about a docstring adjective, producing review dossiers about the review.
+
+    Carrying forward what was LEARNED is fine and is preserved here. What is
+    removed is the artifact as the object of work:
+
+      * `next_action` is replaced outright. It is the directive field, and a
+        directive produced by a run about a rejected candidate points at the
+        rejected candidate by construction.
+      * `accomplishments` is dropped. A run whose only output was rejected has
+        no accomplishment to build on, and listing one invites resumption.
+      * Candidate identifiers are redacted everywhere else, so the successor
+        cannot address the artifact even incidentally.
+
+    Findings, evidence, blockers, limitations and unresolved questions all
+    survive: those are the lesson, and the lesson is what should carry.
+    """
+    if not isinstance(operator_decision, dict):
+        return view
+    if operator_decision.get("decision") != "rejected":
+        return view
+
+    candidate = str(operator_decision.get("candidate") or "").strip()
+    scrubbed = dict(view)
+
+    identifiers = [candidate] if len(candidate) >= 7 else []
+    if len(candidate) >= 12:
+        # Short SHAs appear in prose far more often than full ones.
+        identifiers.extend(candidate[:n] for n in (12, 10, 8, 7))
+
+    def redact(text: str) -> str:
+        for ident in identifiers:
+            text = text.replace(ident, "[rejected candidate]")
+        return text
+
+    def mentions(text: str) -> bool:
+        return any(ident in text for ident in identifiers)
+
+    for key, value in list(scrubbed.items()):
+        if isinstance(value, str):
+            scrubbed[key] = redact(value)
+        elif isinstance(value, list):
+            scrubbed[key] = [
+                redact(item) if isinstance(item, str) else item
+                for item in value
+                if not (isinstance(item, str) and mentions(item))
+            ]
+
+    scrubbed["accomplishments"] = []
+    scrubbed["next_action"] = (
+        "Superseded. The parent run's candidate was rejected by the human "
+        "operator and must not seed or satisfy this mission. Select new work "
+        "against the current repository and the project's active contracts. Do "
+        "not resume, repackage, re-review, or measure progress against the "
+        "rejected artifact."
+    )
+    return scrubbed
+
+
 def _continuation_mission(
     root: Path,
     terminal: Dict[str, Any],
@@ -622,6 +692,9 @@ def _continuation_mission(
     current_head = _git(root, "rev-parse", "HEAD")
     view = _bounded_conclusion_view(conclusion)
     operator_decision = terminal.get("operator_decision")
+    # Scrub before rendering. The rejection notice below is guidance; this is
+    # the part that actually removes the artifact from the successor's reach.
+    view = _scrub_rejected_candidate(view, operator_decision)
     rejection = ""
     if (
         isinstance(operator_decision, dict)

@@ -83,6 +83,15 @@ barrier is incomplete. Once assigned, workers execute concurrently. Managers con
 dependencies and progress upward, while the lead wakes on new macro information
 instead of churning as another worker.
 
+RecCli offers a `flat` topology: one coordinator, six workers and two
+independent auditors, with no management layer. The coordinator assigns each
+worker a falsifiable question it can answer by executing something, consumes the
+result, and re-tasks immediately. Auditors attempt to refute an exact candidate
+and may veto but never promote. Prefer it when the work decomposes into
+independently answerable questions; a recorded hierarchical run spent 78% of its
+turns inside the management layer, and one of its four workers took a single turn
+across twelve rounds.
+
 The default `google-rotating` structure has one mission lead, four engineering
 managers, and four workers. RecCli binds one visible problem-solving goal to
 each worker; only its primary manager or an explicit human `plan` may replace

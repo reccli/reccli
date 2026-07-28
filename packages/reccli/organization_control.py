@@ -35,6 +35,11 @@ TERMINAL_STATUSES = {
     "cancelled",
     "round_limit",
     "stalled",
+    # An experiment-driven run that authored no contract by its deadline. Kept
+    # distinct from round_limit so the two are not confused: round_limit means
+    # the run worked until it ran out of rounds, this means it never had
+    # anything to execute and the remaining rounds would have produced prose.
+    "no_experiment_contract",
 }
 MAX_OPERATOR_MESSAGE_CHARS = 12_000
 APPROVAL_REQUEST_SCHEMA = "reccli.organization-approval-request.v1"

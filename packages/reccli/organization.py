@@ -393,11 +393,119 @@ def _route(
         routes[(right, left)] = tags
 
 
+def _flat_topology() -> Topology:
+    """One coordinator, many workers, independent audit lanes, no managers.
+
+    Built as its own structure rather than as a hierarchical topology with empty
+    manager lists, because the manager layer is not merely unused here: there is
+    no delegation barrier to satisfy, no primary-manager ownership to route
+    through, and review is an independent lane rather than a rung.
+
+    The case for it is measured. Across a recorded twelve-round hierarchical run,
+    management took 50 of 64 turns (78%) while the four workers took 14 between
+    them, one of them a single turn for the entire run. Managers exist in human
+    organizations to allocate scarce attention and to surface privately-held
+    context; neither applies to agents that cannot share memory, and every layer
+    boundary becomes another serialized document instead of work.
+
+    Auditors can veto but cannot promote, matching the existing human-authority
+    boundary: agents never grant themselves the final word.
+    """
+    worker_ids = [f"worker-{letter}" for letter in "abcdef"]
+    auditor_ids = ["auditor-a", "auditor-b"]
+
+    routes: Dict[Tuple[str, str], Optional[Set[str]]] = {}
+    for worker in worker_ids:
+        _route(routes, "lead", worker)
+    for auditor in auditor_ids:
+        _route(routes, "lead", auditor)
+        # Auditors read candidates directly from the worker that produced them,
+        # so a review does not have to be relayed through the coordinator.
+        for worker in worker_ids:
+            _route(routes, auditor, worker)
+
+    agents = [
+        AgentSpec(
+            "lead", "coordinator",
+            "Give every worker a falsifiable question it can answer by executing "
+            "something: a test, the project CLI, a script. Assign directly; there "
+            "is no management layer to route through. Consume each result as it "
+            "lands and re-task that worker immediately. Do not write "
+            "implementation yourself, do not relay work between workers, and do "
+            "not authorize canonical promotion.",
+            False, "high", "none", True,
+        ),
+        *[
+            AgentSpec(
+                worker, "worker",
+                "Answer the one falsifiable question you were given by running "
+                "something that can disprove it: the test suite, the project CLI, "
+                "a focused script. Work directly on source, tests, evaluator, or "
+                "product paths in your disposable worktree. Report the observed "
+                "result, including a negative one, and hand any exact candidate "
+                "back to the coordinator. A summary of what you read is not a "
+                "result. Flag contradictions without expanding scope.",
+                True, "high", "workspace",
+            ) for worker in worker_ids
+        ],
+        *[
+            AgentSpec(
+                auditor, "independent auditor",
+                "Attempt to refute an exact candidate against the repository and "
+                "its tests. Report what you executed and what it showed. Veto with "
+                "a reproducible reason or annotate; never integrate or promote, "
+                "and never treat the absence of a veto as evidence of "
+                "correctness.",
+                False, "high", "none", True,
+            ) for auditor in auditor_ids
+        ],
+    ]
+
+    return Topology(
+        "flat", "Flat Fleet",
+        "One coordinator assigning falsifiable questions directly to workers, "
+        "with independent audit lanes and no management layer.",
+        "Every agent executes and reports observable results. Review is an "
+        "independent lane, not a rung. Nothing is relayed that could be run.",
+        agents, routes, "lead", "lead", {"lead"},
+        scheduler="event", always_wake=set(),
+        inbox_only_ids={"lead"},
+        # No delegation barrier: with no manager layer there is no intermediate
+        # assignment to wait on, and the lead assigns workers directly.
+        delegation_gate=False, required_approvers={"lead"},
+        manager_ids=[], worker_ids=worker_ids,
+        primary_manager_by_worker={},
+        release_manager_id=None,
+        final_reviewer_pool=auditor_ids,
+        blind_final_review=True,
+        # Auditors refute; they never approve. "No veto" is not a finding of
+        # correctness, which is why review_policy is veto rather than approval.
+        review_policy="veto",
+        human_promotion_required=True,
+    )
+
+
+def _supervisor_of(topology: "Topology", worker_id: str) -> str:
+    """Who a worker hands its candidate to, and who may author its experiments.
+
+    Hierarchical topologies route through the worker's primary manager. A flat
+    topology has no manager layer, so the coordinator plays that part directly.
+    Returning the leader rather than None matters: the handoff validator compares
+    the message recipient against this value, and with None it rejected every
+    worker handoff in a flat run, while the experiment-contract check made it
+    impossible for any agent to author a contract at all.
+    """
+    return topology.primary_manager_by_worker.get(worker_id) or topology.leader_id
+
+
 def get_topology(name: str = "google-rotating") -> Topology:
     normalized = (name or "google-rotating").strip().lower()
-    supported = {"google-rotating", "google", "scientific"}
+    supported = {"google-rotating", "google", "scientific", "flat"}
     if normalized not in supported:
         raise ValueError(f"topology must be one of {sorted(supported)}")
+
+    if normalized == "flat":
+        return _flat_topology()
 
     manager_ids = [f"manager-{letter}" for letter in "abcd"]
     worker_ids = [f"worker-{letter}" for letter in "abcd"]
@@ -575,6 +683,10 @@ def get_topology(name: str = "google-rotating") -> Topology:
 
 
 class Governance:
+    def _supervisor_for(self, worker_id: str) -> str:
+        """See _supervisor_of; shared so the two classes cannot drift."""
+        return _supervisor_of(self.topology, worker_id)
+
     def __init__(
         self,
         topology: Topology,
@@ -615,13 +727,19 @@ class Governance:
     def process_message(
         self, sender: str, message: Dict[str, Any], round_number: int,
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        if not self.topology.manager_ids or message.get("tag") != "handoff":
+        if message.get("tag") != "handoff":
+            return True, "", None
+        # A flat topology has no managers but does have independent auditors.
+        # Gating this on manager_ids alone skipped candidate/workItem/risk
+        # validation entirely there, and left the auditors with nothing routed
+        # to them, which is the one job they exist to do.
+        if not (self.topology.manager_ids or self.topology.final_reviewer_pool):
             return True, "", None
 
         if sender in self.topology.worker_ids:
-            primary = self.topology.primary_manager_by_worker.get(sender)
+            primary = self._supervisor_for(sender)
             if message.get("to") != primary:
-                return False, f"worker handoff must go to primary manager {primary}", None
+                return False, f"worker handoff must go to {primary}", None
             if not message.get("candidate") or not message.get("workItem") or not message.get("risk"):
                 return False, "worker handoff requires candidate, workItem, and risk metadata", None
             candidate = message["candidate"]
@@ -654,6 +772,10 @@ class Governance:
                 and self.provider_by_agent.get(manager) != worker_provider
             ]
             eligible = cross_provider or eligible
+            if not eligible:
+                # Nobody independent is available to review. Accept the handoff
+                # rather than raising, and say so, instead of dividing by zero.
+                return True, "no independent reviewer is available", None
             reviewer = eligible[self.review_cursor % len(eligible)]
             self.review_cursor += 1
             assignment = {
@@ -765,6 +887,8 @@ class Governance:
         primary = self.topology.primary_manager_by_worker.get(agent_id)
         if primary:
             lines.append(f"Your primary manager: {primary}.")
+        elif agent_id in self.topology.worker_ids:
+            lines.append(f"You report directly to {self.topology.leader_id}; there is no management layer.")
         relevant = [
             assignment for assignment in self.assignments.values()
             if agent_id in {
@@ -2336,6 +2460,45 @@ def _load_context_definition(
     }
 
 
+def _materialize_pack_file(
+    source: Path,
+    destination: Path,
+    materialized: Dict[str, Path],
+) -> None:
+    """Place a pack file, sharing bytes with any identical earlier placement.
+
+    Roles genuinely receive different file SETS, so the per-agent directory
+    layout has to stay. What does not have to stay is a private byte copy of
+    every shared file: across eleven packs in one recorded run, 2,080 pack files
+    held 24,010,389 bytes of which only 3,027,496 were unique. 87.4% redundant,
+    and evidence snapshots duplicated a pre-existing corpus again on top.
+
+    A hard link keeps the layout, the bytes, the mode and the mtime identical to
+    a copy, so `verify_context_packs` and every other reader are unaffected, but
+    the second and later placements of the same source cost an inode instead of
+    a file. Falls back to copying when linking is unavailable (a different
+    filesystem, or a platform that refuses), so correctness never depends on it.
+
+    One property does change, and it is a deliberate trade. Linked packs share an
+    inode, so an agent that chmods a read-only pack file and edits it corrupts
+    that file for every role holding it, where previously it would have corrupted
+    only its own copy. Hash-binding is unaffected: `verify_context_packs` detects
+    the mutation either way, and now detects it in every affected pack rather
+    than one. Given packs are materialized 0o444, agents work in separate
+    worktrees, and the alternative is hundreds of megabytes of duplication per
+    run, wider detection of a deliberate violation is the better side to be on.
+    """
+    first = materialized.get(str(source))
+    if first is not None:
+        try:
+            os.link(first, destination)
+            return
+        except OSError:
+            pass  # cross-device, or links unsupported: fall through to a copy
+    shutil.copy2(source, destination)
+    materialized.setdefault(str(source), destination)
+
+
 def prepare_context_packs(
     project_root: Path,
     run_dir: Path,
@@ -2344,6 +2507,9 @@ def prepare_context_packs(
 ) -> Optional[Dict[str, Any]]:
     """Materialize hash-bound, read-only educational context per agent."""
     project_root = project_root.resolve()
+    # source path -> first materialized destination, so later packs can
+    # hard-link to it instead of copying the bytes again.
+    materialized: Dict[str, Path] = {}
     manifest_path = resolve_context_manifest(project_root, context_manifest)
     if manifest_path is None:
         return None
@@ -2437,7 +2603,7 @@ def prepare_context_packs(
             source = project_root / relative
             destination = canonical_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+            _materialize_pack_file(source, destination, materialized)
         pack_description = "\n\n".join(
             purpose for purpose in purposes if purpose
         )
@@ -2877,6 +3043,10 @@ def prepare_workspaces(
 
 
 class OrganizationRunner:
+    def _supervisor_for(self, worker_id: str) -> str:
+        """See _supervisor_of; shared so the two classes cannot drift."""
+        return _supervisor_of(self.topology, worker_id)
+
     def __init__(
         self,
         project_root: Path,
@@ -2977,6 +3147,14 @@ class OrganizationRunner:
         self.max_rounds = max(1, int(max_rounds))
         self.max_closeout_rounds = max(0, int(max_closeout_rounds))
         self.max_experiments = max(0, int(max_experiments))
+        # Round by which an experiment-driven run must have authored at least one
+        # contract. Both recorded runs used 0 of 3 experiment bundles, never
+        # created a contracts/ directory, and still ran to the round limit: one
+        # produced 198 files of records and twelve rounds of prose. A run that
+        # cannot author a contract has already reported it has nothing to
+        # execute. Half the working rounds, never less than three, so a slow
+        # start is not punished.
+        self._experiment_contract_deadline = max(3, (self.max_rounds + 1) // 2)
         self.max_concurrency = max(1, int(max_concurrency))
         self.turn_timeout_seconds = max(30, int(turn_timeout_seconds))
         self.model = model
@@ -2988,6 +3166,10 @@ class OrganizationRunner:
         }
         self.states = {agent.agent_id: "idle" for agent in self.topology.agents}
         self.worker_goals: Dict[str, Dict[str, Any]] = {}
+        # Fallback assignments issued when the hierarchy did not delegate.
+        # Surfaced in the terminal record so a run that only progressed via
+        # fallbacks is not read as one where delegation worked.
+        self.degraded_delegations: List[Dict[str, Any]] = []
         self.worker_goal_history: List[Dict[str, Any]] = []
         self.off_goal_flags: Dict[str, Dict[str, Any]] = {}
         self.sessions: Dict[str, SubscriptionSession] = {}
@@ -3240,6 +3422,15 @@ class OrganizationRunner:
             if not scheduled:
                 if not closeout:
                     status = "stalled"
+                break
+            if not closeout and self._experiment_contract_deadline_passed(round_number):
+                status = "no_experiment_contract"
+                self._event(
+                    "run.no_experiment_contract",
+                    round_number,
+                    deadline_round=self._experiment_contract_deadline,
+                    max_experiments=self.max_experiments,
+                )
                 break
             rounds = round_number
             phase_detail = (
@@ -3628,6 +3819,10 @@ class OrganizationRunner:
                 "remaining": self._experiment_remaining(),
                 "records": list(self.experiment_records),
             },
+            # Non-empty means the hierarchy failed to delegate and the lead
+            # assigned directly instead. The run continued, but it did not
+            # coordinate the way its topology describes.
+            "degraded_delegations": list(self.degraded_delegations),
             "protected_paths": self.protected_paths,
             "control_protocol": self.control_protocol,
             "git_ownership": "reccli-host",
@@ -3743,6 +3938,21 @@ class OrganizationRunner:
 
     def _experiment_remaining(self) -> int:
         return max(0, self.max_experiments - self._experiment_used())
+
+    def _experiment_contract_deadline_passed(self, round_number: int) -> bool:
+        """True when an experiment-driven run has authored no contract in time.
+
+        Only applies when the run was actually configured to run experiments: an
+        experiment policy is attached and the budget is non-zero. A mission with
+        no experiment loop is not failing by not using one, so it must never trip
+        this.
+        """
+        if self.experiment_policy is None or self.max_experiments <= 0:
+            return False
+        if round_number < self._experiment_contract_deadline:
+            return False
+        return not self.experiment_contracts
+
 
     def _claim_experiment_slot(
         self,
@@ -5348,10 +5558,10 @@ Change only the mutable file above and write one trial intent under
         worker_id = self._experiment_string(payload, "worker_id")
         if worker_id not in self.topology.worker_ids:
             raise RuntimeError("experiment-loop contract worker_id is not a worker")
-        expected_manager = self.topology.primary_manager_by_worker.get(worker_id)
+        expected_manager = self._supervisor_for(worker_id)
         if expected_manager != agent.agent_id:
             raise RuntimeError(
-                f"{agent.agent_id} is not the primary manager for {worker_id}"
+                f"{agent.agent_id} does not supervise {worker_id}"
             )
         if payload.get("baseline_mode") != "worker_head_at_activation":
             raise RuntimeError(
@@ -9872,9 +10082,20 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         primary = self.topology.primary_manager_by_worker.get(worker_id)
         if not primary:
             return True
-        return self._has_delegation(
+        if self._has_delegation(
             self.inboxes[worker_id],
             sender=primary,
+            recipient=worker_id,
+        ):
+            return True
+        # A direct assignment from the lead also counts. When a manager fails to
+        # delegate, the barrier falls back to the lead assigning the worker
+        # itself; that message is written truthfully as coming from the lead, so
+        # this check has to recognise it or the barrier would keep re-firing on a
+        # worker that does in fact have work.
+        return self._has_delegation(
+            self.inboxes[worker_id],
+            sender=self.topology.leader_id,
             recipient=worker_id,
         )
 
@@ -9935,10 +10156,94 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         else:
             return
         if missing:
-            raise RuntimeError(
-                f"{level} delegation barrier incomplete after round "
-                f"{round_number}; missing explicit assignments for: "
-                f"{', '.join(missing)}"
+            self._degrade_delegation(level, round_number, missing)
+
+    def _degrade_delegation(
+        self,
+        level: str,
+        round_number: int,
+        missing: List[str],
+    ) -> None:
+        """Assign directly from the lead when the hierarchy did not delegate.
+
+        This used to raise, which aborted the whole run. One recorded run died
+        that way at round 2 with every worker still unassigned and no worker ever
+        executing: two managers had failed earlier in the round, and the
+        coordination layer took the run down with them. An intermediate layer
+        that can end a run by omission is a single point of failure with no
+        compensating benefit, so it now degrades instead.
+
+        Degradation is loud, not silent. Each fallback assignment is recorded as
+        a `delegation.degraded` event and accumulated on the run so the terminal
+        record shows the hierarchy did not function, and a run that only
+        progressed because of fallbacks is not mistaken for one that delegated
+        properly.
+        """
+        leader = self.topology.leader_id
+        for agent_id in missing:
+            # A delegation must come FROM the sender the barrier checks for, so
+            # this is written as the lead speaking directly rather than as an
+            # orchestrator system message, which _has_delegation would not accept.
+            message = {
+                "runId": self.run_id,
+                "round": round_number,
+                "from": leader,
+                "to": agent_id,
+                "tag": "handoff",
+                "content": (
+                    f"[RecCli fallback] The {level} delegation for {agent_id} was "
+                    f"not issued by round {round_number}. Working directly from the "
+                    f"lead instead. Mission: {self.mission}"
+                ),
+                "candidate": None,
+                "workItem": (
+                    f"Direct lead assignment after {level} delegation was not issued: "
+                    f"advance the mission within your own scope and report a "
+                    f"falsifiable outcome."
+                ),
+                "risk": "routine",
+                "deliveredAt": _utc_now(),
+                "degraded": True,
+            }
+            self.inboxes[agent_id].append(message)
+            self.delivered_messages += 1
+            self._append_jsonl("messages.jsonl", {**message, "status": "delivered"})
+            # Bind the goal too. Scheduling a worker is not the same as giving it
+            # something to do: worker instructions say to solve "the one active
+            # goal shown by RecCli", and goals are normally bound in
+            # _deliver_message only for manager senders. A degraded worker would
+            # otherwise be woken with an empty goal and nothing to solve.
+            # force=True because the lead is deliberately standing in for a
+            # primary manager that did not act.
+            if agent_id in self.topology.worker_ids:
+                accepted, reason = self._bind_worker_goal(
+                    worker_id=agent_id,
+                    manager_id=leader,
+                    work_item=message["workItem"],
+                    objective=message["content"],
+                    risk="routine",
+                    round_number=round_number,
+                    source="lead-fallback",
+                    force=True,
+                )
+                if not accepted:
+                    self._event(
+                        "delegation.degraded.goal_rejected",
+                        round_number,
+                        agent_id=agent_id,
+                        reason=reason,
+                    )
+            self.degraded_delegations.append({
+                "round": round_number,
+                "level": level,
+                "agent_id": agent_id,
+            })
+            self._event(
+                "delegation.degraded",
+                round_number,
+                agent_id=agent_id,
+                level=level,
+                reason="no explicit assignment issued; assigned directly from the lead",
             )
 
     def _select_agents(self, round_number: int) -> List[AgentSpec]:

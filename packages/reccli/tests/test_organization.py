@@ -3227,12 +3227,28 @@ class OrganizationProjectTests(unittest.TestCase):
                 "scientific", "barrier-run", root / "run",
                 max_experiments=4,
             )
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "lead-to-manager.*manager-a, manager-b",
-            ):
-                runner._assert_delegation_barrier(1)
+            # The barrier must still DETECT incomplete delegation, but it must not
+            # end the run. One recorded run died at round 2 with every worker
+            # unassigned and no worker ever executing, because two managers had
+            # failed earlier in the round and the barrier took the run down with
+            # them. Detection is kept; the abort is replaced by direct assignment.
+            runner._assert_delegation_barrier(1)
+            degraded = {item["agent_id"] for item in runner.degraded_delegations}
+            self.assertEqual(degraded, {"manager-a", "manager-b"})
+            self.assertTrue(
+                all(item["level"] == "lead-to-manager" for item in runner.degraded_delegations)
+            )
+            for manager_id in ("manager-a", "manager-b"):
+                self.assertTrue(
+                    runner._has_delegation(
+                        runner.inboxes[manager_id],
+                        sender=runner.topology.leader_id,
+                        recipient=manager_id,
+                    ),
+                    "degradation must leave a delegation the barrier accepts",
+                )
 
+            runner.degraded_delegations.clear()
             for manager_id in ("manager-a", "manager-b"):
                 runner.inboxes[manager_id] = [{
                     "from": "lead",
@@ -3244,6 +3260,10 @@ class OrganizationProjectTests(unittest.TestCase):
                     "risk": "routine",
                 }]
             runner._assert_delegation_barrier(1)
+            self.assertEqual(
+                runner.degraded_delegations, [],
+                "a properly delegated round must not record a degradation",
+            )
             runner._assert_delegation_barrier(2)
             self.assertEqual(
                 {
@@ -3253,6 +3273,8 @@ class OrganizationProjectTests(unittest.TestCase):
                 },
                 set(),
             )
+            # Reviewer and release lanes stay dormant: degradation assigns the
+            # roles the barrier was waiting on, and must not wake anything else.
             self.assertEqual(runner.inboxes["manager-c"], [])
             self.assertEqual(runner.inboxes["manager-d"], [])
 
