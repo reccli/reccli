@@ -8257,10 +8257,18 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
             work_item=current.get("work_item") if current else None,
             statuses={"validated"},
         )
+        # A lead-fallback goal is provisional: it exists only because the
+        # hierarchy failed to delegate. Treating it as equal in standing to a
+        # manager-issued goal meant that once the barrier fired, the manager's
+        # later correct delegation was refused for the rest of the run, and the
+        # worker stayed on a generic fallback objective. The barrier written to
+        # stop the coordination layer killing a run must not stop it recovering.
+        provisional = (current or {}).get("source") == "lead-fallback"
         if (
             self._goal_is_active(current)
             and not same_goal
             and not force
+            and not provisional
             and validated_flag is None
         ):
             return (
@@ -10283,6 +10291,7 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
                 goal_class, predicate_id, evaluator_id = self._free_goal_selector()
                 accepted = False
                 reason = ""
+                raised = False
                 try:
                     accepted, reason = self._bind_worker_goal(
                         worker_id=agent_id,
@@ -10301,12 +10310,20 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
                     # Binding can execute the project's evaluator to capture a
                     # baseline. This barrier exists to stop one failure ending the
                     # run; it must not become a new way to end the run itself.
+                    raised = True
                     reason = f"{type(exc).__name__}: {exc}"
-                # Trust the resulting state, not the return value. Binding records
-                # the goal before capturing its baseline, so a baseline failure
-                # can leave a perfectly usable active goal behind while reporting
-                # failure. Withdrawing there would strand a worker that has work.
-                if self._goal_is_active(self.worker_goals.get(agent_id)):
+                if raised:
+                    # The goal is recorded BEFORE its baseline is captured, so a
+                    # failure here leaves a goal that looks active and has no
+                    # baseline: every candidate it later produces dies on
+                    # "goal baseline is missing". Reading the state as success
+                    # turned an unusable goal into a reported delegation. Discard
+                    # the partial goal and fail honestly.
+                    self.worker_goals.pop(agent_id, None)
+                    accepted = False
+                elif self._goal_is_active(self.worker_goals.get(agent_id)):
+                    # No exception, so a goal that is active really is usable
+                    # even if the return value said otherwise.
                     accepted = True
                 if not accepted:
                     # Do not leave a scheduled worker with no goal. Withdraw the

@@ -185,6 +185,67 @@ class DelegationDegradationTests(unittest.TestCase):
             runner._bind_worker_goal = boom
             runner._assert_delegation_barrier(2)  # must not raise
 
+    def test_a_manager_can_reclaim_a_degraded_worker(self):
+        """The fallback goal must be provisional, not equal to a real one.
+
+        Binding it with force=True made it indistinguishable from a manager
+        assignment, so the manager's later correct delegation was refused for the
+        rest of the run and the worker stayed on a generic fallback objective.
+        The barrier exists to stop the coordination layer killing a run; it must
+        not stop the coordination layer recovering.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            runner._assert_delegation_barrier(2)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["source"], "lead-fallback",
+            )
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-a", manager_id="manager-a",
+                work_item="real/worker-a/gate",
+                objective="Fix the tolerance comparison and pass its focused test.",
+                risk="routine", round_number=3,
+            )
+            self.assertTrue(accepted, reason)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"], "real/worker-a/gate",
+            )
+
+    def test_a_raising_bind_is_not_reported_as_success(self):
+        """Goals are recorded before their baseline is captured.
+
+        Reading the resulting state as success turned a goal with no baseline
+        into a reported delegation, and every candidate it produced then died on
+        "goal baseline is missing".
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+
+            def bind_then_raise(**kwargs):
+                runner.worker_goals[kwargs["worker_id"]] = {
+                    "work_item": kwargs["work_item"], "status": "active",
+                    "source": kwargs["source"],
+                }
+                raise RuntimeError("evaluator could not execute")
+
+            runner._bind_worker_goal = bind_then_raise
+            runner._assert_delegation_barrier(2)
+
+            self.assertEqual(runner.degraded_delegations, [])
+            self.assertEqual(
+                [w for w in runner.topology.worker_ids
+                 if runner.worker_goals.get(w)], [],
+                "a partially bound goal must not survive",
+            )
+            self.assertEqual(
+                [a.agent_id for a in runner._select_agents(3)
+                 if a.agent_id in runner.topology.worker_ids], [],
+            )
+
     def test_a_properly_delegated_round_records_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -386,6 +447,23 @@ class NoExperimentContractTests(unittest.TestCase):
     def test_status_is_terminal_and_distinct(self):
         self.assertIn("no_experiment_contract", TERMINAL_STATUSES)
         self.assertNotEqual("no_experiment_contract", "round_limit")
+
+    def test_an_explicit_contract_is_not_bricked_by_the_new_status(self):
+        """Adding it to the defaults was not enough.
+
+        The defaults are consulted only when eligible_statuses is omitted, and an
+        ineligible latest status makes the launch RAISE rather than skip, so
+        every project declaring its own list stayed unable to launch.
+        """
+        from reccli.organization_project_launch import (
+            _validated_continuation_policy,
+        )
+        policy = _validated_continuation_policy({"continuation_policy": {
+            "mode": "latest-terminal-conclusion",
+            "eligible_statuses": ["completed_no_promotion", "round_limit", "stalled"],
+            "eligible_promotion_readiness": ["not_ready", "no_candidate"],
+        }})
+        self.assertIn("no_experiment_contract", policy["eligible_statuses"])
 
     def test_trips_only_after_the_deadline(self):
         with tempfile.TemporaryDirectory() as td:

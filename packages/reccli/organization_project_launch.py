@@ -443,6 +443,14 @@ def _validated_continuation_policy(
         return {value.strip() for value in values}
 
     statuses = string_set("eligible_statuses", DEFAULT_CONTINUATION_STATUSES)
+    # Always eligible, even when a project declares its list explicitly. RecCli
+    # invented this status after existing contracts were written, so those
+    # contracts cannot name it; and an ineligible latest status does not merely
+    # skip continuation, it makes the launch RAISE. Adding it to the defaults was
+    # not enough: the defaults are consulted only when the field is omitted, so
+    # every project that declares eligible_statuses (including the one this work
+    # was written for) stayed bricked.
+    statuses = statuses | {"no_experiment_contract"}
     unknown_statuses = statuses - TERMINAL_STATUSES
     if unknown_statuses:
         raise ProjectOrganizationLaunchError(
