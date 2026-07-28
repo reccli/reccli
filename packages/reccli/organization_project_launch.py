@@ -628,6 +628,52 @@ def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _rejected_candidates(root: Path) -> List[Dict[str, Any]]:
+    """Every candidate a human has rejected anywhere in this project's history.
+
+    A rejection is permanent, but the scrub used to see only the LATEST run's own
+    operator-decision.json. That made the prohibition last exactly one
+    generation: gen-1 is rejected and gen-2 is scrubbed, but gen-2 terminates
+    without a decision of its own, so gen-3 inherits gen-2's conclusion with the
+    dead artifact back in it.
+
+    Auto-terminated statuses make this the common path rather than a corner: a
+    run that ends because it authored no experiment contract is never adjudicated
+    by a human, so it never has a decision file at all.
+    """
+    decisions: List[Dict[str, Any]] = []
+    try:
+        listed = list_organization_runs(str(root), limit=100)
+    except Exception:
+        return decisions
+    organization_root = (root / "devsession" / "agent-organizations").resolve()
+    for run in listed.get("runs", []) or []:
+        if not isinstance(run, dict):
+            continue
+        raw_dir = str(run.get("run_dir") or "")
+        if not raw_dir:
+            continue
+        try:
+            run_dir = Path(raw_dir).expanduser().resolve()
+            run_dir.relative_to(organization_root)
+        except (ValueError, OSError):
+            continue
+        path = run_dir / "operator-decision.json"
+        if not path.is_file():
+            continue
+        try:
+            decision = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(decision, dict)
+            and decision.get("decision") == "rejected"
+            and decision.get("candidate")
+        ):
+            decisions.append(decision)
+    return decisions
+
+
 def _scrub_rejected_candidate(
     view: Dict[str, Any],
     operator_decision: Optional[Dict[str, Any]],
@@ -709,6 +755,12 @@ def _continuation_mission(
     operator_decision = terminal.get("operator_decision")
     # Scrub before rendering. The rejection notice below is guidance; this is
     # the part that actually removes the artifact from the successor's reach.
+    #
+    # Apply every rejection this project has recorded, not just the latest run's
+    # own. A rejection is permanent, and the run that inherits it is usually the
+    # one with no decision file of its own.
+    for decision in _rejected_candidates(root):
+        view = _scrub_rejected_candidate(view, decision)
     view = _scrub_rejected_candidate(view, operator_decision)
     rejection = ""
     if (

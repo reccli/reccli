@@ -312,6 +312,47 @@ class RejectedCandidateSeedingTests(unittest.TestCase):
         scrubbed = _scrub_rejected_candidate(self._view(), self._decision())
         self.assertEqual(scrubbed["accomplishments"], [])
 
+    def test_a_rejection_survives_a_generation_with_no_decision_of_its_own(self):
+        """A rejection is permanent, but the scrub only saw the latest decision.
+
+        That made it last exactly one generation. It matters more now that
+        no_experiment_contract is continuation-eligible: an auto-terminated run
+        is never adjudicated by a human, so it has no decision file, and its
+        successor would have inherited the dead artifact again.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "s.txt").write_text("x")
+            subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "-c", "user.email=t@t", "-c",
+                 "user.name=t", "commit", "-qm", "c"], check=True,
+            )
+            gen1 = root / "devsession" / "agent-organizations" / "20260101T000000Z_org_a"
+            gen1.mkdir(parents=True)
+            (gen1 / "operator-decision.json").write_text(json.dumps({
+                "decision": "rejected", "candidate": self.CANDIDATE,
+            }))
+            (gen1 / "run.json").write_text(json.dumps({"run_id": "gen1"}))
+
+            # gen-2 auto-terminated: no operator decision of its own.
+            terminal = {
+                "run_id": "gen2", "status": "no_experiment_contract",
+                "conclusion_sha256": "0" * 64,
+                "conclusion": {
+                    "summary": f"Continued work on {self.CANDIDATE}.",
+                    "accomplishments": [f"Re-reviewed {self.CANDIDATE}"],
+                    "next_action": f"Finish reviewing {self.CANDIDATE}.",
+                    "promotion_readiness": "not_ready",
+                },
+            }
+            mission = _continuation_mission(root, terminal, {"mission_id": "m"})
+            carried = mission.split("## Parent terminal conclusion", 1)[1]
+            carried = carried.split("```", 2)[1]
+            self.assertNotIn(self.CANDIDATE, carried)
+            self.assertIn("Superseded", carried)
+
     def test_a_non_rejected_decision_changes_nothing(self):
         view = self._view()
         self.assertEqual(
