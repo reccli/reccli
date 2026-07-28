@@ -2768,6 +2768,11 @@ def save_session_notes(
                     }
                     if rec.get("tool_name"):
                         msg["tool_name"] = rec["tool_name"]
+                    # Spec field on assistant messages (DEVSESSION_FORMAT.md); dropped at every
+                    # flush site, so 0 of 87,379 stored messages carried it. Persisting it is what
+                    # lets drift history survive a compaction.
+                    if rec.get("session_signal"):
+                        msg["session_signal"] = rec["session_signal"]
                     real_conversation.append(msg)
                 break  # Use the most recent WAL
     except Exception:
@@ -3284,86 +3289,6 @@ def summarize_previous_session(
         f"Session had {conv_len} messages.\n"
         f"Summary: {', '.join(item_counts) if item_counts else 'overview only'}"
     )
-
-
-@mcp.tool()
-def evaluate_continuation(
-    goal: str,
-    open_items: list[str],
-    resolved_items: list[str] | None = None,
-) -> str:
-    """Decide whether to continue working or wait for user input.
-
-    Call this after completing a step when you have open items remaining.
-    Pass your current goal and open items directly — do not rely on the
-    WAL, since the Stop hook hasn't fired yet for your current response.
-
-    If it returns action=continue, work on the next item it provides.
-    If it returns action=wait or action=done, stop and let the user direct.
-
-    Args:
-        goal: The user's current session goal.
-        open_items: List of open items from your current session signal.
-        resolved_items: Optional list of items you just resolved (for logging).
-    """
-    if not open_items:
-        return json.dumps({"action": "done", "reason": "No open items."})
-
-    if not goal:
-        # No goal set — treat all open items as actionable
-        return json.dumps({
-            "action": "continue",
-            "goal": "",
-            "next": open_items[0],
-            "remaining": open_items[1:],
-            "filtered": [],
-        })
-
-    # Build an expanded goal vocabulary using the same synonym clusters search uses
-    _STOP = {
-        "the","a","an","and","or","but","in","on","at","to","for","of","with",
-        "by","from","as","is","are","was","were","be","been","being","this","that",
-    }
-    goal_lower = goal.lower()
-    goal_words = {w for w in goal_lower.split() if w not in _STOP and len(w) > 2}
-
-    try:
-        from .retrieval.query_expansion import _SYNONYM_MAP
-        expanded = set(goal_words)
-        for w in list(goal_words):
-            if w in _SYNONYM_MAP:
-                expanded |= _SYNONYM_MAP[w]
-        goal_words = expanded
-    except Exception:
-        pass
-
-    actionable = []
-    filtered = []
-    for item in open_items:
-        item_lower = item.lower()
-        item_words = {w for w in item_lower.split() if w not in _STOP and len(w) > 2}
-        overlap = goal_words & item_words
-        substring_match = any(w in item_lower for w in goal_words if len(w) > 3)
-        if overlap or substring_match:
-            actionable.append(item)
-        else:
-            filtered.append(item)
-
-    if not actionable:
-        return json.dumps({
-            "action": "wait",
-            "reason": "Open items are not related to the current goal.",
-            "goal": goal,
-            "filtered_items": filtered,
-        })
-
-    return json.dumps({
-        "action": "continue",
-        "goal": goal,
-        "next": actionable[0],
-        "remaining": actionable[1:],
-        "filtered": filtered,
-    })
 
 
 @mcp.tool()

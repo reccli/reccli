@@ -1189,18 +1189,44 @@ saves the parsed signal as a structured field on the conversation record:
 | `session_signal.open` | array[string] | Topics that remain open after this response. Must be in service of the goal. |
 
 Session-signals enable incremental progress tracking without retrospective
-summarization. They power autonomous continuation via the `evaluate_continuation`
-MCP tool, which reads the latest signal, filters open items against the goal,
-and returns a continuation brief if there are actionable items the agent can
-self-direct on without user input.
+summarization. They serve two consumers, both in the `Stop` hook:
+
+1. **Continuation hint.** Open items are filtered against the goal and written to
+   a sidecar next to the WAL, which the next `UserPromptSubmit` consumes and
+   deletes. The agent does not have to ask for this.
+2. **Drift detection.** `goal` alone is compared across consecutive assistant
+   turns; a run of identical goals past a threshold emits a zoom-out prompt. This
+   is the only mechanically-computed signal in the autonomy path, and the only
+   one not produced by the same agent it constrains.
+
+An `evaluate_continuation` MCP tool once exposed (1) on request and was removed.
+Self-direction gated on the agent's own judgement of its own goal closes the loop
+with a single judge: the agent writes the goal, scores progress against it, and
+declares completion. The hook path needs no cooperation and cannot be forgotten.
 
 Gated by the `session_signal` config setting (on by default).
 
-##### Autonomous continuation filter algorithm
+**The signal is bounded at capture.** It is a working set, not an accumulating
+ledger: `open` grew roughly eightfold over one long session because unchanged items
+are re-emitted every turn, while drift detection, the consumer with the strongest
+claim to being useful, reads only `goal`.
 
-`evaluate_continuation` decides whether the agent should self-direct by filtering
-`session_signal.open` against `session_signal.goal`. Implementations must follow
-this algorithm:
+| Bound | Value | Applies to |
+|-------|-------|------------|
+| items per list | 5 | `resolved`, `open` |
+| characters per item | 120 | `resolved`, `open` |
+| characters | 200 | `goal` |
+
+Leading items are kept, because consumers take the first actionable one. When a cap
+applies the parser emits `open_truncated` / `resolved_truncated` with the number of
+items dropped, so truncation is never silent. Nothing durable is lost either way:
+`save_session_notes` records the full open-issue set into the session summary, and
+that is what the resume brief reads.
+
+##### Continuation filter algorithm
+
+The `Stop` hook decides what to offer next by filtering `session_signal.open`
+against `session_signal.goal`. Implementations must follow this algorithm:
 
 1. **Tokenize the goal** — lowercase, split on whitespace, drop stop-words
    (`the`, `a`, `an`, `and`, `or`, `but`, `in`, `on`, `at`, `to`, `for`, `of`,

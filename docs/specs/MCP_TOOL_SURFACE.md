@@ -65,7 +65,6 @@ writes to, or operates on the file formats those specs describe.
 
 | Tool | Purpose |
 |------|---------|
-| `evaluate_continuation` | Filters `session_signal.open` against `session_signal.goal` (expanded via the synonym map + substring containment) and returns `continue` / `wait` / `done`. Enables multi-step self-direction without user prompting. |
 
 ### Agent collaboration
 
@@ -245,7 +244,7 @@ worktree:
 ## Error surfaces
 
 Every MCP tool returns a string (plain text for humans, JSON for structured
-payloads like `inspect_result_id` / `evaluate_continuation`). Errors that
+payloads like `inspect_result_id`). Errors that
 would otherwise be silently swallowed should:
 
 1. Log via `_log_issue(component, message, severity, project_root)`.

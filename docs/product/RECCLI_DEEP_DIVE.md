@@ -77,7 +77,7 @@ But the plumbing is the product. Here's what's actually behind it.
 
 ### Autonomy
 
-**`evaluate_continuation`** — The self-direction tool. Given the agent's current goal and its open items, filters the open items against the goal by keyword overlap and returns `continue` with the next actionable item, `wait` if nothing is goal-aligned, or `done` if nothing remains. Lets the agent work through a multi-step task without the user having to say "continue" after each step.
+*(Removed.)* An `evaluate_continuation` tool once let the agent ask whether to keep going. The same filtering now runs in the `Stop` hook, which does not require the agent to remember to call anything. The tool was removed because self-direction gated on the agent's own judgement of its own goal has no independent signal in the loop.
 
 ### Reasoning scaffolds
 
@@ -85,7 +85,7 @@ But the plumbing is the product. Here's what's actually behind it.
 
 **`toggle_mmc`** — The supercharged variant. Three parallel agents, each running the same reasoning scaffold through a different analytical lens — for debugging: recent changes, data flow, assumptions; for planning: simplicity, robustness, performance. The main agent then extracts consensus from their independent conclusions. Self-consistency sampling applied to coding.
 
-**`toggle_session_signal`** — Asks the agent to emit a hidden `<!--session-signal: goal=... | resolved=... | open=...-->` tag on every response. The Stop hook strips the tag and persists the parsed signal. This is what powers the "Resume From" brief on the next session and what `evaluate_continuation` reads from.
+**`toggle_session_signal`** — Asks the agent to emit a hidden `<!--session-signal: goal=... | resolved=... | open=...-->` tag on every response. The Stop hook strips the tag and persists the parsed signal onto the conversation record. Its `goal` field feeds drift detection, which counts consecutive turns on one goal and is the only mechanically-computed signal in the autonomy path. The "Resume From" brief is built separately, from `summary.open_issues` and `summary.next_steps`.
 
 **`toggle_expanded_search`** — Synonym query expansion: "auth middleware" also hits "authentication layer" and "login handler" via multiple BM25 variants. Dense search runs once, since embeddings already capture synonymy. BM25 is where the gain is.
 

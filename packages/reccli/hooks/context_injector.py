@@ -45,13 +45,6 @@ def _session_rules() -> str:
                 "Open items must be in service of the goal — do not carry forward unrelated items "
                 "from previous sessions. "
                 "This tracks progress per response. It will be parsed and stripped automatically."
-                "\n4. AUTONOMOUS CONTINUATION: When you finish a reasoning chain and your session "
-                "signal has open items, call the evaluate_continuation MCP tool with your current "
-                "goal and open_items as parameters (do not pass working_directory — the tool reads "
-                "your intent directly). If it returns action=continue, work on the next item it "
-                "provides. If it returns action=wait or action=done, stop and let the user direct. "
-                "This lets you self-drive through a multi-step task without waiting for the user "
-                "to say 'continue' after each step."
             )
     except Exception:
         pass

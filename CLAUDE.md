@@ -44,7 +44,9 @@ Both gated by config flags (off by default), triggered by intent detection at `U
 
 A SESSION RULE injected at session start asks Claude to append `<!--session-signal: goal=<...> | resolved=<...> | open=<...>-->` to each response. The `Stop` hook extracts the tag, strips it from stored content, and saves the parsed signal as a `session_signal` field on the WAL record. The `goal` anchors the chain — open items must serve the goal, preventing carry-forward of unrelated items.
 
-The `evaluate_continuation` MCP tool reads the latest signal, filters open items against the goal, and returns a continuation brief. A SESSION RULE (AUTONOMOUS CONTINUATION) tells the agent to call this after a reasoning chain with open items: `action=continue` self-directs to the next item; `action=wait`/`done` stops.
+The `Stop` hook filters open items against the goal and writes a continuation hint sidecar, which the next `UserPromptSubmit` consumes and deletes. This is mechanical: it does not depend on the agent remembering to ask.
+
+An `evaluate_continuation` MCP tool previously did this on request and was removed. It asked the agent to judge its own progress against its own goal, so the loop had one judge and no exterior signal. Measured over a full session where a SESSION RULE mandated calling it after every reasoning chain, it was called zero times and the hook did the work regardless.
 
 ## Architecture: tri-layer memory
 

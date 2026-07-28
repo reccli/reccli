@@ -247,6 +247,20 @@ _SESSION_SIGNAL_RE = re.compile(
 )
 
 
+# A session-signal is a working set, not an accumulating ledger. Left uncapped,
+# `open` grows monotonically because unchanged items are re-emitted every turn: one
+# long session went from ~110 characters to ~900, and the growth is worst at the
+# tail where each response is already most expensive.
+#
+# The cost is also misallocated. Drift detection, the consumer with the strongest
+# claim to being useful, reads only `goal`. `resolved` has no consumer at all.
+#
+# 5 matches the resume brief's per-category cap. Items are labels, not prose.
+_SIGNAL_MAX_ITEMS = 5
+_SIGNAL_MAX_ITEM_CHARS = 120
+_SIGNAL_MAX_GOAL_CHARS = 200
+
+
 def _extract_session_signal(message: str) -> Optional[Dict[str, Any]]:
     """Parse a session-signal tag from an assistant message.
 
@@ -265,12 +279,27 @@ def _extract_session_signal(message: str) -> Optional[Dict[str, Any]]:
     goal_raw = (match.group(1) or "").strip()
     resolved_raw = match.group(2).strip()
     open_raw = match.group(3).strip()
+
+    def _items(raw: str) -> List[str]:
+        return [t.strip()[:_SIGNAL_MAX_ITEM_CHARS] for t in raw.split(",") if t.strip()]
+
+    resolved_all = _items(resolved_raw)
+    open_all = _items(open_raw)
+
     signal: Dict[str, Any] = {
-        "resolved": [t.strip() for t in resolved_raw.split(",") if t.strip()],
-        "open": [t.strip() for t in open_raw.split(",") if t.strip()],
+        "resolved": resolved_all[:_SIGNAL_MAX_ITEMS],
+        "open": open_all[:_SIGNAL_MAX_ITEMS],
     }
+    # Never drop silently. Every consumer keeps working on the capped lists, but the
+    # counts make it visible that a cap applied, and save_session_notes still records
+    # the full open-issue set into the session summary, which is what the resume
+    # brief reads. Truncation here costs nothing durable.
+    if len(open_all) > _SIGNAL_MAX_ITEMS:
+        signal["open_truncated"] = len(open_all) - _SIGNAL_MAX_ITEMS
+    if len(resolved_all) > _SIGNAL_MAX_ITEMS:
+        signal["resolved_truncated"] = len(resolved_all) - _SIGNAL_MAX_ITEMS
     if goal_raw:
-        signal["goal"] = goal_raw
+        signal["goal"] = goal_raw[:_SIGNAL_MAX_GOAL_CHARS]
     return signal
 
 
@@ -549,8 +578,11 @@ def _consecutive_same_goal_turns(wal: Path) -> int:
 def _filter_open_items_by_goal(goal: str, open_items: List[str]) -> Dict[str, Any]:
     """Filter `open_items` to those plausibly related to `goal`.
 
-    Mirrors the logic in mcp_server.evaluate_continuation but lives here so
-    the Stop hook can call it without importing the heavy mcp_server module.
+    This is the only implementation. An mcp_server.evaluate_continuation tool
+    once duplicated it and was removed: it asked the agent to judge its own
+    progress against its own goal, which closes the loop with a single judge and
+    supplies no independent signal. The hook path below is mechanical and fires
+    without the agent having to remember anything.
     Returns a dict with keys: action, next, remaining, filtered.
     """
     if not open_items:
@@ -635,8 +667,19 @@ def compute_continuation_hint(session_id: str, cwd: str) -> None:
         open_items = [s.strip() for s in open_items.split(",") if s.strip()]
 
     # ---- Drift check (takes precedence over continuation) ----
+    #
+    # Fire once per threshold-length run, not on every turn past it. `streak >=
+    # threshold` stays true for the rest of the session once tripped, so the
+    # zoom-out re-fired every turn AND returned before the continuation check
+    # below, permanently starving the branch it shares this function with.
+    #
+    # The modulo is deliberately stateless: it needs no sidecar to remember what
+    # already fired, and it re-arms on its own. A goal change resets the streak to
+    # 1 (_consecutive_same_goal_turns counts only trailing identical goals), so a
+    # genuinely long stretch on one goal still gets reminded at 10, 20, 30 turns
+    # while the turns in between fall through to continuation.
     streak = _consecutive_same_goal_turns(wal)
-    if streak >= _DRIFT_TURN_THRESHOLD:
+    if streak >= _DRIFT_TURN_THRESHOLD and streak % _DRIFT_TURN_THRESHOLD == 0:
         hint = {
             "kind": "zoomout",
             "streak": streak,
@@ -764,6 +807,11 @@ def _recover_orphan_wals(project_root: Path, current_session_id: str) -> None:
                     msg["tool_name"] = rec["tool_name"]
                 conversation.append(msg)
 
+                # Spec field on assistant messages (DEVSESSION_FORMAT.md); dropped at every
+                # flush site, so 0 of 87,379 stored messages carried it. Persisting it is what
+                # lets drift history survive a compaction.
+                if rec.get("session_signal"):
+                    msg["session_signal"] = rec["session_signal"]
             session = DevSession(session_id=wal_sid)
             session.metadata["working_directory"] = header.get("working_directory", "")
             session.metadata["project_root"] = str(project_root)
@@ -1161,6 +1209,11 @@ def flush_active_wals(project_root: Path) -> list:
                     msg["tool_name"] = rec["tool_name"]
                 if rec.get("full_response"):
                     msg["tool_response"] = rec["full_response"]
+                # Spec field on assistant messages (DEVSESSION_FORMAT.md); dropped at every
+                # flush site, so 0 of 87,379 stored messages carried it. Persisting it is what
+                # lets drift history survive a compaction.
+                if rec.get("session_signal"):
+                    msg["session_signal"] = rec["session_signal"]
                 conversation.append(msg)
 
             session = DevSession(session_id=sid)
@@ -1305,6 +1358,11 @@ def end_session(session_id: str, cwd: str) -> Optional[Path]:
             msg["tool_name"] = rec["tool_name"]
         if rec.get("full_response"):
             msg["tool_response"] = rec["full_response"]
+        # Spec field on assistant messages (DEVSESSION_FORMAT.md); dropped at every
+        # flush site, so 0 of 87,379 stored messages carried it. Persisting it is what
+        # lets drift history survive a compaction.
+        if rec.get("session_signal"):
+            msg["session_signal"] = rec["session_signal"]
         conversation.append(msg)
 
     # Check if save_session_notes already created a .devsession with a summary.
