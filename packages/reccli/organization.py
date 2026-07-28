@@ -472,7 +472,12 @@ def _flat_topology() -> Topology:
         inbox_only_ids={"lead"},
         # No delegation barrier: with no manager layer there is no intermediate
         # assignment to wait on, and the lead assigns workers directly.
-        delegation_gate=False, required_approvers={"lead"},
+        delegation_gate=False,
+        # The lead is also the finalizer here, and an agent cannot send a
+        # decision to itself, so naming it a required approver deadlocks every
+        # finalization. Authority still exists: human_promotion_required below
+        # keeps the final word with a person, which is the point of the boundary.
+        required_approvers=set(),
         manager_ids=[], worker_ids=worker_ids,
         primary_manager_by_worker={},
         release_manager_id=None,
@@ -483,6 +488,18 @@ def _flat_topology() -> Topology:
         review_policy="veto",
         human_promotion_required=True,
     )
+
+
+def _supervisor_ids(topology: "Topology") -> Set[str]:
+    """Every agent that supervises at least one worker.
+
+    Hierarchical topologies answer with their primary managers. A flat topology
+    has none, and an empty set silently disabled the things gated on it: no agent
+    could author an experiment contract, and the host-state and experiment
+    prompts were withheld from the only agent that coordinates.
+    """
+    supervisors = set(topology.primary_manager_by_worker.values())
+    return supervisors or {topology.leader_id}
 
 
 def _supervisor_of(topology: "Topology", worker_id: str) -> str:
@@ -3154,7 +3171,15 @@ class OrganizationRunner:
         # cannot author a contract has already reported it has nothing to
         # execute. Half the working rounds, never less than three, so a slow
         # start is not punished.
-        self._experiment_contract_deadline = max(3, (self.max_rounds + 1) // 2)
+        # Workers in a delegation-gated topology do not act until round 3 (lead
+        # round 1, managers round 2); flat workers act from round 2. Give them at
+        # least two rounds of their own before concluding nothing will be
+        # authored, and never exceed max_rounds or the check could never fire.
+        _first_worker_round = 3 if self.topology.delegation_gate else 2
+        self._experiment_contract_deadline = min(
+            self.max_rounds,
+            max(4, _first_worker_round + 2, (self.max_rounds + 1) // 2),
+        )
         self.max_concurrency = max(1, int(max_concurrency))
         self.turn_timeout_seconds = max(30, int(turn_timeout_seconds))
         self.model = model
@@ -3422,15 +3447,6 @@ class OrganizationRunner:
             if not scheduled:
                 if not closeout:
                     status = "stalled"
-                break
-            if not closeout and self._experiment_contract_deadline_passed(round_number):
-                status = "no_experiment_contract"
-                self._event(
-                    "run.no_experiment_contract",
-                    round_number,
-                    deadline_round=self._experiment_contract_deadline,
-                    max_experiments=self.max_experiments,
-                )
                 break
             rounds = round_number
             phase_detail = (
@@ -3737,6 +3753,19 @@ class OrganizationRunner:
                 "completed_pending_human",
             }:
                 break
+            # Evaluated AFTER the round's work, not before it. Checked at the top
+            # of the loop this ended the run one round early, so the deadline
+            # round itself never ran and workers in a delegation-gated topology
+            # (which first act in round 3) got a single round to produce anything.
+            if not closeout and self._experiment_contract_deadline_passed(round_number):
+                status = "no_experiment_contract"
+                self._event(
+                    "run.no_experiment_contract",
+                    round_number,
+                    deadline_round=self._experiment_contract_deadline,
+                    max_experiments=self.max_experiments,
+                )
+                break
 
         self._reject_pending_control_requests(status, rounds)
         if status != "cancelled":
@@ -3948,6 +3977,12 @@ class OrganizationRunner:
         this.
         """
         if self.experiment_policy is None or self.max_experiments <= 0:
+            return False
+        # A run too short for workers to have acted at all cannot be said to have
+        # failed to author a contract. Reporting no_experiment_contract there
+        # would blame the run for a budget it was never given.
+        first_worker_round = 3 if self.topology.delegation_gate else 2
+        if self._experiment_contract_deadline < first_worker_round + 1:
             return False
         if round_number < self._experiment_contract_deadline:
             return False
@@ -4974,9 +5009,7 @@ class OrganizationRunner:
     def _host_state_prompt(self, agent_id: str) -> str:
         if not self.host_state_brief:
             return ""
-        primary_managers = set(
-            self.topology.primary_manager_by_worker.values()
-        )
+        primary_managers = _supervisor_ids(self.topology)
         tailored: Dict[str, Any] = {}
         has_assignable_predicate = bool(
             self.experiment_policy
@@ -5773,11 +5806,9 @@ Change only the mutable file above and write one trial intent under
             path = workspace.cwd / relative
             subpath = relative[len(prefix):]
             if subpath.startswith("contracts/"):
-                if agent.agent_id not in set(
-                    self.topology.primary_manager_by_worker.values()
-                ):
+                if agent.agent_id not in _supervisor_ids(self.topology):
                     raise RuntimeError(
-                        "only primary managers may author experiment contracts"
+                        "only a worker's supervisor may author experiment contracts"
                     )
                 records.append(self._validate_experiment_contract(agent, path))
             elif subpath.startswith("trials/"):
@@ -7688,9 +7719,7 @@ candidate needs them. The context box is read-only."""
         if (
             not experiment_note
             and self.experiment_policy
-            and agent.agent_id in set(
-                self.topology.primary_manager_by_worker.values()
-            )
+            and agent.agent_id in _supervisor_ids(self.topology)
         ):
             experiment_note = (
                 f"Evaluator policy: `{self.experiment_policy_path}`. "
@@ -8171,11 +8200,14 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         predicate_id: Optional[str] = None,
         evaluator_id: Optional[str] = None,
     ) -> Tuple[bool, str]:
-        primary = self.topology.primary_manager_by_worker.get(worker_id)
+        # Resolve through the supervisor lookup rather than the manager map: a
+        # flat topology has no primary manager, and comparing against None
+        # rejected every assignment the coordinator made.
+        primary = _supervisor_of(self.topology, worker_id)
         if not force and manager_id != primary:
             return (
                 False,
-                f"worker goals may be assigned only by primary manager {primary}",
+                f"worker goals may be assigned only by {primary}",
             )
         goal_error = self._problem_solving_goal_error(objective)
         if goal_error:
@@ -9388,7 +9420,7 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             return
         if (
             recipient in self.topology.worker_ids
-            and sender in self.topology.manager_ids
+            and sender == _supervisor_of(self.topology, recipient)
             and tag in DELEGATION_TAGS
         ):
             accepted, reason = self._bind_worker_goal(
@@ -10158,6 +10190,32 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         if missing:
             self._degrade_delegation(level, round_number, missing)
 
+    def _free_goal_selector(self):
+        """Pick a project-declared predicate no active goal already owns.
+
+        Returns (goal_class, predicate_id, evaluator_id), or three Nones when the
+        project does not require measurable goals. Without a specific selector,
+        _resolve_goal_measurement matches every declared predicate at once and
+        refuses the goal as unevaluable.
+        """
+        policy = self.experiment_policy
+        if not (policy and policy.get("promotion_requires_goal_progress", False)):
+            return None, None, None
+        owned = {
+            goal.get("predicate_id")
+            for goal in self.worker_goals.values()
+            if self._goal_is_active(goal)
+        }
+        for evaluator in policy.get("evaluators", {}).values():
+            for predicate in evaluator.get("predicates", {}).values():
+                if predicate["id"] not in owned:
+                    return (
+                        predicate["goal_class"],
+                        predicate["id"],
+                        evaluator["id"],
+                    )
+        return None, None, None
+
     def _degrade_delegation(
         self,
         level: str,
@@ -10196,10 +10254,11 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
                     f"lead instead. Mission: {self.mission}"
                 ),
                 "candidate": None,
+                # Distinct per worker: governance requires worker traffic to
+                # carry its goal's workItem, so a shared string collapses every
+                # worker's identity into one and collides on re-delegation.
                 "workItem": (
-                    f"Direct lead assignment after {level} delegation was not issued: "
-                    f"advance the mission within your own scope and report a "
-                    f"falsifiable outcome."
+                    f"lead-fallback-{_safe_name(agent_id)}-r{round_number}"
                 ),
                 "risk": "routine",
                 "deliveredAt": _utc_now(),
@@ -10211,28 +10270,61 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             # Bind the goal too. Scheduling a worker is not the same as giving it
             # something to do: worker instructions say to solve "the one active
             # goal shown by RecCli", and goals are normally bound in
-            # _deliver_message only for manager senders. A degraded worker would
-            # otherwise be woken with an empty goal and nothing to solve.
-            # force=True because the lead is deliberately standing in for a
-            # primary manager that did not act.
+            # _deliver_message only for the worker's supervisor. A degraded worker
+            # would otherwise be woken with an empty goal, be told "do not perform
+            # substantive work", and have every message it emits dropped.
+            #
+            # The selectors matter. Passing none of them made the goal unevaluable
+            # on any project declaring more than one predicate, so every fallback
+            # was rejected and every worker was woken empty anyway. Choosing a
+            # free predicate per worker keeps the goal measurable and gives each
+            # worker distinct work.
             if agent_id in self.topology.worker_ids:
-                accepted, reason = self._bind_worker_goal(
-                    worker_id=agent_id,
-                    manager_id=leader,
-                    work_item=message["workItem"],
-                    objective=message["content"],
-                    risk="routine",
-                    round_number=round_number,
-                    source="lead-fallback",
-                    force=True,
-                )
+                goal_class, predicate_id, evaluator_id = self._free_goal_selector()
+                accepted = False
+                reason = ""
+                try:
+                    accepted, reason = self._bind_worker_goal(
+                        worker_id=agent_id,
+                        manager_id=leader,
+                        work_item=message["workItem"],
+                        objective=message["content"],
+                        risk="routine",
+                        round_number=round_number,
+                        source="lead-fallback",
+                        force=True,
+                        goal_class=goal_class,
+                        predicate_id=predicate_id,
+                        evaluator_id=evaluator_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Binding can execute the project's evaluator to capture a
+                    # baseline. This barrier exists to stop one failure ending the
+                    # run; it must not become a new way to end the run itself.
+                    reason = f"{type(exc).__name__}: {exc}"
+                # Trust the resulting state, not the return value. Binding records
+                # the goal before capturing its baseline, so a baseline failure
+                # can leave a perfectly usable active goal behind while reporting
+                # failure. Withdrawing there would strand a worker that has work.
+                if self._goal_is_active(self.worker_goals.get(agent_id)):
+                    accepted = True
                 if not accepted:
+                    # Do not leave a scheduled worker with no goal. Withdraw the
+                    # fallback so the worker is not woken to be told it may not
+                    # work, and record the failure rather than reporting a
+                    # delegation that did not happen.
+                    try:
+                        self.inboxes[agent_id].remove(message)
+                        self.delivered_messages -= 1
+                    except ValueError:
+                        pass
                     self._event(
                         "delegation.degraded.goal_rejected",
                         round_number,
                         agent_id=agent_id,
                         reason=reason,
                     )
+                    continue
             self.degraded_delegations.append({
                 "round": round_number,
                 "level": level,

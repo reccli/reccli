@@ -106,6 +106,85 @@ class DelegationDegradationTests(unittest.TestCase):
             runner._assert_delegation_barrier(2)
             self.assertEqual(len(runner.degraded_delegations), first)
 
+    def test_no_worker_is_ever_scheduled_without_a_goal(self):
+        """The failure the first fix actually caused.
+
+        Binding with no predicate selectors is unevaluable on any project
+        declaring more than one predicate, so every fallback was rejected and
+        every worker was still woken, told "do not perform substantive work",
+        and had each message it emitted dropped.
+        """
+        policy = {
+            "promotion_requires_goal_progress": True, "source_sha256": "x",
+            "evaluators": {"eval-v1": {
+                "id": "eval-v1", "profile_sha256": "a" * 64,
+                "immutable_ground_truth_sha256": "b" * 64,
+                "predicates": {
+                    f"p{i}": {"id": f"pred-{i}-v1",
+                              "goal_class": "production_pipeline",
+                              "comparison_rule_id": "gte"}
+                    for i in range(6)
+                }}},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            runner.experiment_policy = policy
+            runner._assert_delegation_barrier(2)
+            scheduled = [
+                agent.agent_id for agent in runner._select_agents(3)
+                if agent.agent_id in runner.topology.worker_ids
+            ]
+            for worker_id in scheduled:
+                self.assertTrue(
+                    runner._goal_is_active(runner.worker_goals.get(worker_id)),
+                    f"{worker_id} was scheduled with no active goal",
+                )
+
+    def test_recorded_degradations_match_workers_that_got_work(self):
+        """The terminal record must not overstate what happened."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            runner._assert_delegation_barrier(2)
+            recorded = {
+                item["agent_id"] for item in runner.degraded_delegations
+                if item["agent_id"] in runner.topology.worker_ids
+            }
+            with_goals = {
+                worker_id for worker_id in runner.topology.worker_ids
+                if runner._goal_is_active(runner.worker_goals.get(worker_id))
+            }
+            self.assertEqual(recorded, with_goals)
+
+    def test_each_degraded_worker_gets_a_distinct_work_item(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            runner._assert_delegation_barrier(2)
+            items = [
+                runner.worker_goals[worker_id]["work_item"]
+                for worker_id in runner.topology.worker_ids
+                if runner.worker_goals.get(worker_id)
+            ]
+            self.assertEqual(len(items), len(set(items)))
+
+    def test_the_barrier_never_raises_even_when_binding_explodes(self):
+        """The barrier exists to stop one failure ending the run."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+
+            def boom(**kwargs):
+                raise RuntimeError("evaluator subprocess exploded")
+
+            runner._bind_worker_goal = boom
+            runner._assert_delegation_barrier(2)  # must not raise
+
     def test_a_properly_delegated_round_records_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -344,12 +423,45 @@ class NoExperimentContractTests(unittest.TestCase):
             runner.experiment_policy = {"source_sha256": "x"}
             self.assertFalse(runner._experiment_contract_deadline_passed(99))
 
-    def test_deadline_leaves_room_for_a_slow_start(self):
+    def test_a_run_too_short_for_workers_never_trips(self):
+        """max_rounds=2 never reaches round 3, when gated workers first act.
+
+        Reporting no_experiment_contract there would blame the run for a budget
+        it was never given.
+        """
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = self._runner(root, max_experiments=3, max_rounds=2)
-            self.assertGreaterEqual(runner._experiment_contract_deadline, 3)
+            runner.experiment_policy = {"source_sha256": "x"}
+            self.assertTrue(runner.topology.delegation_gate)
+            self.assertFalse(runner._experiment_contract_deadline_passed(99))
+
+    def test_workers_get_at_least_two_rounds_before_the_deadline(self):
+        """Checked at the END of a round, so the deadline round itself runs.
+
+        Gated workers first act in round 3; a deadline of 4 evaluated at the top
+        of the round gave them exactly one round to produce anything.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root, max_experiments=3, max_rounds=8)
+            first_worker_round = 3 if runner.topology.delegation_gate else 2
+            self.assertGreaterEqual(
+                runner._experiment_contract_deadline - first_worker_round + 1, 2,
+            )
+
+    def test_the_new_status_does_not_block_future_launches(self):
+        """An ineligible latest status makes the launch path RAISE, not skip.
+
+        Excluding this status from the defaults did not merely stop a successor
+        auto-launching; it stopped the project launching at all.
+        """
+        from reccli.organization_project_launch import (
+            DEFAULT_CONTINUATION_STATUSES,
+        )
+        self.assertIn("no_experiment_contract", DEFAULT_CONTINUATION_STATUSES)
 
 
 class ContextPackDeduplicationTests(unittest.TestCase):

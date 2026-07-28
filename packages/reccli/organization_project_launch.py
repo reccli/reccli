@@ -51,6 +51,13 @@ DEFAULT_CONTINUATION_STATUSES = {
     "completed_no_promotion",
     "round_limit",
     "stalled",
+    # A run that ended because it authored no experiment contract. Excluding it
+    # did not merely stop a successor from auto-launching: _apply_terminal_continuation
+    # RAISES continuation_not_authorized for any ineligible latest status, so the
+    # project could not launch at all until someone intervened by hand. Ending a
+    # run early must not brick the launch path, and a successor inherits the
+    # scrubbed conclusion and is free to take a different approach.
+    "no_experiment_contract",
 }
 DEFAULT_CONTINUATION_READINESS = {"not_ready", "no_candidate"}
 
