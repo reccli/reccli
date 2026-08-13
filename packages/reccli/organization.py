@@ -9244,27 +9244,29 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         error: str,
         round_number: int,
     ) -> None:
-        """Release a dead lane after consecutive provider failures.
+        """Release a dead lane on the first failed worker turn.
 
         In the first live flat run, one worker's provider turns died three
         rounds straight while it retained sole ownership of the mission's only
         predicate, serializing every other lane behind it with no signal to
         the lead: a dead worker cannot raise the flag that would free its own
-        goal. After two consecutive failures the host cancels the goal (which
-        releases predicate ownership), clears the stale delegation inbox so
-        the lane stops being scheduled to die, and tells the supervisor to
-        rebind the work elsewhere.
+        goal. The host cancels the goal immediately (releasing predicate
+        ownership), clears the stale delegation inbox so the lane stops being
+        scheduled to die, and tells the supervisor to rebind. Blind retry is
+        never cheaper than that: a retried dead turn costs up to a full turn
+        timeout, while a released transient costs one lead turn, and the
+        released worker remains eligible for the rebind.
         """
         consecutive = self._consecutive_turn_failures.get(agent.agent_id, 0) + 1
         self._consecutive_turn_failures[agent.agent_id] = consecutive
-        if agent.agent_id not in self.topology.worker_ids or consecutive < 2:
+        if agent.agent_id not in self.topology.worker_ids:
             return
         goal = self.worker_goals.get(agent.agent_id)
         if not self._goal_is_active(goal):
             return
         goal["status"] = "cancelled"
         goal["cancelled_reason"] = (
-            f"{consecutive} consecutive provider turn failures"
+            f"provider turn failure ({consecutive} consecutive)"
         )
         goal["updated_round"] = round_number
         self._persist_goal_state()
@@ -9281,10 +9283,10 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             supervisor,
             "blocker",
             (
-                f"{agent.agent_id} failed {consecutive} consecutive provider "
-                f"turns ({error[:200]}). Its goal "
-                f"'{goal.get('work_item')}' was released and its inbox "
-                "cleared; rebind the work to another worker or stop."
+                f"{agent.agent_id} failed a provider turn ({error[:200]}). "
+                f"Its goal '{goal.get('work_item')}' was released and its "
+                "inbox cleared; rebind the work (the same worker remains "
+                "eligible) or stop."
             ),
             round_number,
             None,

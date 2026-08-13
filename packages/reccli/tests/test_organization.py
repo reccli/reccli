@@ -4194,20 +4194,15 @@ class DeadLaneReleaseTests(unittest.TestCase):
 
             runner._record_turn_failure(worker, "schema rejected", 2)
             self.assertEqual(
-                runner.worker_goals["worker-a"]["status"], "active",
-                "one failure must not release the goal",
-            )
-            self.assertEqual(runner.inboxes["lead"], [])
-
-            runner._record_turn_failure(worker, "schema rejected", 3)
-            self.assertEqual(
                 runner.worker_goals["worker-a"]["status"], "cancelled",
+                "the first failed worker turn must release the goal: blind "
+                "retry of a dead lane costs a full turn timeout",
             )
             self.assertEqual(runner.inboxes["worker-a"], [])
             blockers = [
                 message for message in runner.inboxes["lead"]
                 if message.get("tag") == "blocker"
-                and "consecutive provider" in message.get("content", "")
+                and "failed a provider turn" in message.get("content", "")
             ]
             self.assertEqual(len(blockers), 1)
             # The released predicate/work is rebindable to another worker.
