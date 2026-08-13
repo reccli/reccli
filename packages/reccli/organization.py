@@ -40,7 +40,7 @@ MESSAGE_TAGS = {
 DELEGATION_TAGS = {"plan", "handoff", "review"}
 RISKS = {"routine", "high", "release"}
 STATES = {"working", "idle", "blocked", "done"}
-DISPOSITIONS = {"continue", "promote", "no_promotion", "pending_human"}
+DISPOSITIONS = {"continue", "promote", "no_promotion", "pending_human", "no_op"}
 WORKER_GOAL_TERMINAL_STATES = {
     "candidate_ready", "completed", "superseded", "cancelled", "unevaluable",
 }
@@ -1627,9 +1627,17 @@ def validate_agent_reply(value: Any) -> Dict[str, Any]:
         raise ValueError("invalid terminal disposition")
     if value["final"] and value["disposition"] == "continue":
         raise ValueError(
-            "a final reply requires promote, no_promotion, or pending_human "
-            "disposition"
+            "a final reply requires promote, no_promotion, pending_human, "
+            "or no_op disposition"
         )
+    if value["disposition"] == "no_op":
+        if not value["final"]:
+            raise ValueError("a no_op disposition requires final=true")
+        if value["candidate"] is not None:
+            raise ValueError(
+                "a no_op disposition declares that no work was warranted and "
+                "cannot carry a candidate"
+            )
     for message in value["messages"]:
         if not isinstance(message, dict):
             raise ValueError("message must be an object")
@@ -3576,12 +3584,49 @@ class OrganizationRunner:
                 if reply["final"]:
                     final_attempts.append(item)
 
+            # A lead no_op is adjudicated before the delegation barrier: a run
+            # whose lead just declared the admission's done condition satisfied
+            # (or a stop condition triggered) must not have fallback work
+            # forged for it by the very machinery that exists to keep work
+            # flowing. Stopping is a successful outcome and costs one turn
+            # instead of rounds of manufactured work.
+            lead_no_op = next(
+                (
+                    item for item in final_attempts
+                    if item["reply"].get("disposition") == "no_op"
+                    and item["agent"].agent_id == self.topology.leader_id
+                ),
+                None,
+            )
+            if lead_no_op is not None:
+                status = "completed_no_op"
+                finalized_by = lead_no_op["agent"].agent_id
+                final_summary = lead_no_op["reply"]["summary"]
+                self._event(
+                    "finalization.no_op", round_number,
+                    agent_id=lead_no_op["agent"].agent_id,
+                    done_condition=(
+                        (self.admission or {}).get("done_condition")
+                    ),
+                    reason=lead_no_op["reply"]["summary"],
+                )
+                self._write_host_state_brief(round_number)
+                break
+
             self._assert_delegation_barrier(round_number)
 
             for item in final_attempts:
                 agent = item["agent"]
                 reply = item["reply"]
                 candidate = reply.get("candidate")
+                if reply.get("disposition") == "no_op":
+                    self.states[agent.agent_id] = "working"
+                    self._event(
+                        "finalization.rejected", round_number,
+                        agent_id=agent.agent_id,
+                        reason="only the lead may declare no_op",
+                    )
+                    continue
                 if agent.agent_id != self.topology.finalizer_id:
                     self._event("finalization.rejected", round_number, agent_id=agent.agent_id, reason="agent is not the finalizer")
                     continue
@@ -3757,6 +3802,7 @@ class OrganizationRunner:
                 "completed",
                 "completed_no_promotion",
                 "completed_pending_human",
+                "completed_no_op",
             }:
                 break
             # Evaluated AFTER the round's work, not before it. Checked at the top
@@ -7514,6 +7560,10 @@ Change only the mutable file above and write one trial intent under
         if (
             agent.agent_id != self.topology.finalizer_id
             and reply["disposition"] != "continue"
+            and not (
+                agent.agent_id == self.topology.leader_id
+                and reply["disposition"] == "no_op"
+            )
         ):
             raise ValueError(
                 f"{agent.agent_id} is not the finalizer and must use "
@@ -7622,12 +7672,22 @@ Change only the mutable file above and write one trial intent under
         )
         return payload[-max_chars:]
 
-    def _admission_section(self) -> str:
+    def _admission_section(self, agent: AgentSpec) -> str:
         if not self.admission:
             return ""
+        lead_no_op = ""
+        if agent.agent_id == self.topology.leader_id:
+            lead_no_op = (
+                "\n\nIf the done condition is already satisfied, or any stop "
+                "condition holds, reply with final=true, disposition=no_op, "
+                "candidate=null, and a summary naming the condition. Stopping "
+                "is a successful outcome; do not manufacture work to justify "
+                "the run."
+            )
         return (
             "\n## Admission contract\n\n"
             + render_admission_prompt(self.admission)
+            + lead_no_op
             + "\n"
         )
 
@@ -7816,7 +7876,7 @@ Run artifacts: `{self.artifact_staging_prefix}/<path-relative-to-the-run-directo
 ## Mission
 
 {self.mission}
-{self._admission_section()}
+{self._admission_section(agent)}
 ## Role authority
 
 {agent.instructions}

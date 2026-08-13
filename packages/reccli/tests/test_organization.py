@@ -4605,5 +4605,201 @@ class OrganizationRunnerTests(unittest.TestCase):
                     shutil.rmtree(worktree_parent, ignore_errors=True)
 
 
+class NoOpDispositionTests(unittest.TestCase):
+    def test_no_op_reply_requires_final_and_no_candidate(self):
+        reply = _reply()
+        reply.update({"disposition": "no_op", "final": False})
+        with self.assertRaisesRegex(ValueError, "final=true"):
+            validate_agent_reply(reply)
+        reply.update({"final": True, "candidate": "abc123"})
+        with self.assertRaisesRegex(ValueError, "cannot carry a candidate"):
+            validate_agent_reply(reply)
+        reply.update({"candidate": None, "state": "done"})
+        self.assertEqual(validate_agent_reply(reply)["disposition"], "no_op")
+
+    def test_lead_no_op_ends_run_as_successful_terminal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "no-op"
+            runner = OrganizationRunner(
+                root, "Verify the controls still hold.", "claude",
+                "google-rotating", "no-op", run_dir,
+                max_rounds=4, max_closeout_rounds=0,
+                admission=VALID_ADMISSION,
+            )
+            prompts = {}
+
+            def fake_run(session, prompt, schema, timeout_seconds):
+                session.turn += 1
+                agent_id = session.session_key
+                prompts.setdefault(agent_id, prompt)
+                if schema is RUN_CONCLUSION_SCHEMA:
+                    return {
+                        "value": _conclusion(
+                            "The done condition was already satisfied."
+                        ),
+                        "session_id": f"session-{agent_id}",
+                        "usage": {},
+                    }
+                if agent_id == "lead":
+                    reply = {
+                        "messages": [],
+                        "summary": (
+                            "The done condition is already satisfied: the "
+                            "reviewed candidate is merged-ready with the "
+                            "suite passing."
+                        ),
+                        "state": "done",
+                        "artifacts": [],
+                        "candidate": None,
+                        "risk": None,
+                        "disposition": "no_op",
+                        "final": True,
+                    }
+                else:
+                    reply = _reply()
+                return {
+                    "value": reply,
+                    "session_id": f"session-{agent_id}",
+                    "usage": {},
+                }
+
+            worktree_parent = None
+            try:
+                with patch.object(SubscriptionSession, "run", new=fake_run):
+                    result = runner.run()
+                worktree_parent = Path(result["integration_workspace"]).parent
+                self.assertEqual(result["status"], "completed_no_op")
+                self.assertEqual(result["rounds"], 1)
+                self.assertEqual(result["finalized_by"], "lead")
+                self.assertIsNone(result["verified_candidate"])
+                self.assertFalse(result["canonical_effects_applied"])
+                conclusion = json.loads(
+                    (run_dir / "run-conclusion.json").read_text(
+                        encoding="utf-8",
+                    )
+                )
+                self.assertEqual(
+                    conclusion["terminal_status"], "completed_no_op",
+                )
+                events = [
+                    json.loads(line)
+                    for line in (run_dir / "events.jsonl").read_text(
+                        encoding="utf-8",
+                    ).splitlines()
+                ]
+                no_op_events = [
+                    event for event in events
+                    if event["type"] == "finalization.no_op"
+                ]
+                self.assertEqual(len(no_op_events), 1)
+                self.assertEqual(
+                    no_op_events[0]["done_condition"],
+                    VALID_ADMISSION["done_condition"],
+                )
+                degraded = [
+                    event for event in events
+                    if event["type"] == "delegation.degraded"
+                ]
+                self.assertEqual(
+                    degraded, [],
+                    "a lead no_op must not trigger forged fallback delegation",
+                )
+                self.assertIn("Admission contract", prompts["lead"])
+                self.assertIn("disposition=no_op", prompts["lead"])
+            finally:
+                if worktree_parent is not None:
+                    shutil.rmtree(worktree_parent, ignore_errors=True)
+
+    def test_finalizer_no_op_is_rejected_as_lead_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = (
+                root / "devsession" / "agent-organizations" / "no-op-reject"
+            )
+            runner = OrganizationRunner(
+                root, "Probe the rejection path.", "claude",
+                "google-rotating", "no-op-reject", run_dir,
+                max_rounds=2, max_closeout_rounds=0,
+                admission=VALID_ADMISSION,
+            )
+
+            def message(to, content, work_item):
+                return {
+                    "to": to, "tag": "plan", "content": content,
+                    "candidate": None, "workItem": work_item, "risk": "routine",
+                }
+
+            def fake_run(session, prompt, schema, timeout_seconds):
+                session.turn += 1
+                agent_id = session.session_key
+                if schema is RUN_CONCLUSION_SCHEMA:
+                    return {
+                        "value": _conclusion("The run hit its round limit."),
+                        "session_id": f"session-{agent_id}",
+                        "usage": {},
+                    }
+                if agent_id == "lead" and session.turn == 1:
+                    reply = dict(_reply())
+                    reply["messages"] = [
+                        message(
+                            manager, f"Map bounded lane {manager}.",
+                            f"map-{manager}",
+                        )
+                        for manager in (
+                            "manager-a", "manager-b", "manager-c", "manager-d",
+                        )
+                    ]
+                elif agent_id == "manager-d" and session.turn == 1:
+                    reply = {
+                        "messages": [],
+                        "summary": "Nothing here is worth doing.",
+                        "state": "done",
+                        "artifacts": [],
+                        "candidate": None,
+                        "risk": None,
+                        "disposition": "no_op",
+                        "final": True,
+                    }
+                elif agent_id.startswith("manager-") and session.turn == 1:
+                    worker = f"worker-{agent_id[-1]}"
+                    reply = dict(_reply())
+                    reply["messages"] = [
+                        message(worker, f"Inspect {worker}.", f"inspect-{worker}"),
+                    ]
+                else:
+                    reply = _reply()
+                return {
+                    "value": reply,
+                    "session_id": f"session-{agent_id}",
+                    "usage": {},
+                }
+
+            worktree_parent = None
+            try:
+                with patch.object(SubscriptionSession, "run", new=fake_run):
+                    result = runner.run()
+                worktree_parent = Path(result["integration_workspace"]).parent
+                self.assertNotEqual(result["status"], "completed_no_op")
+                events = [
+                    json.loads(line)
+                    for line in (run_dir / "events.jsonl").read_text(
+                        encoding="utf-8",
+                    ).splitlines()
+                ]
+                rejections = [
+                    event for event in events
+                    if event["type"] == "finalization.rejected"
+                    and event.get("reason") == "only the lead may declare no_op"
+                ]
+                self.assertEqual(len(rejections), 1)
+                self.assertEqual(rejections[0]["agent_id"], "manager-d")
+            finally:
+                if worktree_parent is not None:
+                    shutil.rmtree(worktree_parent, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

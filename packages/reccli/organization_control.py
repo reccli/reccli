@@ -40,6 +40,10 @@ TERMINAL_STATUSES = {
     # the run worked until it ran out of rounds, this means it never had
     # anything to execute and the remaining rounds would have produced prose.
     "no_experiment_contract",
+    # The lead declared the admission's done condition already satisfied or a
+    # stop condition triggered. A successful outcome, distinct from stalled:
+    # the run judged that proceeding had lower value than stopping.
+    "completed_no_op",
 }
 MAX_OPERATOR_MESSAGE_CHARS = 12_000
 APPROVAL_REQUEST_SCHEMA = "reccli.organization-approval-request.v1"

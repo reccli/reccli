@@ -452,7 +452,7 @@ def _validated_continuation_policy(
     # not enough: the defaults are consulted only when the field is omitted, so
     # every project that declares eligible_statuses (including the one this work
     # was written for) stayed bricked.
-    statuses = statuses | {"no_experiment_contract"}
+    statuses = statuses | {"no_experiment_contract", "completed_no_op"}
     unknown_statuses = statuses - TERMINAL_STATUSES
     if unknown_statuses:
         raise ProjectOrganizationLaunchError(
@@ -632,7 +632,12 @@ def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
 
 # Terminal states meaning "this run produced nothing to build on". Continuing
 # from one is reasonable once; doing it repeatedly is a loop.
-BARREN_TERMINAL_STATUSES = {"no_experiment_contract", "stalled"}
+# completed_no_op is a successful outcome, but a chain of successors that each
+# find nothing to do is the barren loop entered through the polite door: stop
+# auto-continuing it exactly like the unproductive statuses.
+BARREN_TERMINAL_STATUSES = {
+    "no_experiment_contract", "stalled", "completed_no_op",
+}
 MAX_CONSECUTIVE_BARREN_CONTINUATIONS = 2
 
 
