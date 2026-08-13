@@ -157,7 +157,16 @@ AGENT_REPLY_SCHEMA: Dict[str, Any] = {
                         ],
                     },
                 },
-                "required": ["to", "tag", "content", "candidate", "workItem", "risk"],
+                # OpenAI strict schema mode requires EVERY declared property
+                # in `required`; optionality is expressed only by the
+                # anyOf-with-null on the field itself. Omitting the three goal
+                # fields made Codex reject the response_format before the
+                # model ran, which killed every codex lane in the first live
+                # flat run. Claude tolerated the omission, hiding it.
+                "required": [
+                    "to", "tag", "content", "candidate", "workItem", "risk",
+                    "goalClass", "predicateId", "evaluatorId",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -2991,6 +3000,7 @@ class OrganizationRunner:
         self.off_goal_flags: Dict[str, Dict[str, Any]] = {}
         self.sessions: Dict[str, SubscriptionSession] = {}
         self.turned: Set[str] = set()
+        self._consecutive_turn_failures: Dict[str, int] = {}
         self.prompt_bootstrapped: Set[str] = set()
         self.model_prompt_state_by_agent: Dict[str, Dict[str, Any]] = {}
         self.usage = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
@@ -3296,7 +3306,11 @@ class OrganizationRunner:
                         "status": "failed", "error": item["error"],
                         "duration_ms": item.get("duration_ms", 0),
                     })
+                    self._record_turn_failure(
+                        agent, str(item["error"]), round_number,
+                    )
                     continue
+                self._consecutive_turn_failures[agent.agent_id] = 0
                 reply = item["reply"]
                 self.states[agent.agent_id] = reply["state"]
                 accounted_usage = self._add_usage(
@@ -9223,6 +9237,60 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "review": review,
         })
         return review
+
+    def _record_turn_failure(
+        self,
+        agent: AgentSpec,
+        error: str,
+        round_number: int,
+    ) -> None:
+        """Release a dead lane after consecutive provider failures.
+
+        In the first live flat run, one worker's provider turns died three
+        rounds straight while it retained sole ownership of the mission's only
+        predicate, serializing every other lane behind it with no signal to
+        the lead: a dead worker cannot raise the flag that would free its own
+        goal. After two consecutive failures the host cancels the goal (which
+        releases predicate ownership), clears the stale delegation inbox so
+        the lane stops being scheduled to die, and tells the supervisor to
+        rebind the work elsewhere.
+        """
+        consecutive = self._consecutive_turn_failures.get(agent.agent_id, 0) + 1
+        self._consecutive_turn_failures[agent.agent_id] = consecutive
+        if agent.agent_id not in self.topology.worker_ids or consecutive < 2:
+            return
+        goal = self.worker_goals.get(agent.agent_id)
+        if not self._goal_is_active(goal):
+            return
+        goal["status"] = "cancelled"
+        goal["cancelled_reason"] = (
+            f"{consecutive} consecutive provider turn failures"
+        )
+        goal["updated_round"] = round_number
+        self._persist_goal_state()
+        self.inboxes[agent.agent_id] = []
+        supervisor = _supervisor_of(self.topology, agent.agent_id)
+        self._event(
+            "worker.goal.released_after_failures",
+            round_number,
+            worker_id=agent.agent_id,
+            work_item=goal.get("work_item"),
+            consecutive_failures=consecutive,
+        )
+        self._system_message(
+            supervisor,
+            "blocker",
+            (
+                f"{agent.agent_id} failed {consecutive} consecutive provider "
+                f"turns ({error[:200]}). Its goal "
+                f"'{goal.get('work_item')}' was released and its inbox "
+                "cleared; rebind the work to another worker or stop."
+            ),
+            round_number,
+            None,
+            goal.get("work_item"),
+            goal.get("risk"),
+        )
 
     def _has_initial_worker_assignment(self, worker_id: str) -> bool:
         if self._goal_is_active(self.worker_goals.get(worker_id)):

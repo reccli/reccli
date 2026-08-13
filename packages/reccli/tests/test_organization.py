@@ -4168,6 +4168,117 @@ class OrganizationRunnerTests(unittest.TestCase):
                     shutil.rmtree(worktree_parent, ignore_errors=True)
 
 
+class DeadLaneReleaseTests(unittest.TestCase):
+    def test_consecutive_failures_release_the_goal_and_notify_the_lead(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "dead-lane"
+            runner = OrganizationRunner(
+                root, "Close the cone gate.", "claude",
+                "flat", "dead-lane", run_dir,
+            )
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-a",
+                manager_id="lead",
+                work_item="cone-fix",
+                objective="Fix the cone refinement and pass its scoring test.",
+                risk="high",
+                round_number=1,
+            )
+            self.assertTrue(accepted, reason)
+            runner.inboxes["worker-a"].append({
+                "from": "lead", "tag": "plan", "content": "stale delegation",
+            })
+            worker = runner.topology.agent("worker-a")
+
+            runner._record_turn_failure(worker, "schema rejected", 2)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["status"], "active",
+                "one failure must not release the goal",
+            )
+            self.assertEqual(runner.inboxes["lead"], [])
+
+            runner._record_turn_failure(worker, "schema rejected", 3)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["status"], "cancelled",
+            )
+            self.assertEqual(runner.inboxes["worker-a"], [])
+            blockers = [
+                message for message in runner.inboxes["lead"]
+                if message.get("tag") == "blocker"
+                and "consecutive provider" in message.get("content", "")
+            ]
+            self.assertEqual(len(blockers), 1)
+            # The released predicate/work is rebindable to another worker.
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-b",
+                manager_id="lead",
+                work_item="cone-fix",
+                objective="Fix the cone refinement and pass its scoring test.",
+                risk="high",
+                round_number=3,
+            )
+            self.assertTrue(accepted, reason)
+
+    def test_lead_failures_never_release_worker_goals(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "lead-fail"
+            runner = OrganizationRunner(
+                root, "Close the cone gate.", "claude",
+                "flat", "lead-fail", run_dir,
+            )
+            lead = runner.topology.agent("lead")
+            runner._record_turn_failure(lead, "timeout", 2)
+            runner._record_turn_failure(lead, "timeout", 3)
+            self.assertEqual(
+                runner._consecutive_turn_failures["lead"], 2,
+            )
+            self.assertEqual(runner.inboxes["lead"], [])
+
+
+class StrictSchemaConformanceTests(unittest.TestCase):
+    """Every model-facing schema must satisfy OpenAI strict mode.
+
+    Strict structured output requires every declared property to appear in
+    `required`; optionality is expressed only through anyOf-with-null on the
+    field itself. A property missing from `required` makes Codex reject the
+    response_format before the model runs, while Claude tolerates it, so the
+    defect ships invisibly until a codex lane executes. This killed every
+    codex turn in the first live flat run.
+    """
+
+    def _assert_strict(self, node, path="$"):
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                declared = set(properties)
+                required = set(node.get("required") or [])
+                self.assertEqual(
+                    declared, required,
+                    f"{path}: strict mode requires every property in "
+                    f"'required'; missing {sorted(declared - required)}, "
+                    f"extra {sorted(required - declared)}",
+                )
+            for key, value in node.items():
+                self._assert_strict(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                self._assert_strict(value, f"{path}[{index}]")
+
+    def test_all_provider_schemas_are_strict_mode_valid(self):
+        from reccli.organization import BLIND_REVIEW_SCHEMA
+
+        for name, schema in (
+            ("AGENT_REPLY_SCHEMA", AGENT_REPLY_SCHEMA),
+            ("BLIND_REVIEW_SCHEMA", BLIND_REVIEW_SCHEMA),
+            ("RUN_CONCLUSION_SCHEMA", RUN_CONCLUSION_SCHEMA),
+        ):
+            self._assert_strict(schema, name)
+
+
 class NoOpDispositionTests(unittest.TestCase):
     def test_no_op_reply_requires_final_and_no_candidate(self):
         reply = _reply()
