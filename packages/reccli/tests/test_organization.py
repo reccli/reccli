@@ -24,7 +24,7 @@ from reccli.organization import (
     SubscriptionSession,
     Workspace,
     build_provider_assignments,
-    create_run_request,
+    create_run_request as _admission_gated_create_run_request,
     get_topology,
     prepare_context_packs,
     prepare_evidence_snapshot,
@@ -38,6 +38,28 @@ from reccli.organization import (
     verify_evidence_snapshot,
 )
 from reccli.organization_worker import main as organization_worker_main
+
+
+VALID_ADMISSION = {
+    "consumer": {
+        "name": "will",
+        "type": "human",
+        "intended_use": "merge and ship the reviewed fix",
+    },
+    "work_class": "deployable_artifact",
+    "done_condition": (
+        "the reviewed candidate is merged-ready with the suite passing"
+    ),
+    "stop_conditions": [
+        "the evaluator shows no improvement after two contracts",
+    ],
+}
+
+
+def create_run_request(*args, **kwargs):
+    """Launch-surface wrapper: tests exercise the gate explicitly elsewhere."""
+    kwargs.setdefault("admission", VALID_ADMISSION)
+    return _admission_gated_create_run_request(*args, **kwargs)
 
 
 def _reply(summary="ok"):

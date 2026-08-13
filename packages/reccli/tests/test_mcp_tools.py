@@ -1705,6 +1705,18 @@ class BgTaskRegistryTests(unittest.TestCase):
             self.assertEqual(rec["purpose"], "unit-test")
 
 
+_MCP_ADMISSION = {
+    "consumer": {
+        "name": "will",
+        "type": "human",
+        "intended_use": "merge and ship the reviewed change",
+    },
+    "work_class": "deployable_artifact",
+    "done_condition": "the reviewed candidate is merged-ready with tests passing",
+    "stop_conditions": ["the change requires touching protected paths"],
+}
+
+
 class OrganizationMcpLifecycleTests(unittest.TestCase):
     @staticmethod
     def _make_git_project(root: Path) -> Path:
@@ -1885,6 +1897,7 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
                     protected_paths=["app.py"],
                     context_manifest="context-packs.json",
                     max_experiments=2,
+                    admission=_MCP_ADMISSION,
                 ))
 
             self.assertEqual(started["status"], "starting", started)
@@ -1920,6 +1933,7 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
             ), mock.patch("subprocess.Popen", return_value=fake_process):
                 started = json.loads(start_organization(
                     str(project_root), "Build the bounded change.", provider="codex",
+                    admission=_MCP_ADMISSION,
                 ))
             with mock.patch("os.killpg") as killpg:
                 cancelled = json.loads(cancel_organization(str(project_root), started["run_id"]))
@@ -1943,6 +1957,7 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
                     str(project_root),
                     "Map, delegate, then implement.",
                     provider="codex",
+                    admission=_MCP_ADMISSION,
                 ))
             listed = json.loads(list_organizations(str(project_root)))
             self.assertEqual(listed["runs"][0]["run_id"], started["run_id"])
@@ -1987,6 +2002,7 @@ class OrganizationMcpLifecycleTests(unittest.TestCase):
             ), mock.patch("subprocess.Popen", return_value=fake_process):
                 started = json.loads(start_organization(
                     str(project_root), "Build the bounded change.", provider="claude",
+                    admission=_MCP_ADMISSION,
                 ))
             status_path = Path(started["run_dir"]) / "status.json"
             status = json.loads(status_path.read_text())

@@ -1036,6 +1036,7 @@ def _start_approved_successor(
     decision_path: Path,
 ) -> Dict[str, Any]:
     from .organization import create_run_request
+    from .organization_admission import admission_for_approved_successor
     from .organization_launch import launch_organization_worker
 
     continuation = request.get("continuation") or {}
@@ -1066,6 +1067,21 @@ supervisor.
 """
     evidence_paths = list(continuation.get("evidence_paths") or [])
     evidence_paths.append(str(decision_path))
+    decision_record = _read_json(decision_path, {}) or {}
+    parent_admission_path = (
+        project_root / "devsession" / "agent-organizations"
+        / _safe_name(str(request.get("run_id") or "unknown"))
+        / "admission.json"
+    )
+    parent_admission = (
+        _read_json(parent_admission_path, None)
+        if parent_admission_path.is_file() else None
+    )
+    successor_admission = admission_for_approved_successor(
+        parent_admission,
+        str(request.get("run_id") or "unknown"),
+        str(decision_record.get("approved_by") or decision_record.get("approver") or "human-operator"),
+    )
     successor = create_run_request(
         working_directory=str(project_root),
         mission=mission,
@@ -1082,6 +1098,7 @@ supervisor.
         context_manifest=continuation.get("context_manifest"),
         experiment_policy=continuation.get("experiment_policy"),
         max_experiments=int(continuation.get("max_experiments") or 0),
+        admission=successor_admission,
     )
     successor.update({
         "parent_run_id": request.get("run_id"),

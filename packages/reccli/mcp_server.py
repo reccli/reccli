@@ -1141,10 +1141,22 @@ def start_organization(
     context_manifest: Optional[str] = None,
     experiment_policy: Optional[str] = None,
     max_experiments: int = 3,
+    admission: Optional[Dict[str, Any]] = None,
     open_console: Optional[bool] = None,
     console_port: int = 8777,
 ) -> str:
     """Start the project's organization, or an explicitly custom organization.
+
+    Every launch passes a host-enforced admission gate. ``admission`` must name
+    the downstream consumer (``consumer.name``, ``consumer.type`` of
+    human/service/workflow, ``consumer.intended_use``), one meaningful-work
+    class (``work_class``: deployable_artifact, resolved_decision,
+    uncertainty_reduction, hypothesis_test, risk_prevention, or
+    reusable_capability), a falsifiable ``done_condition``, and non-empty
+    ``stop_conditions``. Custom launches must supply it directly; project
+    launches supply it through the tracked launch contract, and terminal
+    continuations carry the parent run's admission forward. A launch with no
+    valid admission is rejected before any filesystem effect.
 
     This is the single public launch surface. With the default
     ``launch_mode="auto"`` and no ``mission``, RecCli uses the repository's
@@ -1357,6 +1369,7 @@ def start_organization(
             "context_manifest": context_manifest,
             "experiment_policy": experiment_policy,
             "max_experiments": max_experiments,
+            "admission": admission,
         })
         if open_console is True:
             root = _resolve_root(working_directory)

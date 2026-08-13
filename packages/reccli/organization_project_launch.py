@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from .organization_admission import admission_for_continuation
 from .organization_control import TERMINAL_STATUSES, list_organization_runs
 from .project.devproject import discover_project_root
 
@@ -33,6 +34,7 @@ DEFAULT_EMITTER = (
 ALLOWED_START_ARGUMENTS = {
     "working_directory",
     "mission",
+    "admission",
     "provider",
     "topology",
     "max_rounds",
@@ -931,6 +933,30 @@ def _apply_terminal_continuation(
         )
     updated = dict(arguments)
     updated["mission"] = _continuation_mission(root, terminal, selection)
+    # The admission contract is mission-level authority and outlives the
+    # derived successor mission: same consumer, class, done and stop
+    # conditions. A contract-supplied admission wins; otherwise the parent's
+    # recorded admission carries. A parent that predates admission carries
+    # nothing, and the launch gate then demands one from the contract instead
+    # of fabricating consent.
+    if not updated.get("admission"):
+        parent_admission_path = (
+            root / "devsession" / "agent-organizations"
+            / terminal["run_id"] / "admission.json"
+        )
+        parent_admission = None
+        if parent_admission_path.is_file():
+            try:
+                parent_admission = json.loads(
+                    parent_admission_path.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                parent_admission = None
+        carried = admission_for_continuation(
+            parent_admission, terminal["run_id"],
+        )
+        if carried is not None:
+            updated["admission"] = carried
     updated["continuation_from_run_id"] = terminal["run_id"]
     updated["continuation_conclusion_sha256"] = terminal[
         "conclusion_sha256"

@@ -2,8 +2,8 @@
   "format": "devproject",
   "version": "2.1.0",
   "project_root": "/Users/will/coding-projects/reccli",
-  "updated_at": "2026-04-26T21:11:07Z",
-  "last_updated_session": "session_20260426_140526",
+  "updated_at": "2026-07-27T06:39:22Z",
+  "last_updated_session": "session_20260726_233901",
   "project": {
     "name": "reccli",
     "description": "reccli is a temporal memory engine for AI coding agents implementing a tri-layer memory system: .devproject (project feature map), .devsession summary (compacted working memory), and .devsession full conversation (source of truth). It runs as an MCP server and Claude Code hook integration, enabling agents to accumulate structured memory across sessions through hybrid search, LLM summarization, and temporal-semantic linking between memory layers.",
@@ -3054,6 +3054,102 @@
             "ended_at": "2026-04-26T14:05:29.326737",
             "feature_ids": [
               "feat_api_routes"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260727063922",
+      "status": "pending",
+      "created_at": "2026-07-27T06:39:22Z",
+      "source_session_id": "session_20260726_233901",
+      "diff": [
+        {
+          "op": "update_feature",
+          "feature_id": "feat_hybrid_search_retrieval_engine",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/retrieval/search.py",
+              "packages/reccli/tests/test_dense_search_mapping.py"
+            ],
+            "session_ids_add": [
+              "session_20260726_233901"
+            ],
+            "last_updated_session": "session_20260726_233901",
+            "updated_at": "2026-07-27T06:39:22Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_devsession_file_format_session_management",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/session/devsession.py"
+            ],
+            "session_ids_add": [
+              "session_20260726_233901"
+            ],
+            "last_updated_session": "session_20260726_233901",
+            "updated_at": "2026-07-27T06:39:22Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_devproject_manager_codebase_initialization",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/project/devproject.py",
+              "packages/reccli/tests/test_feature_boundaries.py"
+            ],
+            "session_ids_add": [
+              "session_20260726_233901"
+            ],
+            "last_updated_session": "session_20260726_233901",
+            "updated_at": "2026-07-27T06:39:22Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_claude_code_hooks_context_injection",
+          "changes": {
+            "session_ids_add": [
+              "session_20260726_233901"
+            ],
+            "last_updated_session": "session_20260726_233901",
+            "updated_at": "2026-07-27T06:39:22Z"
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_standalone_cli_llm_chat_interface",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/doctor.py",
+              "packages/reccli/mcp_server.py",
+              "packages/reccli/runtime/cli.py",
+              "packages/reccli/tests/test_doctor.py"
+            ],
+            "session_ids_add": [
+              "session_20260726_233901"
+            ],
+            "last_updated_session": "session_20260726_233901",
+            "updated_at": "2026-07-27T06:39:22Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260726_233901",
+            "path": "devsession/07262026_2339.devsession",
+            "started_at": "2026-07-26T23:39:01.358761",
+            "ended_at": "2026-07-26T23:39:06.109683",
+            "feature_ids": [
+              "feat_claude_code_hooks_context_injection",
+              "feat_devproject_manager_codebase_initialization",
+              "feat_devsession_file_format_session_management",
+              "feat_hybrid_search_retrieval_engine",
+              "feat_standalone_cli_llm_chat_interface"
             ]
           }
         }

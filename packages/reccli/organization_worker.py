@@ -60,6 +60,7 @@ def main() -> int:
         conclusion = {
             "schema": "reccli.organization-run-conclusion.v1",
             "run_id": request.get("run_id"),
+            "admission": request.get("admission"),
             "terminal_status": "failed",
             "generated_at": _utc_now(),
             "generated_by": "host-fallback",

@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .organization_admission import render_admission_prompt, validate_admission
 from .project.devproject import discover_project_root
 
 
@@ -3088,9 +3089,13 @@ class OrganizationRunner:
         continuation_from_run_id: Optional[str] = None,
         continuation_conclusion_sha256: Optional[str] = None,
         mission_origin: str = "direct",
+        admission: Optional[Dict[str, Any]] = None,
     ):
         self.project_root = project_root.resolve()
         self.mission = mission.strip()
+        # The launch surface enforces admission; a runner constructed directly
+        # (tests, replay) may carry none, and prompts/records then omit it.
+        self.admission = validate_admission(admission) if admission else None
         self.provider = provider
         self.topology = get_topology(topology_name)
         if provider_assignments is None:
@@ -3324,6 +3329,7 @@ class OrganizationRunner:
             "provider_assignments": self.provider_by_agent,
             "blind_verifier_provider": self.blind_verifier_provider,
             "topology": self.topology.topology_id, "mission": self.mission,
+            "admission": self.admission,
             "mission_origin": self.mission_origin,
             "continuation_from_run_id": self.continuation_from_run_id,
             "continuation_conclusion_sha256": (
@@ -7616,6 +7622,15 @@ Change only the mutable file above and write one trial intent under
         )
         return payload[-max_chars:]
 
+    def _admission_section(self) -> str:
+        if not self.admission:
+            return ""
+        return (
+            "\n## Admission contract\n\n"
+            + render_admission_prompt(self.admission)
+            + "\n"
+        )
+
     def _build_prompt(
         self, agent: AgentSpec, inbox: List[Dict[str, Any]], round_number: int, first_turn: bool,
     ) -> str:
@@ -7801,7 +7816,7 @@ Run artifacts: `{self.artifact_staging_prefix}/<path-relative-to-the-run-directo
 ## Mission
 
 {self.mission}
-
+{self._admission_section()}
 ## Role authority
 
 {agent.instructions}
@@ -9665,6 +9680,7 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             "rounds": rounds,
             "working_rounds": min(rounds, self.max_rounds),
             "closeout_rounds": max(0, rounds - self.max_rounds),
+            "admission": self.admission,
             "mission_sha256": hashlib.sha256(
                 self.mission.encode("utf-8")
             ).hexdigest(),
@@ -10547,6 +10563,7 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "attempted_turns": self.attempted_turns,
             "failed_turns": self.failed_turns,
             "detail": detail, "provider": self.provider,
+            "admission": self.admission,
             "host_provider": self.host_provider,
             "provider_assignments": self.provider_by_agent,
             "blind_verifier_provider": self.blind_verifier_provider,
@@ -10797,12 +10814,17 @@ def create_run_request(
     continuation_from_run_id: Optional[str] = None,
     continuation_conclusion_sha256: Optional[str] = None,
     mission_origin: str = "direct",
+    admission: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     project_root = discover_project_root(Path(working_directory).expanduser().resolve())
     if project_root is None:
         raise FileNotFoundError(f"No RecCli/Git project found from {working_directory}")
     if not mission or not mission.strip():
         raise ValueError("mission must not be empty")
+    # The admission gate: no consumer, work class, done condition, and stop
+    # conditions means no supervisor. Enforced before any filesystem effect so
+    # a rejected launch leaves nothing behind.
+    normalized_admission = validate_admission(admission)
     normalized_parent = (
         str(continuation_from_run_id).strip()
         if continuation_from_run_id else None
@@ -10865,6 +10887,7 @@ def create_run_request(
     request = {
         "run_id": run_id, "run_dir": str(run_dir),
         "project_root": str(project_root), "mission": mission.strip(),
+        "admission": normalized_admission,
         "provider": provider_plan.mode, "provider_requested": provider,
         "host_provider": provider_plan.host_provider,
         "available_providers": provider_plan.available_providers,
@@ -10895,8 +10918,12 @@ def create_run_request(
         "control_protocol": "reccli.organization-control.v1",
     }
     (run_dir / "request.json").write_text(json.dumps(request, indent=2) + "\n", encoding="utf-8")
+    (run_dir / "admission.json").write_text(
+        json.dumps(normalized_admission, indent=2) + "\n", encoding="utf-8",
+    )
     (run_dir / "status.json").write_text(json.dumps({
         "run_id": run_id, "status": "starting", "round": 0,
+        "admission": normalized_admission,
         "max_rounds": max(1, int(max_rounds)),
         "rounds_remaining": max(1, int(max_rounds)),
         "scheduled_turns": 0, "completed_turns": 0, "attempted_turns": 0,
@@ -10955,6 +10982,7 @@ def run_request(request: Dict[str, Any]) -> Dict[str, Any]:
             "continuation_conclusion_sha256",
         ),
         mission_origin=request.get("mission_origin", "direct"),
+        admission=request.get("admission"),
     )
     return runner.run()
 
