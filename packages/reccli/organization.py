@@ -3874,6 +3874,7 @@ class OrganizationRunner:
             "usage_by_provider": self.usage_by_provider,
             "delivered_messages": self.delivered_messages,
             "dropped_messages": self.dropped_messages,
+            "candidate_counts": self._candidate_counts(),
             "failed_turns": self.failed_turns,
             "attempted_turns": self.attempted_turns,
             "completed_turns": self.completed_turns,
@@ -9741,6 +9742,7 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             "working_rounds": min(rounds, self.max_rounds),
             "closeout_rounds": max(0, rounds - self.max_rounds),
             "admission": self.admission,
+            "candidate_counts": self._candidate_counts(),
             "mission_sha256": hashlib.sha256(
                 self.mission.encode("utf-8")
             ).hexdigest(),
@@ -10504,6 +10506,17 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             )
         ]
 
+    def _candidate_counts(self) -> Dict[str, int]:
+        """Count materialized candidates by kind, so status cannot present a
+        stack of reports as a stack of work."""
+        counts = {"implementation": 0, "artifact_only": 0, "identity_only": 0}
+        for record in self.candidate_kinds.values():
+            kind = str(record.get("kind") or "")
+            key = kind.replace("-", "_")
+            if key in counts:
+                counts[key] += 1
+        return counts
+
     def _closeout_progress_signature(self) -> str:
         """Fingerprint only state that can advance release closeout.
 
@@ -10537,7 +10550,16 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             ).strip()
         payload = {
             "governance": self.governance.snapshot(),
-            "candidate_kinds": self.candidate_kinds,
+            # Only implementation candidates advance closeout. An artifact-only
+            # report or an empty identity commit is paper: in the recorded
+            # 63-turn run, 29 of 32 candidates were artifact-only, and each one
+            # bought review traffic and closeout rounds. Sealed experiment
+            # bundles still count below; they are metered real work.
+            "candidate_kinds": {
+                candidate: record
+                for candidate, record in self.candidate_kinds.items()
+                if record.get("kind") == "implementation"
+            },
             "integrated_candidates": self.integrated_candidates,
             "candidate_artifacts": [
                 {
@@ -10646,6 +10668,7 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "context_verified_at": self.context_verified_at,
             "candidate_artifact_root": str(self.candidate_artifact_root),
             "candidate_artifact_bundles": len(self.candidate_artifact_manifests),
+            "candidate_counts": self._candidate_counts(),
             "scientific_work_bundles": self._experiment_used(),
             "experiment_records": str(self.run_dir / "experiments.jsonl"),
             "host_state_brief": str(self.run_dir / "host-state.json"),

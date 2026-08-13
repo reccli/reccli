@@ -4801,5 +4801,61 @@ class NoOpDispositionTests(unittest.TestCase):
                     shutil.rmtree(worktree_parent, ignore_errors=True)
 
 
+class ArtifactDemotionTests(unittest.TestCase):
+    def _runner(self, root: Path) -> OrganizationRunner:
+        run_dir = root / "devsession" / "agent-organizations" / "sig"
+        return OrganizationRunner(
+            root, "Fingerprint progress.", "claude",
+            "google-rotating", "sig", run_dir,
+        )
+
+    def test_closeout_signature_ignores_paper_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            baseline = runner._closeout_progress_signature()
+            runner.candidate_kinds["r1"] = {
+                "candidate": "r1", "kind": "artifact-only",
+                "paths": ["report.md"],
+            }
+            runner.candidate_kinds["e1"] = {
+                "candidate": "e1", "kind": "identity-only", "paths": [],
+            }
+            self.assertEqual(
+                runner._closeout_progress_signature(), baseline,
+                "artifact-only and identity-only commits must not buy "
+                "closeout rounds",
+            )
+            runner.candidate_kinds["i1"] = {
+                "candidate": "i1", "kind": "implementation",
+                "paths": ["app.py"],
+            }
+            self.assertNotEqual(
+                runner._closeout_progress_signature(), baseline,
+            )
+
+    def test_candidate_counts_separate_work_from_paper(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            runner.candidate_kinds = {
+                "i1": {"kind": "implementation"},
+                "r1": {"kind": "artifact-only"},
+                "r2": {"kind": "artifact-only"},
+                "e1": {"kind": "identity-only"},
+                "u1": {"kind": "unknown"},
+            }
+            self.assertEqual(
+                runner._candidate_counts(),
+                {
+                    "implementation": 1,
+                    "artifact_only": 2,
+                    "identity_only": 1,
+                },
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
