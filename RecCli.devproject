@@ -2,8 +2,8 @@
   "format": "devproject",
   "version": "2.1.0",
   "project_root": "/Users/will/coding-projects/reccli",
-  "updated_at": "2026-07-27T06:39:22Z",
-  "last_updated_session": "session_20260726_233901",
+  "updated_at": "2026-08-13T03:50:56Z",
+  "last_updated_session": "session_20260812_205028",
   "project": {
     "name": "reccli",
     "description": "reccli is a temporal memory engine for AI coding agents implementing a tri-layer memory system: .devproject (project feature map), .devsession summary (compacted working memory), and .devsession full conversation (source of truth). It runs as an MCP server and Claude Code hook integration, enabling agents to accumulate structured memory across sessions through hybrid search, LLM summarization, and temporal-semantic linking between memory layers.",
@@ -3150,6 +3150,87 @@
               "feat_devsession_file_format_session_management",
               "feat_hybrid_search_retrieval_engine",
               "feat_standalone_cli_llm_chat_interface"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260813035056",
+      "status": "pending",
+      "created_at": "2026-08-13T03:50:56Z",
+      "source_session_id": "session_20260812_205028",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_agent_organization_runner",
+            "feature_version": 1,
+            "title": "Agent Organization Runner",
+            "description": "Flat-fleet multi-agent delivery runs behind a host-enforced admission gate: NO_OP terminal outcome, artifact-only demotion, project-level outcome ledger with waste rate, worktree isolation, veto auditors, blind review, and human promotion staging. Collapsed from three hierarchical topologies after forensic analysis of thirteen unproductive runs.",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [
+              "docs/decisions/ORGANIZATION_PLANE_AUDIT.md",
+              "docs/integrations/agent-orchestrator.md",
+              "docs/integrations/organization-console.md",
+              "docs/product/AGENT_HARNESS.md",
+              "packages/reccli/mcp_server.py",
+              "packages/reccli/organization-web/src/components/OrganizationConsole.tsx",
+              "packages/reccli/organization.py",
+              "packages/reccli/organization_admission.py",
+              "packages/reccli/organization_control.py",
+              "packages/reccli/organization_outcomes.py",
+              "packages/reccli/organization_project_launch.py",
+              "packages/reccli/organization_worker.py"
+            ],
+            "file_boundaries": [
+              "docs/decisions/**",
+              "docs/integrations/**",
+              "docs/product/**",
+              "packages/reccli/**"
+            ],
+            "session_ids": [
+              "session_20260812_205028"
+            ],
+            "last_updated_session": "session_20260812_205028",
+            "updated_at": "2026-08-13T03:50:56Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-08-13T03:50:56Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "update_feature",
+          "feature_id": "feat_testing",
+          "changes": {
+            "files_touched_add": [
+              "packages/reccli/tests/test_mcp_tools.py",
+              "packages/reccli/tests/test_org_defect_fixes.py",
+              "packages/reccli/tests/test_organization.py",
+              "packages/reccli/tests/test_organization_admission.py",
+              "packages/reccli/tests/test_organization_control.py",
+              "packages/reccli/tests/test_organization_outcomes.py"
+            ],
+            "session_ids_add": [
+              "session_20260812_205028"
+            ],
+            "last_updated_session": "session_20260812_205028",
+            "updated_at": "2026-08-13T03:50:56Z"
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260812_205028",
+            "path": "devsession/08122026_2050.devsession",
+            "started_at": "2026-08-12T20:50:28.904101",
+            "ended_at": "2026-08-12T20:50:34.483563",
+            "feature_ids": [
+              "feat_agent_organization_runner",
+              "feat_testing"
             ]
           }
         }

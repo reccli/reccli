@@ -60,19 +60,6 @@ EXPERIMENT_POLICY_SCHEMA = "reccli.organization-experiment-policy.v1"
 EXPERIMENT_CONTRACT_SCHEMA = "reccli.organization-experiment-contract.v1"
 EXPERIMENT_TRIAL_SCHEMA = "reccli.organization-experiment-trial.v1"
 PROJECT_EXPERIMENT_RESULT_SCHEMA = "reccli.project-experiment-result.v1"
-RESEARCH_FRAGMENT_SCHEMA = "reccli.organization-research-fragment.v1"
-RESEARCH_DECISION_SCHEMA = "reccli.organization-research-decision.v1"
-RESEARCH_DISPOSITIONS = {
-    "adopt",
-    "competing_hypotheses",
-    "unsupported",
-    "not_evaluated",
-}
-RESEARCH_IMPLEMENTATION_READINESS = {
-    "authorized_bounded_change",
-    "research_only",
-    "human_authority_required",
-}
 REPORT_ONLY_SUFFIXES = frozenset({".md", ".txt", ".rst", ".adoc"})
 EXPERIMENT_VERDICTS = frozenset({
     "baseline",
@@ -313,7 +300,6 @@ class Topology:
     scheduler: str = "event"
     always_wake: Set[str] = field(default_factory=set)
     inbox_only_ids: Set[str] = field(default_factory=set)
-    delegation_gate: bool = False
     required_approvers: Set[str] = field(default_factory=set)
     manager_ids: List[str] = field(default_factory=list)
     worker_ids: List[str] = field(default_factory=list)
@@ -324,8 +310,6 @@ class Topology:
     blind_final_review: bool = False
     review_policy: str = "approval"
     human_promotion_required: bool = False
-    research_director_id: Optional[str] = None
-    research_specialist_ids: List[str] = field(default_factory=list)
 
     def agent(self, agent_id: str) -> AgentSpec:
         for agent in self.agents:
@@ -370,18 +354,6 @@ class ProviderPlan:
     provider_assignments: Dict[str, str]
     blind_verifier_provider: str
     authentication: Dict[str, str]
-
-    def as_dict(self) -> Dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "requested": self.requested,
-            "host_provider": self.host_provider,
-            "available_providers": list(self.available_providers),
-            "provider_assignments": dict(self.provider_assignments),
-            "blind_verifier_provider": self.blind_verifier_provider,
-            "authentication": dict(self.authentication),
-        }
-
 
 def _route(
     routes: Dict[Tuple[str, str], Optional[Set[str]]],
@@ -434,8 +406,14 @@ def _flat_topology() -> Topology:
             "is no management layer to route through. Consume each result as it "
             "lands and re-task that worker immediately. Do not write "
             "implementation yourself, do not relay work between workers, and do "
-            "not authorize canonical promotion.",
-            False, "high", "none", True,
+            "not authorize canonical promotion. RecCli integrates reviewed "
+            "candidates into your worktree; never run Git yourself.",
+            # Integration scope, not read-only: the host cherry-picks reviewed
+            # candidates into the lead's integration worktree, and every commit
+            # there must carry an approved patch-id. A read-only lead made its
+            # own workspace fail write-scope validation the moment the host
+            # integrated anything.
+            True, "high", "integration", True,
         ),
         *[
             AgentSpec(
@@ -472,9 +450,6 @@ def _flat_topology() -> Topology:
         agents, routes, "lead", "lead", {"lead"},
         scheduler="event", always_wake=set(),
         inbox_only_ids={"lead"},
-        # No delegation barrier: with no manager layer there is no intermediate
-        # assignment to wait on, and the lead assigns workers directly.
-        delegation_gate=False,
         # The lead is also the finalizer here, and an agent cannot send a
         # decision to itself, so naming it a required approver deadlocks every
         # finalization. Authority still exists: human_promotion_required below
@@ -517,188 +492,32 @@ def _supervisor_of(topology: "Topology", worker_id: str) -> str:
     return topology.primary_manager_by_worker.get(worker_id) or topology.leader_id
 
 
-def get_topology(name: str = "google-rotating") -> Topology:
-    normalized = (name or "google-rotating").strip().lower()
-    supported = {"google-rotating", "google", "scientific", "flat"}
-    if normalized not in supported:
-        raise ValueError(f"topology must be one of {sorted(supported)}")
+LEGACY_TOPOLOGY_ALIASES = frozenset({"google-rotating", "google", "scientific"})
 
-    if normalized == "flat":
-        return _flat_topology()
 
-    manager_ids = [f"manager-{letter}" for letter in "abcd"]
-    worker_ids = [f"worker-{letter}" for letter in "abcd"]
-    routes: Dict[Tuple[str, str], Optional[Set[str]]] = {}
-    for manager in manager_ids:
-        _route(routes, "lead", manager)
-    for manager in manager_ids:
-        for worker in worker_ids:
-            _route(routes, manager, worker)
+def get_topology(name: str = "flat") -> Topology:
+    """Resolve the organization structure. Flat is the only structure.
 
-    if normalized == "scientific":
-        for left_index, left in enumerate(manager_ids):
-            for right in manager_ids[left_index + 1:]:
-                _route(routes, left, right)
+    The hierarchical topologies (google, google-rotating, scientific) were
+    deleted after the recorded runs measured what they bought: management took
+    50 of 64 turns (78%) in the surviving hierarchical run, six of nine runs
+    re-adjudicated one candidate, and 29 of 32 materialized candidates were
+    prose reports. The manager layer existed to allocate scarce attention and
+    surface privately-held context; neither applies to agents, and every layer
+    boundary became another serialized document instead of work.
 
-        release = "manager-d"
-        primary = {
-            "worker-a": "manager-a", "worker-b": "manager-b",
-            "worker-c": "manager-a", "worker-d": "manager-b",
-        }
-        research_director = "manager-b"
-        research_specialists = ["research-scout", "math-auditor"]
-        for specialist in research_specialists:
-            _route(routes, research_director, specialist)
-        agents = [
-            AgentSpec(
-                "lead", "scientific mission lead",
-                "Own scope and budget. Initially task only managers A/B with falsifiable outcomes; never fill lanes. Later wake manager-c for exact review and manager-d for an exact reviewed candidate or dossier. Do not task workers or authorize canonical promotion.",
-                False, "high", "none", True,
-            ),
-            AgentSpec(
-                "manager-a", "evidence and novelty manager",
-                "Own evidence reconciliation. Activate worker-a/c only for genuine predicate-bound work; zero workers is valid. Production requires a trusted discriminating evaluator. Otherwise close it before one evaluator-infrastructure replacement for that predicate. Do not assign standby or census work.",
-                True, "high", "artifacts", True,
-            ),
-            AgentSpec(
-                "manager-b", "hypothesis and model manager",
-                "Own hypotheses and bounded research. Activate worker-b/d only for genuine predicate-bound work; zero workers is valid. Production requires a trusted discriminating evaluator. Otherwise close it before one evaluator-infrastructure replacement for that predicate. Do not assign standby or census work.",
-                True, "high", "artifacts", True,
-            ),
-            AgentSpec(
-                "manager-c", "topology and validation manager",
-                "Remain dormant until RecCli routes an exact candidate or dossier. Review its relevant durable record once. Veto or annotate; do not integrate, promote, recensus the repository, repeat an unchanged review, or treat no veto as scientific truth.",
-                False, "high", "none", True,
-            ),
-            AgentSpec(
-                "manager-d", "archive and release manager",
-                "Wake only for an exact reviewed candidate or release dossier. Use host state; do not rediscover it. Integrate only an exact non-vetoed sandbox patch, then assemble one bound dossier. Do not author implementation, mutate canonical authority, repeat review, or apply finalization to the caller branch.",
-                True, "high", "integration", True,
-            ),
-            AgentSpec(
-                "worker-a", "reproduction experimenter",
-                "Solve only the visible goal through observable source, test, evaluator, experiment, or product work. Use the disposable worktree. Under an experiment contract, change its one mutable file once per trial; the host retains or reverts. Escalate contradictions without expanding scope.",
-                True, "medium", "workspace",
-            ),
-            AgentSpec(
-                "worker-b", "hypothesis and model experimenter",
-                "Solve only the visible goal through observable source, test, evaluator, experiment, or product work. Use the disposable worktree. Under an experiment contract, change its one mutable file once per trial; the host retains or reverts. Escalate contradictions without expanding scope.",
-                True, "high", "workspace",
-            ),
-            AgentSpec(
-                "worker-c", "structural and integration validator",
-                "Solve only the visible goal through observable source, test, evaluator, experiment, or product work. Use the disposable worktree. Under an experiment contract, change its one mutable file once per trial; the host retains or reverts. Escalate contradictions without expanding scope.",
-                True, "high", "workspace",
-            ),
-            AgentSpec(
-                "worker-d", "uncertainty and alternative-explanation experimenter",
-                "Solve only the visible goal through observable source, test, evaluator, experiment, or product work. Use the disposable worktree. Under an experiment contract, change its one mutable file once per trial; the host retains or reverts. Escalate contradictions without expanding scope.",
-                True, "high", "workspace",
-            ),
-            AgentSpec(
-                "research-scout", "primary-source research scout",
-                "Answer only manager-b's bounded question from primary sources. Record supported claims, assumptions, limits, citation, access date, and locator. Keep external evidence distinct from project authority. Return one structured research fragment to manager-b, modify no source, and stop.",
-                True, "high", "artifacts", True, True,
-            ),
-            AgentSpec(
-                "math-auditor", "independent mathematical auditor",
-                "Independently analyze manager-b's neutral question without the scout's conclusion. Re-derive it; check dimensions, conventions, limits, degeneracy, and counterexamples. Return one structured audit fragment to manager-b and stop. Do not modify source or authorize implementation.",
-                True, "high", "artifacts", True, True,
-            ),
-        ]
-        return Topology(
-            "scientific",
-            "Scientific Reversible Exploration",
-            "An autonomous scientific organization that may reason, modify disposable branches, and run bounded sandbox experiments while canonical promotion remains human-authorized.",
-            "Cut authority at reversibility, not deliberation versus execution. Deterministic checks protect identity, hashes, paths, and budgets; agents and humans judge scientific meaning. Auditors are fully sighted, veto-only, and unable to promote.",
-            agents, routes, "lead", release, {release},
-            scheduler="event", always_wake=set(),
-            inbox_only_ids={"lead", *manager_ids, *research_specialists},
-            delegation_gate=True, required_approvers={"lead"},
-            manager_ids=manager_ids, worker_ids=worker_ids,
-            primary_manager_by_worker=primary, release_manager_id=release,
-            alternate_reviewer_pool=["manager-a", "manager-b"],
-            final_reviewer_pool=["manager-c"], blind_final_review=False,
-            review_policy="veto", human_promotion_required=True,
-            research_director_id=research_director,
-            research_specialist_ids=research_specialists,
+    Legacy names alias to flat so existing project contracts, continuation
+    records, and replay paths keep launching instead of bricking. Callers
+    record the requested name next to the resolved one, so a downgraded launch
+    is visible in the durable record rather than silent.
+    """
+    normalized = (name or "flat").strip().lower()
+    if normalized != "flat" and normalized not in LEGACY_TOPOLOGY_ALIASES:
+        raise ValueError(
+            "topology must be flat (legacy names google, google-rotating, "
+            "and scientific alias to flat)"
         )
-
-    if normalized == "google":
-        agents = [
-            AgentSpec(
-                "lead", "leader and final integrator",
-                "Set priorities, enforce design-doc consensus, integrate reviewed changes, validate the composed artifact, and finalize.",
-                True, "high", web_research=True,
-            ),
-            *[
-                AgentSpec(
-                    manager, "middle integrator",
-                    "Review design documents and code against the brief, request evidence for claims, and integrate only approved changes.",
-                    True, "high", web_research=True,
-                ) for manager in manager_ids
-            ],
-            *[
-                AgentSpec(
-                    worker, "implementation worker",
-                    "Read the brief and task-relevant documentation, write a short design and acceptance-to-test mapping, implement a bounded slice, and hand off a host-materialized immutable candidate.",
-                    True, "medium",
-                ) for worker in worker_ids
-            ],
-        ]
-        return Topology(
-            "google", "Google Design-Doc Baseline",
-            "Faithful two-layer bipartite organization with no worker peer or leader access.",
-            "Design docs plus data-driven consensus. Claims require observable evidence.",
-            agents, routes, "lead", "lead", {"lead", *manager_ids},
-            scheduler="all",
-        )
-
-    for left_index, left in enumerate(manager_ids):
-        for right in manager_ids[left_index + 1:]:
-            _route(routes, left, right)
-
-    release = "manager-d"
-    primary = {worker: manager for worker, manager in zip(worker_ids, manager_ids)}
-    agents = [
-        AgentSpec(
-            "lead", "mission leader",
-            "Own scope, priorities, budget, and risk acceptance. Use the first turn to map the landscape and give every manager a named outcome and risk, never delegating directly to workers. Every worker must receive exactly one concrete problem-solving goal; do not create standby, reporting, repository-census, or paper-only work to fill a lane. Thereafter synthesize manager research and concrete worker results, waking on new information or an operator steering message. Approve the exact final candidate for scope only; do not implement or merge.",
-            False, "high", web_research=True,
-        ),
-        *[
-            AgentSpec(
-                manager,
-                "engineering manager and release integrator" if manager == release else "engineering manager and integrator",
-                (
-                    f"Primary manager for worker-{manager[-1]}. On your first turn, refine the lead's assignment into exactly one concrete problem-solving goal tied to an observable source, test, evaluator, experiment, or product outcome. Do not assign standby, administrative reporting, or a documentation census as worker work. Publish only decisions needed to unblock execution, answer routine questions, coordinate with peer managers, and inspect evidence. "
-                    + ("Own the integration decision, let RecCli apply only independently approved candidates, run composed checks, and finalize after release gates pass."
-                       if manager == release else
-                       "Wait for alternate-manager approval before forwarding your worker's immutable candidate to manager-d.")
-                ),
-                True, "high", web_research=True,
-            ) for manager in manager_ids
-        ],
-        *[
-            AgentSpec(
-                worker, "implementation worker",
-                "Solve the one active goal shown by RecCli. Work directly on the source, tests, evaluator, experiment, or product path that produces its observable outcome; rule summaries and status reports are not substitutes. Read only task-relevant repository material, make cohesive changes, and hand the host-materialized immutable candidate to your primary manager. Flag unrelated or contradictory findings without changing code for them, then continue all unaffected goal work.",
-                True, "medium",
-            ) for worker in worker_ids
-        ],
-    ]
-    return Topology(
-        "google-rotating", "Google with Rotating Cross-Manager Review",
-        "Selective escalation, primary worker ownership, deterministic alternate-manager review, a release manager, and fresh final verification.",
-        "Workers receive code plus task-relevant durable documentation. Managers coordinate routine dependencies. Raw management deliberation stays need-to-know.",
-        agents, routes, "lead", release, set(manager_ids),
-        scheduler="event", always_wake=set(),
-        inbox_only_ids={"lead", *manager_ids},
-        delegation_gate=True, required_approvers={"lead"},
-        manager_ids=manager_ids, worker_ids=worker_ids,
-        primary_manager_by_worker=primary, release_manager_id=release,
-        final_reviewer_pool=manager_ids, blind_final_review=True,
-    )
+    return _flat_topology()
 
 
 class Governance:
@@ -888,39 +707,6 @@ class Governance:
             approver for approver in self.required_final_approvers()
             if self.candidate_approvals.get(approver) != candidate
         )
-
-    def render(self, agent_id: str) -> str:
-        if not self.topology.manager_ids:
-            return "No rotating review policy is configured."
-        lines = [
-            f"Release manager: {self.topology.release_manager_id}.",
-            f"Rotating final reviewer: {self.release_reviewer_id}.",
-            f"Required final reviewers: {', '.join(sorted(self.required_final_approvers())) or 'none'}.",
-            f"Review policy: {self.topology.review_policy}.",
-        ]
-        if self.provider_by_agent:
-            lines.append(
-                f"Your provider: {self.provider_by_agent.get(agent_id, 'unknown')}. "
-                "Cross-provider reviews are preferred to reduce correlated blind spots."
-            )
-        primary = self.topology.primary_manager_by_worker.get(agent_id)
-        if primary:
-            lines.append(f"Your primary manager: {primary}.")
-        elif agent_id in self.topology.worker_ids:
-            lines.append(f"You report directly to {self.topology.leader_id}; there is no management layer.")
-        relevant = [
-            assignment for assignment in self.assignments.values()
-            if agent_id in {
-                assignment["workerId"], assignment["primaryManagerId"],
-                assignment["reviewerId"], self.topology.release_manager_id,
-            }
-        ]
-        for assignment in relevant:
-            lines.append(
-                f"- {assignment['workItem']}: {assignment['candidate']} ({assignment['risk']}); "
-                f"primary={assignment['primaryManagerId']}; reviewer={assignment['reviewerId']}; status={assignment['status']}"
-            )
-        return "\n".join(lines)
 
     def snapshot(self) -> Dict[str, Any]:
         return {
@@ -3143,14 +2929,8 @@ class OrganizationRunner:
         self.run_id = run_id
         self.run_dir = run_dir
         self.candidate_artifact_root = self.run_dir / "candidate-artifacts"
-        self.research_cell_root = self.run_dir / "research-cell"
         self.experiment_loop_root = self.run_dir / "experiment-loop"
         self.candidate_artifact_manifests: List[Dict[str, Any]] = []
-        self.research_commissions: Dict[str, Dict[str, Any]] = {}
-        self.research_fragments: Dict[str, Dict[str, Any]] = {}
-        self.research_decisions: Dict[str, Dict[str, Any]] = {}
-        self.research_authorizations: Dict[str, str] = {}
-        self._research_lock = threading.Lock()
         self.experiment_policy: Optional[Dict[str, Any]] = None
         self.experiment_contracts: Dict[str, Dict[str, Any]] = {}
         self.experiment_contract_by_work_item: Dict[str, str] = {}
@@ -3185,11 +2965,10 @@ class OrganizationRunner:
         # cannot author a contract has already reported it has nothing to
         # execute. Half the working rounds, never less than three, so a slow
         # start is not punished.
-        # Workers in a delegation-gated topology do not act until round 3 (lead
-        # round 1, managers round 2); flat workers act from round 2. Give them at
-        # least two rounds of their own before concluding nothing will be
+        # Workers act from round 2 (round 1 is lead reconnaissance). Give them
+        # at least two rounds of their own before concluding nothing will be
         # authored, and never exceed max_rounds or the check could never fire.
-        _first_worker_round = 3 if self.topology.delegation_gate else 2
+        _first_worker_round = 2
         self._experiment_contract_deadline = min(
             self.max_rounds,
             max(4, _first_worker_round + 2, (self.max_rounds + 1) // 2),
@@ -3208,7 +2987,6 @@ class OrganizationRunner:
         # Fallback assignments issued when the hierarchy did not delegate.
         # Surfaced in the terminal record so a run that only progressed via
         # fallbacks is not read as one where delegation worked.
-        self.degraded_delegations: List[Dict[str, Any]] = []
         self.worker_goal_history: List[Dict[str, Any]] = []
         self.off_goal_flags: Dict[str, Dict[str, Any]] = {}
         self.sessions: Dict[str, SubscriptionSession] = {}
@@ -3249,7 +3027,6 @@ class OrganizationRunner:
         self.caller_head = _git(self.project_root, ["rev-parse", "HEAD"]).strip()
         self.candidate_artifact_root.mkdir(parents=True, exist_ok=False)
         self.candidate_artifact_root.chmod(0o555)
-        self.research_cell_root.mkdir(parents=True, exist_ok=False)
         self.experiment_loop_root.mkdir(parents=True, exist_ok=False)
         resolved_experiment_policy = resolve_experiment_policy(
             self.project_root,
@@ -3314,9 +3091,6 @@ class OrganizationRunner:
         }:
             if agent_id and agent_id in self.workspaces:
                 self.workspaces[agent_id].additional_directories.append(
-                    self.research_cell_root
-                )
-                self.workspaces[agent_id].additional_directories.append(
                     self.experiment_loop_root
                 )
         if self.evidence_manifest:
@@ -3345,12 +3119,8 @@ class OrganizationRunner:
                 self.continuation_conclusion_sha256
             ),
             "scheduler": self.topology.scheduler,
-            "delegation_gate": self.topology.delegation_gate,
             "coordination_cadence": (
-                "round-1-lead-recon; round-2-manager-delegation; "
-                "round-3+-event-driven-parallel-work"
-                if self.topology.delegation_gate
-                else self.topology.scheduler
+                "round-1-lead-recon; round-2+-event-driven-parallel-work"
             ),
             "max_rounds": self.max_rounds,
             "max_closeout_rounds": self.max_closeout_rounds,
@@ -3369,17 +3139,6 @@ class OrganizationRunner:
             "context_pack_manifest": str(self.run_dir / "context-pack-manifest.json") if self.context_pack_manifest else None,
             "context_verified_at": self.context_verified_at,
             "candidate_artifact_root": str(self.candidate_artifact_root),
-            "research_cell": {
-                "root": str(self.research_cell_root),
-                "director_id": self.topology.research_director_id,
-                "specialist_ids": list(self.topology.research_specialist_ids),
-                "fragment_registry": str(
-                    self.research_cell_root / "fragments.jsonl"
-                ),
-                "decision_registry": str(
-                    self.research_cell_root / "decisions.jsonl"
-                ),
-            },
             "experiment_loop": {
                 "enabled": self.experiment_policy is not None,
                 "root": str(self.experiment_loop_root),
@@ -3476,8 +3235,6 @@ class OrganizationRunner:
                 if closeout
                 else "experiment_loop"
                 if scheduled_ids & set(self.active_experiment_by_worker)
-                else "research_cell"
-                if scheduled_ids & set(self.topology.research_specialist_ids)
                 else None
             )
             self._status(
@@ -3569,9 +3326,7 @@ class OrganizationRunner:
                     )
                 bundle = item.get("candidate_artifact_bundle")
                 if bundle:
-                    recipient = self.topology.primary_manager_by_worker.get(
-                        agent.agent_id,
-                    ) or self.topology.finalizer_id
+                    recipient = _supervisor_of(self.topology, agent.agent_id)
                     if recipient != agent.agent_id:
                         self._system_message(
                             recipient, "review",
@@ -3613,8 +3368,6 @@ class OrganizationRunner:
                 )
                 self._write_host_state_brief(round_number)
                 break
-
-            self._assert_delegation_barrier(round_number)
 
             for item in final_attempts:
                 agent = item["agent"]
@@ -3902,10 +3655,6 @@ class OrganizationRunner:
                 "remaining": self._experiment_remaining(),
                 "records": list(self.experiment_records),
             },
-            # Non-empty means the hierarchy failed to delegate and the lead
-            # assigned directly instead. The run continued, but it did not
-            # coordinate the way its topology describes.
-            "degraded_delegations": list(self.degraded_delegations),
             "protected_paths": self.protected_paths,
             "control_protocol": self.control_protocol,
             "git_ownership": "reccli-host",
@@ -4053,7 +3802,7 @@ class OrganizationRunner:
         # A run too short for workers to have acted at all cannot be said to have
         # failed to author a contract. Reporting no_experiment_contract there
         # would blame the run for a budget it was never given.
-        first_worker_round = 3 if self.topology.delegation_gate else 2
+        first_worker_round = 2
         if self._experiment_contract_deadline < first_worker_round + 1:
             return False
         if round_number < self._experiment_contract_deadline:
@@ -4143,14 +3892,18 @@ class OrganizationRunner:
         )
         return snapshot
 
-    def _scientific_experiment_paths(
+    def _metered_experiment_paths(
         self,
         agent: AgentSpec,
         paths: Set[str],
     ) -> List[str]:
-        """Classify Git-backed worker probes/data that must consume a slot."""
+        """Classify Git-backed worker probes/data that must consume a slot.
+
+        Metering follows the experiment budget, not a topology name: any run
+        with a non-zero budget charges worker probe bundles against it.
+        """
         if (
-            self.topology.topology_id != "scientific"
+            self.max_experiments <= 0
             or agent.agent_id not in self.topology.worker_ids
         ):
             return []
@@ -5025,39 +4778,6 @@ class OrganizationRunner:
                 "remaining": self._experiment_remaining(),
                 "records": list(self.experiment_records),
             },
-            "research_cell": {
-                "director_id": self.topology.research_director_id,
-                "specialist_ids": list(self.topology.research_specialist_ids),
-                "commissions": list(self.research_commissions.values()),
-                "fragments": [
-                    {
-                        key: record.get(key)
-                        for key in (
-                            "work_item",
-                            "specialist_id",
-                            "sha256",
-                            "candidate",
-                            "persisted_path",
-                        )
-                    }
-                    for record in self.research_fragments.values()
-                ],
-                "decisions": [
-                    {
-                        key: record.get(key)
-                        for key in (
-                            "work_item",
-                            "sha256",
-                            "candidate",
-                            "persisted_path",
-                            "implementation_readiness",
-                            "authorized_work_items",
-                        )
-                    }
-                    for record in self.research_decisions.values()
-                ],
-                "authorizations": dict(self.research_authorizations),
-            },
             "experiment_loop": self._experiment_loop_snapshot(),
             "candidate_progress": self.candidate_progress,
         }
@@ -5100,16 +4820,6 @@ class OrganizationRunner:
             tailored["experiment_budget"] = {
                 key: budget.get(key)
                 for key in ("maximum", "used", "remaining")
-            }
-        if (
-            agent_id == self.topology.research_director_id
-            or agent_id == self.topology.leader_id
-        ) and (
-            self.research_commissions or self.research_authorizations
-        ):
-            tailored["research_state"] = {
-                "open_work_items": sorted(self.research_commissions),
-                "authorized_work_items": sorted(self.research_authorizations),
             }
         return (
             json.dumps(tailored, indent=2, ensure_ascii=False)
@@ -5191,416 +4901,6 @@ Change only the mutable file above and write one trial intent under
         )
 
     @staticmethod
-    def _research_string(
-        payload: Dict[str, Any],
-        name: str,
-        *,
-        allow_empty: bool = False,
-    ) -> str:
-        value = payload.get(name)
-        if not isinstance(value, str) or (not allow_empty and not value.strip()):
-            raise RuntimeError(
-                f"research artifact field {name!r} must be a non-empty string"
-            )
-        return value.strip()
-
-    @staticmethod
-    def _research_string_list(
-        payload: Dict[str, Any],
-        name: str,
-        *,
-        require_items: bool = False,
-    ) -> List[str]:
-        value = payload.get(name)
-        if (
-            not isinstance(value, list)
-            or any(not isinstance(item, str) or not item.strip() for item in value)
-            or (require_items and not value)
-        ):
-            qualifier = "non-empty " if require_items else ""
-            raise RuntimeError(
-                f"research artifact field {name!r} must be a {qualifier}"
-                "string array"
-            )
-        return [item.strip() for item in value]
-
-    @staticmethod
-    def _validate_research_sources(value: Any) -> List[Dict[str, str]]:
-        if not isinstance(value, list):
-            raise RuntimeError("research artifact sources must be an array")
-        normalized: List[Dict[str, str]] = []
-        for index, source in enumerate(value):
-            if not isinstance(source, dict):
-                raise RuntimeError(f"research source {index} must be an object")
-            item: Dict[str, str] = {}
-            for field_name in (
-                "title",
-                "url_or_doi",
-                "accessed_at",
-                "locator",
-                "supported_claim",
-                "source_kind",
-            ):
-                field_value = source.get(field_name)
-                if not isinstance(field_value, str) or not field_value.strip():
-                    raise RuntimeError(
-                        f"research source {index}.{field_name} must be "
-                        "a non-empty string"
-                    )
-                item[field_name] = field_value.strip()
-            if item["source_kind"] not in {
-                "primary",
-                "official_standard",
-                "official_documentation",
-                "project_authority",
-            }:
-                raise RuntimeError(
-                    f"research source {index}.source_kind is unsupported"
-                )
-            normalized.append(item)
-        return normalized
-
-    def _validate_research_fragment(
-        self,
-        agent: AgentSpec,
-        path: Path,
-    ) -> Dict[str, Any]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"research fragment is not valid JSON: {path}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("research fragment must be a JSON object")
-        if payload.get("schema") != RESEARCH_FRAGMENT_SCHEMA:
-            raise RuntimeError(
-                f"research fragment schema must be {RESEARCH_FRAGMENT_SCHEMA}"
-            )
-        if payload.get("run_id") != self.run_id:
-            raise RuntimeError("research fragment run_id does not match this run")
-        if payload.get("specialist_id") != agent.agent_id:
-            raise RuntimeError(
-                "research fragment specialist_id does not match its author"
-            )
-        work_item = self._research_string(payload, "work_item")
-        self._research_string(payload, "question")
-        self._research_string(payload, "method")
-        self._research_string_list(payload, "findings")
-        self._research_string_list(payload, "assumptions")
-        self._research_string_list(payload, "counterexamples")
-        self._research_string_list(payload, "unresolved")
-        self._research_string(payload, "recommendation")
-        sources = self._validate_research_sources(payload.get("sources"))
-        search_outcome = self._research_string(payload, "source_search_outcome")
-        if search_outcome not in {
-            "sources_found",
-            "no_applicable_primary_source",
-            "external_research_not_applicable",
-        }:
-            raise RuntimeError(
-                "research fragment source_search_outcome is unsupported"
-            )
-        if search_outcome == "sources_found" and not sources:
-            raise RuntimeError(
-                "sources_found research fragments require at least one source"
-            )
-        independent = payload.get("independent_analysis")
-        if independent is not True:
-            raise RuntimeError(
-                "research fragments must explicitly record independent_analysis=true"
-            )
-        if (
-            agent.agent_id == "math-auditor"
-            and payload.get("peer_conclusion_seen_before_derivation") is not False
-        ):
-            raise RuntimeError(
-                "math-auditor must record "
-                "peer_conclusion_seen_before_derivation=false"
-            )
-        commission = self.research_commissions.get(work_item)
-        if not commission or agent.agent_id not in commission["specialists"]:
-            raise RuntimeError(
-                f"research fragment has no matching commission for {work_item}"
-            )
-        raw = path.read_bytes()
-        return {
-            "kind": "fragment",
-            "work_item": work_item,
-            "specialist_id": agent.agent_id,
-            "sha256": hashlib.sha256(raw).hexdigest(),
-            "bytes": len(raw),
-            "payload": payload,
-            "source_path": str(path),
-        }
-
-    def _validate_research_decision(
-        self,
-        agent: AgentSpec,
-        path: Path,
-    ) -> Dict[str, Any]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"research decision is not valid JSON: {path}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("research decision must be a JSON object")
-        if payload.get("schema") != RESEARCH_DECISION_SCHEMA:
-            raise RuntimeError(
-                f"research decision schema must be {RESEARCH_DECISION_SCHEMA}"
-            )
-        if payload.get("run_id") != self.run_id:
-            raise RuntimeError("research decision run_id does not match this run")
-        if payload.get("created_by") != agent.agent_id:
-            raise RuntimeError(
-                "research decision created_by does not match its author"
-            )
-        if agent.agent_id != self.topology.research_director_id:
-            raise RuntimeError(
-                "only the topology research director may author a decision"
-            )
-        work_item = self._research_string(payload, "work_item")
-        self._research_string(payload, "question")
-        self._research_string(payload, "decision_to_unlock")
-        disposition = self._research_string(payload, "disposition")
-        if disposition not in RESEARCH_DISPOSITIONS:
-            raise RuntimeError("research decision disposition is unsupported")
-        readiness = self._research_string(payload, "implementation_readiness")
-        if readiness not in RESEARCH_IMPLEMENTATION_READINESS:
-            raise RuntimeError(
-                "research decision implementation_readiness is unsupported"
-            )
-        source_basis = self._research_string(payload, "source_basis")
-        if source_basis not in {
-            "primary_external",
-            "project_authority",
-            "mixed",
-        }:
-            raise RuntimeError("research decision source_basis is unsupported")
-        sources = self._validate_research_sources(payload.get("sources"))
-        if source_basis in {"primary_external", "mixed"} and not sources:
-            raise RuntimeError(
-                "an external or mixed research decision requires cited sources"
-            )
-        claim = payload.get("claim")
-        if not isinstance(claim, dict):
-            raise RuntimeError("research decision claim must be an object")
-        for field_name in (
-            "statement",
-            "equation",
-            "units",
-            "coordinate_conventions",
-        ):
-            self._research_string(claim, field_name)
-        measurement = payload.get("measurement_model")
-        if not isinstance(measurement, dict):
-            raise RuntimeError(
-                "research decision measurement_model must be an object"
-            )
-        applicability = self._research_string(measurement, "applicability")
-        if applicability == "required":
-            for field_name in (
-                "measurand",
-                "observation_process",
-                "noise_or_covariance",
-                "correlations",
-                "registration_uncertainty",
-                "model_discrepancy",
-            ):
-                self._research_string(measurement, field_name)
-        elif applicability == "not_applicable":
-            self._research_string(measurement, "rationale")
-        else:
-            raise RuntimeError(
-                "measurement_model.applicability must be required or "
-                "not_applicable"
-            )
-        for field_name in (
-            "assumptions",
-            "validity_domain",
-            "alternatives",
-            "degeneracies",
-            "project_evidence",
-            "external_evidence",
-            "policy_choices",
-            "code_implications",
-            "prohibited_inferences",
-            "unresolved",
-        ):
-            self._research_string_list(payload, field_name)
-        falsifier = payload.get("falsifier")
-        if not isinstance(falsifier, dict):
-            raise RuntimeError("research decision falsifier must be an object")
-        for field_name in (
-            "fixture_or_test",
-            "expected_observation",
-            "falsifies_if",
-        ):
-            self._research_string(falsifier, field_name)
-        fragment_hashes = self._research_string_list(
-            payload,
-            "source_fragment_sha256",
-            require_items=True,
-        )
-        with self._research_lock:
-            fragments = [
-                self.research_fragments.get(fragment_hash)
-                for fragment_hash in fragment_hashes
-            ]
-        if any(fragment is None for fragment in fragments):
-            raise RuntimeError(
-                "research decision references an unknown source fragment"
-            )
-        typed_fragments = [
-            fragment for fragment in fragments if fragment is not None
-        ]
-        if any(fragment["work_item"] != work_item for fragment in typed_fragments):
-            raise RuntimeError(
-                "research decision fragments do not match its work_item"
-            )
-        required_specialists = set(self.topology.research_specialist_ids)
-        supplied_specialists = {
-            fragment["specialist_id"] for fragment in typed_fragments
-        }
-        if supplied_specialists != required_specialists:
-            raise RuntimeError(
-                "research decision requires one current fragment from every "
-                f"specialist: {sorted(required_specialists)}"
-            )
-        authorized_work_items = self._research_string_list(
-            payload,
-            "authorized_work_items",
-        )
-        if (
-            readiness == "authorized_bounded_change"
-            and not authorized_work_items
-        ):
-            raise RuntimeError(
-                "authorized_bounded_change requires authorized_work_items"
-            )
-        if (
-            readiness != "authorized_bounded_change"
-            and authorized_work_items
-        ):
-            raise RuntimeError(
-                "non-authorizing research decisions cannot name "
-                "authorized_work_items"
-            )
-        commission = self.research_commissions.get(work_item)
-        if not commission or set(commission["specialists"]) != required_specialists:
-            raise RuntimeError(
-                "research decision has no complete two-specialist commission"
-            )
-        raw = path.read_bytes()
-        return {
-            "kind": "decision",
-            "work_item": work_item,
-            "sha256": hashlib.sha256(raw).hexdigest(),
-            "bytes": len(raw),
-            "payload": payload,
-            "source_path": str(path),
-            "implementation_readiness": readiness,
-            "authorized_work_items": authorized_work_items,
-        }
-
-    def _validated_research_artifacts(
-        self,
-        agent: AgentSpec,
-        workspace: Workspace,
-        turn_paths: Set[str],
-    ) -> List[Dict[str, Any]]:
-        prefix = f"{self.artifact_staging_prefix}/research/"
-        research_json = [
-            path for path in sorted(turn_paths)
-            if path.startswith(prefix) and path.endswith(".json")
-        ]
-        if not research_json:
-            return []
-        records: List[Dict[str, Any]] = []
-        for relative in research_json:
-            path = workspace.cwd / relative
-            if agent.agent_id in self.topology.research_specialist_ids:
-                records.append(self._validate_research_fragment(agent, path))
-            elif agent.agent_id == self.topology.research_director_id:
-                if path.name != "decision.json":
-                    raise RuntimeError(
-                        "research director JSON artifacts under research/ "
-                        "must be named decision.json"
-                    )
-                records.append(self._validate_research_decision(agent, path))
-            else:
-                raise RuntimeError(
-                    f"{agent.agent_id} may not author structured research artifacts"
-                )
-        return records
-
-    def _register_research_artifacts(
-        self,
-        records: List[Dict[str, Any]],
-        *,
-        candidate: str,
-        round_number: int,
-    ) -> None:
-        for record in records:
-            persisted = {
-                **record,
-                "candidate": candidate,
-                "round": round_number,
-                "registered_at": _utc_now(),
-            }
-            source_path = Path(str(record["source_path"]))
-            raw = source_path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != record["sha256"]:
-                raise RuntimeError(
-                    f"research artifact changed after validation: {source_path}"
-                )
-            destination_dir = (
-                self.research_cell_root / (
-                    "fragments"
-                    if record["kind"] == "fragment"
-                    else "decisions"
-                )
-            )
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            destination = destination_dir / f"{record['sha256']}.json"
-            if not destination.exists():
-                destination.write_bytes(raw)
-                destination.chmod(0o444)
-            persisted["persisted_path"] = str(destination)
-            persisted.pop("source_path", None)
-            if record["kind"] == "fragment":
-                with self._research_lock:
-                    self.research_fragments[record["sha256"]] = persisted
-                self._append_jsonl(
-                    "research-cell/fragments.jsonl",
-                    persisted,
-                )
-                event_type = "research.fragment_registered"
-            else:
-                with self._research_lock:
-                    self.research_decisions[record["work_item"]] = persisted
-                    for work_item in record["authorized_work_items"]:
-                        self.research_authorizations[work_item] = record["sha256"]
-                self._append_jsonl(
-                    "research-cell/decisions.jsonl",
-                    persisted,
-                )
-                event_type = "research.decision_registered"
-            self._event(
-                event_type,
-                round_number,
-                work_item=record["work_item"],
-                sha256=record["sha256"],
-                candidate=candidate,
-                specialist_id=record.get("specialist_id"),
-                implementation_readiness=record.get(
-                    "implementation_readiness"
-                ),
-            )
-
-    @staticmethod
     def _experiment_string(payload: Dict[str, Any], name: str) -> str:
         value = payload.get(name)
         if not isinstance(value, str) or not value.strip():
@@ -5640,7 +4940,6 @@ Change only the mutable file above and write one trial intent under
             "max_trials",
             "max_consecutive_non_improving",
             "max_wall_seconds",
-            "research_decision_sha256",
         }
         if set(payload) != required:
             raise RuntimeError(
@@ -5751,21 +5050,6 @@ Change only the mutable file above and write one trial intent under
                 "experiment-loop success_rule must exactly match the "
                 "project-owned evaluator goal_success_rule"
             )
-        research_sha = payload.get("research_decision_sha256")
-        if research_sha is not None and (
-            not isinstance(research_sha, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", research_sha)
-        ):
-            raise RuntimeError(
-                "research_decision_sha256 must be null or a SHA-256"
-            )
-        if work_item in self.research_commissions:
-            authorized_sha = self.research_authorizations.get(work_item)
-            if not authorized_sha or research_sha != authorized_sha:
-                raise RuntimeError(
-                    "research-dependent experiment contract must bind the "
-                    "authorizing decision SHA-256"
-                )
         raw = path.read_bytes()
         return {
             "kind": "contract",
@@ -7184,11 +6468,6 @@ Change only the mutable file above and write one trial intent under
                     f"{previous_head}..{provider_head}",
                 ],
             ))
-        research_artifacts = self._validated_research_artifacts(
-            agent,
-            workspace,
-            turn_paths,
-        )
         experiment_loop_artifacts = (
             self._validated_experiment_loop_artifacts(
                 agent,
@@ -7229,7 +6508,7 @@ Change only the mutable file above and write one trial intent under
                 "an experiment-loop trial intent requires one change to its "
                 "single mutable tracked file"
             )
-        experiment_paths = self._scientific_experiment_paths(
+        experiment_paths = self._metered_experiment_paths(
             agent, turn_paths,
         )
         if experiment_paths:
@@ -7265,12 +6544,6 @@ Change only the mutable file above and write one trial intent under
         else:
             head = _git(workspace.cwd, ["rev-parse", "HEAD"]).strip()
 
-        if research_artifacts:
-            self._register_research_artifacts(
-                research_artifacts,
-                candidate=head,
-                round_number=round_number,
-            )
         for record in experiment_loop_artifacts:
             if record["kind"] == "contract":
                 self._register_experiment_contract(
@@ -7340,28 +6613,24 @@ Change only the mutable file above and write one trial intent under
         self,
         round_number: int,
     ) -> None:
-        """Apply already-reviewed handoffs in the integration worktree.
+        """Apply already-reviewed candidates in the integration worktree.
 
         Native provider sandboxes deliberately protect Git administrative
         files.  Git mutation therefore belongs to the trusted RecCli host, not
-        to Claude or Codex.  Hierarchy and veto checks still happen before a
-        handoff reaches this inbox.
+        to Claude or Codex.  Integration keys off the durable assignment
+        ledger, not the finalizer's inbox: the inbox-only finalizer consumes
+        its inbox the round a handoff arrives, one round before the review
+        completes, so an inbox scan could only ever integrate a candidate the
+        worker happened to re-send. Routing and veto checks already ran when
+        the assignment was created and reviewed.
         """
         finalizer_id = self.topology.finalizer_id
         workspace = self.workspaces[finalizer_id]
-        messages = list(self.inboxes[finalizer_id])
-        for message in messages:
-            if message.get("tag") != "handoff" or not message.get("candidate"):
+        for assignment in list(self.governance.assignments.values()):
+            if assignment.get("status") not in {"approved", "reviewed"}:
                 continue
-            candidate = str(message["candidate"])
-            if candidate in self.integrated_candidates:
-                continue
-            assignment = self.governance.assignments.get(candidate)
-            if not assignment or assignment.get("status") not in {
-                "approved", "reviewed",
-            }:
-                continue
-            if message.get("from") != assignment.get("primaryManagerId"):
+            candidate = str(assignment.get("candidate") or "")
+            if not candidate or candidate in self.integrated_candidates:
                 continue
             base = workspace.base_commit or _git(
                 workspace.cwd, ["rev-parse", "HEAD"],
@@ -7822,20 +7091,6 @@ candidate needs them. The context box is read-only."""
                 "goal to one declared predicate; contract details and limits "
                 f"are durable in `{self.run_dir / 'run.json'}`."
             )
-        research_note = ""
-        if agent.agent_id in self.topology.research_specialist_ids:
-            research_note = (
-                "Answer only the current manager-b commission in this fresh "
-                "session. Write one structured fragment under "
-                f"`{self.artifact_staging_prefix}/research/`, hand it to "
-                "manager-b, and stop."
-            )
-        elif agent.agent_id == self.topology.research_director_id:
-            research_note = (
-                "Commission the two research specialists only for one bounded "
-                "load-bearing question. Dependent implementation waits for one "
-                "validated decision."
-            )
         web_note = (
             "External research is available. Use primary sources only for a "
             "material current-goal question; never disclose private project "
@@ -7878,7 +7133,6 @@ candidate needs them. The context box is read-only."""
             note for note in (
                 evidence_note,
                 experiment_note,
-                research_note,
                 web_note,
             )
             if note
@@ -8334,43 +7588,25 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
 
         current = self.worker_goals.get(worker_id)
         same_goal = bool(current and current.get("work_item") == work_item)
-        outstanding_flag = self._latest_off_goal_flag(
+        # A rebind by the supervisor adjudicates any open flag on the current
+        # goal: with no manager layer there is no peer to consult, and the
+        # supervisor changing the goal IS the decision.
+        open_flag = self._latest_off_goal_flag(
             worker_id=worker_id,
             work_item=current.get("work_item") if current else None,
-            statuses={"needs_consult", "consulting"},
+            statuses={"raised"},
         )
-        if outstanding_flag and not force:
-            return (
-                False,
-                "an off-goal flag is awaiting its one peer-manager "
-                "consultation; the primary manager must obtain the answer "
-                "before changing or replacing this worker goal",
-            )
-
-        validated_flag = self._latest_off_goal_flag(
-            worker_id=worker_id,
-            work_item=current.get("work_item") if current else None,
-            statuses={"validated"},
-        )
-        # A lead-fallback goal is provisional: it exists only because the
-        # hierarchy failed to delegate. Treating it as equal in standing to a
-        # manager-issued goal meant that once the barrier fired, the manager's
-        # later correct delegation was refused for the rest of the run, and the
-        # worker stayed on a generic fallback objective. The barrier written to
-        # stop the coordination layer killing a run must not stop it recovering.
-        provisional = (current or {}).get("source") == "lead-fallback"
         if (
             self._goal_is_active(current)
             and not same_goal
             and not force
-            and not provisional
-            and validated_flag is None
+            and open_flag is None
         ):
             return (
                 False,
                 f"{worker_id} already has active goal "
-                f"{current.get('work_item')}; finish it or complete the "
-                "off-goal consultation before assigning another",
+                f"{current.get('work_item')}; finish it or raise an off-goal "
+                "flag before assigning another",
             )
 
         if current and not same_goal:
@@ -8380,10 +7616,10 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
             archived["superseded_by"] = work_item
             self.worker_goal_history.append(archived)
             current["status"] = "superseded"
-            if validated_flag:
-                validated_flag["status"] = "acted"
-                validated_flag["decision_round"] = round_number
-                validated_flag["decision"] = f"Replaced goal with {work_item}"
+            if open_flag:
+                open_flag["status"] = "acted"
+                open_flag["decision_round"] = round_number
+                open_flag["decision"] = f"Replaced goal with {work_item}"
 
         created_round = (
             current.get("created_round", round_number)
@@ -8471,10 +7707,10 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                     reason=reason,
                 )
                 return False, reason
-        if validated_flag and same_goal:
-            validated_flag["status"] = "acted"
-            validated_flag["decision_round"] = round_number
-            validated_flag["decision"] = "Kept and refined the active goal"
+        if open_flag and same_goal:
+            open_flag["status"] = "acted"
+            open_flag["decision_round"] = round_number
+            open_flag["decision"] = "Kept and refined the active goal"
         self._persist_goal_state()
         self._event(
             "worker.goal.bound",
@@ -8495,7 +7731,7 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         risk: str,
         round_number: int,
     ) -> Tuple[bool, str]:
-        primary = self.topology.primary_manager_by_worker.get(worker_id)
+        primary = _supervisor_of(self.topology, worker_id)
         goal = self.worker_goals.get(worker_id)
         if not self._goal_is_active(goal):
             return False, f"{worker_id} has no active goal to preserve"
@@ -8514,7 +7750,7 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         existing = self._latest_off_goal_flag(
             worker_id=worker_id,
             work_item=work_item,
-            statuses={"needs_consult", "consulting", "validated"},
+            statuses={"raised"},
         )
         if existing:
             return (
@@ -8543,12 +7779,10 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
             "work_item": work_item,
             "content": content.strip(),
             "risk": risk,
-            "status": "needs_consult",
+            # raised -> acted. The supervisor adjudicates directly; there is
+            # no manager layer to consult.
+            "status": "raised",
             "created_round": round_number,
-            "consulted_manager_id": None,
-            "consult_round": None,
-            "validation": None,
-            "validation_round": None,
         }
         self.off_goal_flags[flag_id] = flag
         self._persist_goal_state()
@@ -8616,67 +7850,7 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                 )
 
         if (
-            sender in self.topology.manager_ids
-            and recipient in self.topology.manager_ids
-            and sender != recipient
-            and tag == "question"
-            and work_item
-        ):
-            flag = self._latest_off_goal_flag(
-                manager_id=sender,
-                work_item=work_item,
-                statuses={"needs_consult", "consulting", "validated"},
-            )
-            if flag:
-                if flag["status"] != "needs_consult":
-                    return (
-                        False,
-                        "exactly one peer-manager consultation is allowed for "
-                        f"off-goal flag {flag['flag_id']}",
-                    )
-                flag["status"] = "consulting"
-                flag["consulted_manager_id"] = recipient
-                flag["consult_round"] = round_number
-                self._persist_goal_state()
-                self._event(
-                    "worker.off_goal.consulted",
-                    round_number,
-                    flag_id=flag["flag_id"],
-                    manager_id=sender,
-                    consulted_manager_id=recipient,
-                )
-
-        if (
-            sender in self.topology.manager_ids
-            and recipient in self.topology.manager_ids
-            and tag == "answer"
-            and work_item
-        ):
-            flag = next(
-                (
-                    item
-                    for item in reversed(list(self.off_goal_flags.values()))
-                    if item["manager_id"] == recipient
-                    and item["consulted_manager_id"] == sender
-                    and item["work_item"] == work_item
-                    and item["status"] == "consulting"
-                ),
-                None,
-            )
-            if flag:
-                flag["status"] = "validated"
-                flag["validation"] = str(message.get("content") or "").strip()
-                flag["validation_round"] = round_number
-                self._persist_goal_state()
-                self._event(
-                    "worker.off_goal.validated",
-                    round_number,
-                    flag_id=flag["flag_id"],
-                    manager_id=recipient,
-                    consulted_manager_id=sender,
-                )
-        if (
-            sender in self.topology.manager_ids
+            sender in _supervisor_ids(self.topology)
             and recipient in self.topology.worker_ids
             and tag == "decision"
             and work_item
@@ -8685,14 +7859,8 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                 worker_id=recipient,
                 manager_id=sender,
                 work_item=work_item,
-                statuses={"needs_consult", "consulting", "validated"},
+                statuses={"raised"},
             )
-            if flag and flag["status"] != "validated":
-                return (
-                    False,
-                    "the primary manager must receive the one peer-manager "
-                    "validation answer before acting on this off-goal flag",
-                )
             if flag:
                 flag["status"] = "acted"
                 flag["decision"] = str(message.get("content") or "").strip()
@@ -8721,7 +7889,7 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
             for message in reply.get("messages", [])
             if message.get("workItem") == goal.get("work_item")
         ]
-        primary = self.topology.primary_manager_by_worker.get(worker_id)
+        primary = _supervisor_of(self.topology, worker_id)
         handoff = next(
             (
                 message
@@ -8762,10 +7930,10 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                 return (
                     "No active goal is bound. Do not perform substantive work, "
                     "invent a task, audit the repository, or write a report. "
-                    "Wait for one concrete goal from your primary manager or "
+                    "Wait for one concrete goal from the lead or "
                     "the human operator."
                 )
-            primary = self.topology.primary_manager_by_worker.get(agent_id)
+            primary = _supervisor_of(self.topology, agent_id)
             return f"""Goal: [{goal['work_item']}] {goal['objective']}
 Predicate: {goal.get('predicate_id') or 'unbound'}
 Baseline value: {goal.get('baseline_value')}
@@ -8782,17 +7950,14 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             owned = [
                 goal
                 for worker_id, goal in self.worker_goals.items()
-                if self.topology.primary_manager_by_worker.get(worker_id)
-                == agent_id
+                if _supervisor_of(self.topology, worker_id) == agent_id
                 and self._goal_is_active(goal)
             ]
             open_flags = [
                 flag
                 for flag in self.off_goal_flags.values()
                 if flag["manager_id"] == agent_id
-                and flag["status"] in {
-                    "needs_consult", "consulting", "validated",
-                }
+                and flag["status"] == "raised"
             ]
             goal_lines = [
                 f"- {goal['worker_id']}: {goal['work_item']} "
@@ -9290,9 +8455,7 @@ off-goal finding; do not expand scope or substitute administrative prose."""
                         "reason": reason,
                         "ts": _utc_now(),
                     })
-                    primary = self.topology.primary_manager_by_worker.get(
-                        sender,
-                    )
+                    primary = _supervisor_of(self.topology, sender)
                     self._system_message(
                         sender,
                         "blocker",
@@ -9329,164 +8492,14 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             self.dropped_messages += 1
             self._append_jsonl("messages.jsonl", {"round": round_number, "from": sender, **message, "status": "dropped", "reason": reason, "ts": _utc_now()})
             return
-        if recipient in self.topology.research_specialist_ids:
-            if (
-                sender != self.topology.research_director_id
-                or tag not in {"plan", "question", "handoff"}
-                or not message.get("workItem")
-                or message.get("risk") not in RISKS
-            ):
-                self.dropped_messages += 1
-                self._append_jsonl("messages.jsonl", {
-                    "round": round_number,
-                    "from": sender,
-                    **message,
-                    "status": "dropped",
-                    "reason": (
-                        "research specialist commissions must come from the "
-                        "research director with a neutral plan/question/handoff, "
-                        "named workItem, and risk"
-                    ),
-                    "ts": _utc_now(),
-                })
-                return
-            work_item = str(message["workItem"])
-            with self._research_lock:
-                commission = self.research_commissions.setdefault(
-                    work_item,
-                    {
-                        "work_item": work_item,
-                        "director_id": sender,
-                        "question": content,
-                        "risk": message["risk"],
-                        "specialists": [],
-                        "created_round": round_number,
-                    },
-                )
-                commission["specialists"] = sorted(set([
-                    *commission["specialists"],
-                    recipient,
-                ]))
-                snapshot = dict(commission)
-            self._append_jsonl(
-                "research-cell/commissions.jsonl",
-                {
-                    **snapshot,
-                    "assigned_specialist": recipient,
-                    "ts": _utc_now(),
-                },
-            )
-            self._event(
-                "research.commissioned",
-                round_number,
-                work_item=work_item,
-                specialist_id=recipient,
-                director_id=sender,
-            )
-        if sender in self.topology.research_specialist_ids:
-            if (
-                recipient != self.topology.research_director_id
-                or not message.get("workItem")
-                or message.get("risk") not in RISKS
-            ):
-                self.dropped_messages += 1
-                self._append_jsonl("messages.jsonl", {
-                    "round": round_number,
-                    "from": sender,
-                    **message,
-                    "status": "dropped",
-                    "reason": (
-                        "research specialists must return bounded traffic to "
-                        "the research director with workItem and risk"
-                    ),
-                    "ts": _utc_now(),
-                })
-                return
-            if tag == "handoff":
-                with self._research_lock:
-                    has_fragment = any(
-                        fragment["work_item"] == message["workItem"]
-                        and fragment["specialist_id"] == sender
-                        for fragment in self.research_fragments.values()
-                    )
-                if not has_fragment:
-                    self.dropped_messages += 1
-                    self._append_jsonl("messages.jsonl", {
-                        "round": round_number,
-                        "from": sender,
-                        **message,
-                        "status": "dropped",
-                        "reason": (
-                            "research specialist handoff requires a validated "
-                            "structured fragment for the same workItem"
-                        ),
-                        "ts": _utc_now(),
-                    })
-                    return
-        if (
-            sender == self.topology.research_director_id
-            and recipient in self.topology.worker_ids
-            and tag in {"plan", "handoff"}
-            and message.get("workItem") in self.research_commissions
-            and message.get("workItem") not in self.research_authorizations
-        ):
-            self.dropped_messages += 1
-            self._append_jsonl("messages.jsonl", {
-                "round": round_number,
-                "from": sender,
-                **message,
-                "status": "dropped",
-                "reason": (
-                    "research-dependent worker delegation requires a validated "
-                    "decision packet authorizing this exact workItem"
-                ),
-                "ts": _utc_now(),
-            })
-            return
         if (
             recipient in self.topology.worker_ids
-            and sender in self.topology.manager_ids
-        ):
-            primary = self.topology.primary_manager_by_worker.get(recipient)
-            if sender != primary:
-                self.dropped_messages += 1
-                self._append_jsonl("messages.jsonl", {
-                    "round": round_number,
-                    "from": sender,
-                    **message,
-                    "status": "dropped",
-                    "reason": (
-                        "worker goals must come through primary manager "
-                        f"{primary}; peer managers consult the primary manager"
-                    ),
-                    "ts": _utc_now(),
-                })
-                return
-            if (
-                tag in DELEGATION_TAGS
-                and (
-                    not message.get("workItem")
-                    or message.get("risk") not in RISKS
-                )
-            ):
-                self.dropped_messages += 1
-                self._append_jsonl("messages.jsonl", {
-                    "round": round_number,
-                    "from": sender,
-                    **message,
-                    "status": "dropped",
-                    "reason": (
-                        "worker delegation requires a named workItem and risk"
-                    ),
-                    "ts": _utc_now(),
-                })
-                return
-        if (
-            self.topology.delegation_gate
-            and recipient in self.topology.manager_ids
-            and sender == self.topology.leader_id
+            and sender == _supervisor_of(self.topology, recipient)
             and tag in DELEGATION_TAGS
-            and (not message.get("workItem") or message.get("risk") not in RISKS)
+            and (
+                not message.get("workItem")
+                or message.get("risk") not in RISKS
+            )
         ):
             self.dropped_messages += 1
             self._append_jsonl("messages.jsonl", {
@@ -9495,7 +8508,7 @@ off-goal finding; do not expand scope or substitute administrative prose."""
                 **message,
                 "status": "dropped",
                 "reason": (
-                    "manager delegation requires a named workItem and risk"
+                    "worker delegation requires a named workItem and risk"
                 ),
                 "ts": _utc_now(),
             })
@@ -9520,6 +8533,28 @@ off-goal finding; do not expand scope or substitute administrative prose."""
         if not accepted:
             self.dropped_messages += 1
             self._append_jsonl("messages.jsonl", {"round": round_number, "from": sender, **message, "status": "dropped", "reason": reason, "ts": _utc_now()})
+            return
+        if (
+            recipient in self.topology.worker_ids
+            and tag in {"plan", "handoff"}
+            and sender != _supervisor_of(self.topology, recipient)
+        ):
+            # Goal-carrying traffic to a worker comes only from its supervisor.
+            # Anyone else's plan/handoff binds nothing and would still wake the
+            # worker, which is a manufactured turn.
+            supervisor = _supervisor_of(self.topology, recipient)
+            self.dropped_messages += 1
+            self._append_jsonl("messages.jsonl", {
+                "round": round_number,
+                "from": sender,
+                **message,
+                "status": "dropped",
+                "reason": (
+                    f"worker plan/handoff traffic may come only from "
+                    f"{supervisor}"
+                ),
+                "ts": _utc_now(),
+            })
             return
         if (
             recipient in self.topology.worker_ids
@@ -9742,10 +8777,6 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             artifacts.add(str(self.run_dir / "deliverables" / "manifest.json"))
         if (self.run_dir / "experiments.jsonl").is_file():
             artifacts.add(str(self.run_dir / "experiments.jsonl"))
-        if (self.research_cell_root / "fragments.jsonl").is_file():
-            artifacts.add(str(self.research_cell_root / "fragments.jsonl"))
-        if (self.research_cell_root / "decisions.jsonl").is_file():
-            artifacts.add(str(self.research_cell_root / "decisions.jsonl"))
         if (self.experiment_loop_root / "contracts.jsonl").is_file():
             artifacts.add(str(self.experiment_loop_root / "contracts.jsonl"))
         if (self.experiment_loop_root / "trials.jsonl").is_file():
@@ -9821,25 +8852,6 @@ off-goal finding; do not expand scope or substitute administrative prose."""
                 "maximum": self.max_experiments,
                 "used": self._experiment_used(),
                 "remaining": self._experiment_remaining(),
-            },
-            "research_cell": {
-                "commission_count": len(self.research_commissions),
-                "fragment_count": len(self.research_fragments),
-                "decisions": [
-                    {
-                        key: record.get(key)
-                        for key in (
-                            "work_item",
-                            "sha256",
-                            "candidate",
-                            "persisted_path",
-                            "implementation_readiness",
-                            "authorized_work_items",
-                        )
-                    }
-                    for record in self.research_decisions.values()
-                ][-8:],
-                "registry": str(self.research_cell_root),
             },
             "experiment_loop": {
                 "enabled": self.experiment_policy is not None,
@@ -10141,7 +9153,6 @@ turns. Never describe a round limit as a turn limit.
                 "closeout": digest["closeout_rounds"],
             },
             "experiment_budget": digest["experiment_budget"],
-            "research_cell": digest["research_cell"],
             "experiment_loop": digest["experiment_loop"],
             "canonical_effects_applied": False,
         }
@@ -10216,9 +9227,7 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
     def _has_initial_worker_assignment(self, worker_id: str) -> bool:
         if self._goal_is_active(self.worker_goals.get(worker_id)):
             return True
-        primary = self.topology.primary_manager_by_worker.get(worker_id)
-        if not primary:
-            return True
+        primary = _supervisor_of(self.topology, worker_id)
         if self._has_delegation(
             self.inboxes[worker_id],
             sender=primary,
@@ -10252,222 +9261,11 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             for message in messages
         )
 
-    def _assert_delegation_barrier(self, round_number: int) -> None:
-        """Fail closed when the hierarchy did not issue explicit assignments.
-
-        Scientific runs require the lead to activate only the two working
-        managers. Worker activation is optional and goal-driven; reviewer and
-        release roles remain dormant until an exact event exists.
-        """
-        if not self.topology.delegation_gate:
-            return
-        missing: List[str] = []
-        if round_number == 1:
-            required_managers = (
-                sorted(set(
-                    self.topology.primary_manager_by_worker.values()
-                ))
-                if self.topology.research_director_id is not None
-                else self.topology.manager_ids
-            )
-            missing = [
-                manager_id
-                for manager_id in required_managers
-                if not self._has_delegation(
-                    self.inboxes[manager_id],
-                    sender=self.topology.leader_id,
-                    recipient=manager_id,
-                )
-            ]
-            level = "lead-to-manager"
-        elif (
-            round_number == 2
-            and self.topology.research_director_id is None
-        ):
-            missing = [
-                worker_id
-                for worker_id in self.topology.worker_ids
-                if not self._has_initial_worker_assignment(worker_id)
-            ]
-            level = "manager-to-worker"
-        else:
-            return
-        if missing:
-            self._degrade_delegation(level, round_number, missing)
-
-    def _free_goal_selector(self):
-        """Pick a project-declared predicate no active goal already owns.
-
-        Returns (goal_class, predicate_id, evaluator_id), or three Nones when the
-        project does not require measurable goals. Without a specific selector,
-        _resolve_goal_measurement matches every declared predicate at once and
-        refuses the goal as unevaluable.
-        """
-        policy = self.experiment_policy
-        if not (policy and policy.get("promotion_requires_goal_progress", False)):
-            return None, None, None
-        owned = {
-            goal.get("predicate_id")
-            for goal in self.worker_goals.values()
-            if self._goal_is_active(goal)
-        }
-        for evaluator in policy.get("evaluators", {}).values():
-            for predicate in evaluator.get("predicates", {}).values():
-                if predicate["id"] not in owned:
-                    return (
-                        predicate["goal_class"],
-                        predicate["id"],
-                        evaluator["id"],
-                    )
-        return None, None, None
-
-    def _degrade_delegation(
-        self,
-        level: str,
-        round_number: int,
-        missing: List[str],
-    ) -> None:
-        """Assign directly from the lead when the hierarchy did not delegate.
-
-        This used to raise, which aborted the whole run. One recorded run died
-        that way at round 2 with every worker still unassigned and no worker ever
-        executing: two managers had failed earlier in the round, and the
-        coordination layer took the run down with them. An intermediate layer
-        that can end a run by omission is a single point of failure with no
-        compensating benefit, so it now degrades instead.
-
-        Degradation is loud, not silent. Each fallback assignment is recorded as
-        a `delegation.degraded` event and accumulated on the run so the terminal
-        record shows the hierarchy did not function, and a run that only
-        progressed because of fallbacks is not mistaken for one that delegated
-        properly.
-        """
-        leader = self.topology.leader_id
-        for agent_id in missing:
-            # A delegation must come FROM the sender the barrier checks for, so
-            # this is written as the lead speaking directly rather than as an
-            # orchestrator system message, which _has_delegation would not accept.
-            message = {
-                "runId": self.run_id,
-                "round": round_number,
-                "from": leader,
-                "to": agent_id,
-                "tag": "handoff",
-                "content": (
-                    f"[RecCli fallback] The {level} delegation for {agent_id} was "
-                    f"not issued by round {round_number}. Working directly from the "
-                    f"lead instead. Mission: {self.mission}"
-                ),
-                "candidate": None,
-                # Distinct per worker: governance requires worker traffic to
-                # carry its goal's workItem, so a shared string collapses every
-                # worker's identity into one and collides on re-delegation.
-                "workItem": (
-                    f"lead-fallback-{_safe_name(agent_id)}-r{round_number}"
-                ),
-                "risk": "routine",
-                "deliveredAt": _utc_now(),
-                "degraded": True,
-            }
-            self.inboxes[agent_id].append(message)
-            self.delivered_messages += 1
-            self._append_jsonl("messages.jsonl", {**message, "status": "delivered"})
-            # Bind the goal too. Scheduling a worker is not the same as giving it
-            # something to do: worker instructions say to solve "the one active
-            # goal shown by RecCli", and goals are normally bound in
-            # _deliver_message only for the worker's supervisor. A degraded worker
-            # would otherwise be woken with an empty goal, be told "do not perform
-            # substantive work", and have every message it emits dropped.
-            #
-            # The selectors matter. Passing none of them made the goal unevaluable
-            # on any project declaring more than one predicate, so every fallback
-            # was rejected and every worker was woken empty anyway. Choosing a
-            # free predicate per worker keeps the goal measurable and gives each
-            # worker distinct work.
-            if agent_id in self.topology.worker_ids:
-                goal_class, predicate_id, evaluator_id = self._free_goal_selector()
-                accepted = False
-                reason = ""
-                raised = False
-                try:
-                    accepted, reason = self._bind_worker_goal(
-                        worker_id=agent_id,
-                        manager_id=leader,
-                        work_item=message["workItem"],
-                        objective=message["content"],
-                        risk="routine",
-                        round_number=round_number,
-                        source="lead-fallback",
-                        force=True,
-                        goal_class=goal_class,
-                        predicate_id=predicate_id,
-                        evaluator_id=evaluator_id,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    # Binding can execute the project's evaluator to capture a
-                    # baseline. This barrier exists to stop one failure ending the
-                    # run; it must not become a new way to end the run itself.
-                    raised = True
-                    reason = f"{type(exc).__name__}: {exc}"
-                if raised:
-                    # The goal is recorded BEFORE its baseline is captured, so a
-                    # failure here leaves a goal that looks active and has no
-                    # baseline: every candidate it later produces dies on
-                    # "goal baseline is missing". Reading the state as success
-                    # turned an unusable goal into a reported delegation. Discard
-                    # the partial goal and fail honestly.
-                    self.worker_goals.pop(agent_id, None)
-                    accepted = False
-                elif self._goal_is_active(self.worker_goals.get(agent_id)):
-                    # No exception, so a goal that is active really is usable
-                    # even if the return value said otherwise.
-                    accepted = True
-                if not accepted:
-                    # Do not leave a scheduled worker with no goal. Withdraw the
-                    # fallback so the worker is not woken to be told it may not
-                    # work, and record the failure rather than reporting a
-                    # delegation that did not happen.
-                    try:
-                        self.inboxes[agent_id].remove(message)
-                        self.delivered_messages -= 1
-                    except ValueError:
-                        pass
-                    self._event(
-                        "delegation.degraded.goal_rejected",
-                        round_number,
-                        agent_id=agent_id,
-                        reason=reason,
-                    )
-                    continue
-            self.degraded_delegations.append({
-                "round": round_number,
-                "level": level,
-                "agent_id": agent_id,
-            })
-            self._event(
-                "delegation.degraded",
-                round_number,
-                agent_id=agent_id,
-                level=level,
-                reason="no explicit assignment issued; assigned directly from the lead",
-            )
-
     def _select_agents(self, round_number: int) -> List[AgentSpec]:
         if self.topology.scheduler == "all":
             return list(self.topology.agents)
         if round_number == 1:
             return [self.topology.agent(self.topology.leader_id)]
-        if self.topology.delegation_gate and round_number == 2:
-            # The lead owns initial reconnaissance and decomposition. Managers
-            # receive that map in round two, refine it against their specialist
-            # context, and only then wake explicitly delegated workers in round
-            # three. This preserves leadership without serializing the actual
-            # implementation lanes.
-            return [
-                self.topology.agent(manager_id)
-                for manager_id in self.topology.manager_ids
-                if self.inboxes[manager_id]
-            ]
         selected = [
             agent for agent in self.topology.agents
             if (
@@ -10642,11 +9440,8 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         phase: Optional[str] = None,
     ) -> None:
         resolved_phase = phase or "parallel_execution"
-        if phase is None and self.topology.delegation_gate:
-            if round_number <= 1:
-                resolved_phase = "lead_recon"
-            elif round_number == 2:
-                resolved_phase = "manager_delegation"
+        if phase is None and round_number <= 1:
+            resolved_phase = "lead_recon"
         if phase is None and self.active_experiment_by_worker:
             resolved_phase = "experiment_loop"
         payload = {
@@ -10694,10 +9489,6 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
             "host_state_sha256": self.host_state_brief.get("content_sha256"),
             "max_experiments": self.max_experiments,
             "experiments_remaining": self._experiment_remaining(),
-            "research_commissions": len(self.research_commissions),
-            "research_fragments": len(self.research_fragments),
-            "research_decisions": len(self.research_decisions),
-            "research_cell_root": str(self.research_cell_root),
             "experiment_loop_enabled": self.experiment_policy is not None,
             "experiment_loop_contracts": len(self.experiment_contracts),
             "experiment_loop_trials": len(self.experiment_trials),
@@ -10819,18 +9610,6 @@ def build_provider_assignments(
     for worker, primary in topology.primary_manager_by_worker.items():
         if primary in assignments and worker in assignments:
             assignments[worker] = assignments[primary]
-    if (
-        topology.research_director_id
-        and len(topology.research_specialist_ids) >= 2
-    ):
-        director_provider = assignments[topology.research_director_id]
-        alternate_provider = (
-            secondary_provider
-            if director_provider == host_provider
-            else host_provider
-        )
-        assignments[topology.research_specialist_ids[0]] = director_provider
-        assignments[topology.research_specialist_ids[1]] = alternate_provider
     return assignments
 
 
@@ -10890,11 +9669,6 @@ def resolve_provider_plan(provider: str, topology: Topology) -> ProviderPlan:
     )
 
 
-def resolve_provider(provider: str) -> str:
-    """Backward-compatible mode-only provider resolution."""
-    return resolve_provider_plan(provider, get_topology()).mode
-
-
 def organization_root(project_root: Path) -> Path:
     return project_root / "devsession" / "agent-organizations"
 
@@ -10903,7 +9677,7 @@ def create_run_request(
     working_directory: str,
     mission: str,
     provider: str = "auto",
-    topology: str = "google-rotating",
+    topology: str = "flat",
     max_rounds: int = 8,
     max_concurrency: int = 5,
     turn_timeout_seconds: int = 1200,
@@ -10996,12 +9770,13 @@ def create_run_request(
         "provider_assignments": provider_plan.provider_assignments,
         "blind_verifier_provider": provider_plan.blind_verifier_provider,
         "provider_authentication": provider_plan.authentication,
-        "topology": topology, "max_rounds": max(1, int(max_rounds)),
+        "topology": topology_config.topology_id,
+        "topology_requested": topology,
+        "max_rounds": max(1, int(max_rounds)),
         "mission_origin": normalized_origin,
         "continuation_from_run_id": normalized_parent,
         "continuation_conclusion_sha256": normalized_conclusion_sha,
         "scheduler": topology_config.scheduler,
-        "delegation_gate": topology_config.delegation_gate,
         "human_promotion_required": topology_config.human_promotion_required,
         "max_concurrency": max(1, int(max_concurrency)),
         "turn_timeout_seconds": max(30, int(turn_timeout_seconds)),
@@ -11034,7 +9809,8 @@ def create_run_request(
         "host_provider": provider_plan.host_provider,
         "provider_assignments": provider_plan.provider_assignments,
         "blind_verifier_provider": provider_plan.blind_verifier_provider,
-        "topology": topology,
+        "topology": topology_config.topology_id,
+        "topology_requested": topology,
         "mission_origin": normalized_origin,
         "continuation_from_run_id": normalized_parent,
         "continuation_conclusion_sha256": normalized_conclusion_sha,
@@ -11051,7 +9827,7 @@ def create_run_request(
         ),
         "max_experiments": max(0, int(max_experiments)),
         "control_protocol": "reccli.organization-control.v1",
-        "phase": "lead_recon" if topology_config.delegation_gate else "parallel_execution",
+        "phase": "lead_recon",
         "agent_states": {
             agent.agent_id: "idle" for agent in topology_config.agents
         },

@@ -52,7 +52,7 @@ def main() -> int:
                     continue
         try:
             lead_id = get_topology(
-                str(request.get("topology") or "google-rotating")
+                str(request.get("topology") or "flat")
             ).leader_id
         except Exception:
             lead_id = "lead"

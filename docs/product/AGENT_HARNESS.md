@@ -2,6 +2,17 @@
 
 **Status:** Product/design document with implemented audit, patch-proposal, and organization MCP workflows.
 
+> **2026-08-12 supersession note.** The hierarchical organization structures
+> this document describes (managers, rotating alternate-manager review, the
+> research cell, the delegation barrier) were deleted after thirteen recorded
+> runs processed 1.3B input tokens and merged nothing. The organization is now
+> a single flat fleet behind a host-enforced admission gate, with a NO_OP
+> terminal outcome and a project-level outcome ledger. See
+> `docs/decisions/ORGANIZATION_PLANE_AUDIT.md` for the forensics and
+> dispositions, and `docs/integrations/organization-console.md` for current
+> behavior. Hierarchy prose below is retained as design history; the audit and
+> patch-proposal sections remain current.
+
 This document describes a RecCli-native harness for launching scoped coding agents against project memory. `audit_feature` and `propose_patch` cover bounded read-only analysis. The asynchronous organization tools cover opt-in delivery work in isolated Git worktrees. All three paths dispatch through the installed subscription-auth Claude Code or Codex CLI rather than model APIs.
 
 ## Overview
@@ -244,7 +255,7 @@ start_organization(
     mission="Implement the feature and satisfy these acceptance criteria: ...",
     launch_mode="custom",
     provider="auto",
-    topology="google-rotating",
+    topology="flat",
     max_rounds=8,
     max_concurrency=5,
     evidence_paths=["out/project-intelligence", "/path/to/reference-assets"],
@@ -430,14 +441,12 @@ failure mode, or candidate calls for them. Full-context agents read the common
 authority first and use the lane union as an indexed library, avoiding
 needless up-front context ingestion.
 
-`topology="scientific"` is a single reversibility-based organization for
-evidence-heavy research and engineering. RecCli supplies generic role slots:
-reproduction and receipt integrity, hypothesis/model evaluation, structural
-and integration validation, uncertainty/alternative explanations, and an
-on-demand source-scout/mathematical-auditor research cell. The
+The flat organization cuts authority at reversibility for evidence-heavy
+research and engineering: one coordinator, six workers, and two independent
+veto auditors. The
 project's tracked context manifest specializes those slots with domain-specific
 lane purposes and documents. RecCli binds exactly one active problem-solving
-goal to each worker after the lead/manager delegation gate opens. A goal must
+goal to each worker as the coordinator assigns it. A goal must
 name an observable source, test, evaluator, experiment, product, or other
 project outcome; standby and no-action assignments are rejected. Only the
 worker's primary manager may bind or refine it. Workers may then choose
@@ -492,7 +501,7 @@ start_organization(
     mission="Autonomously investigate the objective and prepare a promotion proposal.",
     launch_mode="custom",
     provider="auto",
-    topology="scientific",
+    topology="flat",
     max_rounds=8,
     max_experiments=3,
     evidence_paths=["out/project-intelligence", "/path/to/reference-assets"],

@@ -1131,7 +1131,7 @@ def start_organization(
     mission: Optional[str] = None,
     launch_mode: str = "auto",
     provider: str = "auto",
-    topology: str = "google-rotating",
+    topology: str = "flat",
     max_rounds: int = 8,
     max_concurrency: int = 5,
     turn_timeout_seconds: int = 1200,
@@ -1178,19 +1178,18 @@ def start_organization(
     or forwards an Anthropic/OpenAI API key.
 
     With provider="auto", RecCli uses a mixed organization when both native CLIs
-    are installed and authenticated. Worker/primary-manager lanes share a
-    provider for continuity, alternate-manager review prefers the other
-    provider, the release manager stays on the host provider, and the fresh
-    verifier uses the opposite provider. If only one usable CLI is available,
-    auto falls back to a homogeneous run. Explicit "claude" or "codex" always
-    remains homogeneous; explicit "mixed" requires both subscriptions.
+    are installed and authenticated, alternating providers across worker lanes
+    so independent review can come from the opposite provider, and the blind
+    final verifier uses the opposite provider from the lead. If only one usable
+    CLI is available, auto falls back to a homogeneous run. Explicit "claude" or
+    "codex" always remains homogeneous; explicit "mixed" requires both
+    subscriptions.
 
-    The default topology is a Google-style selectively escalated hierarchy with
-    four managers, four workers, rotating alternate-manager review, a dedicated
-    release manager, exact-candidate approvals, and a fresh final verifier.
-    Agents receive the mission, RecCli's `.devproject` feature map, code, tests,
-    and task-relevant repository documentation. Raw manager deliberation is not
-    broadcast to workers.
+    The organization is a flat fleet: one coordinator assigning falsifiable
+    questions directly to six workers, two independent veto auditors, a blind
+    final verifier, and human-owned promotion. Agents receive the mission, the
+    admission contract, RecCli's `.devproject` feature map, code, tests, and
+    task-relevant repository documentation.
 
     The target repository must have no tracked uncommitted changes. The worker
     creates isolated Git worktrees and writes its durable trace under
@@ -1217,21 +1216,16 @@ def start_organization(
     re-hashes it before release. Symlinks are rejected. Relative paths resolve
     from the project root.
 
-    `topology="scientific"` cuts authority at reversibility rather than at a
-    research/execution phase boundary. Workers may choose and run experiments
-    in disposable branches. Manager B may wake two fresh, opposite-provider
-    research specialists for a load-bearing technical question; their
-    structured fragments must be synthesized into a validated decision packet
-    before dependent implementation is delegated. Dormant specialists consume
-    no agent turns. With a tracked `experiment_policy`, primary managers can
-    bind one worker, one mutable tracked file, and one immutable evaluator into
-    an autonomous baseline/challenger loop. RecCli runs the baseline first,
+    Authority cuts at reversibility. Workers may run experiments in disposable
+    branches. With a tracked `experiment_policy`, the coordinator can bind one
+    worker, one mutable tracked file, and one immutable evaluator into an
+    autonomous baseline/challenger loop. RecCli runs the baseline first,
     enforces fixed trial/time budgets, records a compact ledger, keeps strict
-    improvements, host-reverts regressions, and wakes managers only for
+    improvements, host-reverts regressions, and wakes the coordinator only for
     judgment events. `max_experiments` bounds challenger trials and sealed
     generated-output bundles.
     `protected_paths` is a deny-write list for tracked immutable
-    evidence, authority records, ledgers, or standards. The adversarial auditor is fully
+    evidence, authority records, ledgers, or standards. Auditors are fully
     evidence-sighted and veto-only. Completion emits a promotion request; it
     does not import outputs into the canonical archive, push, or merge the
     caller's branch.
@@ -1252,12 +1246,12 @@ def start_organization(
         launch_mode: ``auto`` (recommended), ``project``, or ``custom``.
         provider: "auto", "mixed", "claude", or "codex". Uses installed native CLIs.
         topology: "flat" (one coordinator, six workers, two independent
-            auditors, no management layer), "google-rotating" (hierarchical with
-            rotating cross-manager review), "google" (hierarchical baseline), or
-            "scientific" (autonomous reversible scientific exploration).
-            Prefer "flat" when the work is a set of independently answerable
-            questions: in a recorded hierarchical run, management consumed 78%
-            of all turns and one worker took a single turn in twelve rounds.
+            veto auditors, no management layer) is the only structure. The
+            hierarchical topologies were deleted after recorded runs measured
+            the manager layer consuming 78% of all turns while producing prose
+            instead of work; legacy names ("google-rotating", "google",
+            "scientific") alias to flat so existing contracts keep launching,
+            and the requested name is recorded next to the resolved one.
         max_rounds: Maximum synchronized organization work rounds (default 8).
             One round may run several agent turns in parallel; this is not a
             total-agent-turn count. RecCli may add up to four review-only

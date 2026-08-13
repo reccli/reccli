@@ -130,7 +130,7 @@ class OrganizationCliBootstrapTests(unittest.TestCase):
                     "control-run",
                     "Recheck the bounded acceptance evidence.",
                     "--target",
-                    "manager-c",
+                    "auditor-a",
                     "--tag",
                     "review",
                     "--idempotency-key",
@@ -153,7 +153,7 @@ class OrganizationCliBootstrapTests(unittest.TestCase):
                 / f"{queued['id']}.json"
             )
             request = json.loads(request_path.read_text(encoding="utf-8"))
-            self.assertEqual(request["target"], "manager-c")
+            self.assertEqual(request["target"], "auditor-a")
             self.assertEqual(request["tag"], "review")
 
 
@@ -594,7 +594,8 @@ class OrganizationControlTests(unittest.TestCase):
 
             snapshot = organization_snapshot(str(root), "control-run")
             self.assertEqual(snapshot["status"], "running")
-            self.assertEqual(len(snapshot["topology_graph"]["agents"]), 11)
+            # Flat fleet: lead + six workers + two auditors.
+            self.assertEqual(len(snapshot["topology_graph"]["agents"]), 9)
             self.assertEqual(
                 next(
                     agent for agent in snapshot["topology_graph"]["agents"]
@@ -693,7 +694,7 @@ class OrganizationControlTests(unittest.TestCase):
             runner._apply_control_requests(3)
             self.assertFalse(runner.paused)
 
-    def test_worker_first_turn_requires_primary_manager_work_package(self):
+    def test_worker_first_turn_requires_lead_work_package(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -702,7 +703,7 @@ class OrganizationControlTests(unittest.TestCase):
                 root,
                 "Qualify the system.",
                 "claude",
-                "scientific",
+                "flat",
                 "control-run",
                 run_dir,
             )
@@ -714,19 +715,19 @@ class OrganizationControlTests(unittest.TestCase):
                 "workItem": "p0-control",
                 "risk": "high",
             }
-            runner._deliver_message("manager-b", base, 2)
+            runner._deliver_message("auditor-a", base, 2)
             self.assertEqual(len(runner.inboxes["worker-a"]), 0)
             self.assertNotIn(
                 "worker-a",
                 {agent.agent_id for agent in runner._select_agents(3)},
             )
             runner._deliver_message(
-                "manager-a",
+                "lead",
                 {**base, "workItem": None},
                 2,
             )
             self.assertEqual(len(runner.inboxes["worker-a"]), 0)
-            runner._deliver_message("manager-a", base, 2)
+            runner._deliver_message("lead", base, 2)
             self.assertEqual(len(runner.inboxes["worker-a"]), 1)
             scheduled = {
                 agent.agent_id for agent in runner._select_agents(3)
@@ -737,7 +738,6 @@ class OrganizationControlTests(unittest.TestCase):
                 for line in (run_dir / "messages.jsonl").read_text().splitlines()
             ]
             self.assertEqual(records[0]["status"], "dropped")
-            self.assertIn("primary manager", records[0]["reason"])
             self.assertEqual(records[1]["status"], "dropped")
             self.assertIn("workItem", records[1]["reason"])
             self.assertEqual(records[2]["status"], "delivered")

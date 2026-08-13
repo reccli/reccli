@@ -300,21 +300,11 @@ def _topology_snapshot(run: Dict[str, Any], status: Dict[str, Any]) -> Dict[str,
             for worker, manager in topology.primary_manager_by_worker.items()
             if worker in configured_ids and manager in configured_ids
         },
-        "research_director_id": (
-            topology.research_director_id
-            if topology.research_director_id in configured_ids
-            else None
-        ),
-        "research_specialist_ids": [
-            agent_id for agent_id in topology.research_specialist_ids
-            if agent_id in configured_ids
-        ],
         "integrator_ids": sorted(
             agent_id for agent_id in topology.integrator_ids
             if agent_id in configured_ids
         ),
         "scheduler": topology.scheduler,
-        "delegation_gate": topology.delegation_gate,
         "inbox_only_ids": sorted(topology.inbox_only_ids),
         "agents": agents,
         "routes": routes,
@@ -777,7 +767,7 @@ def _validate_target(run: Dict[str, Any], target: Optional[str]) -> str:
     aliases = {"all", "lead", "finalizer", "managers", "workers", "integrators"}
     if value in aliases:
         return value
-    topology = get_topology(str(run.get("topology") or "google-rotating"))
+    topology = get_topology(str(run.get("topology") or "flat"))
     if value not in {agent.agent_id for agent in topology.agents}:
         raise ValueError(f"unknown organization target: {value}")
     return value
@@ -1102,7 +1092,7 @@ supervisor.
         working_directory=str(project_root),
         mission=mission,
         provider=str(continuation.get("provider") or "auto"),
-        topology=str(continuation.get("topology") or "google-rotating"),
+        topology=str(continuation.get("topology") or "flat"),
         max_rounds=int(continuation.get("max_rounds") or 8),
         max_concurrency=int(continuation.get("max_concurrency") or 5),
         turn_timeout_seconds=int(

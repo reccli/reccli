@@ -359,7 +359,7 @@ function AgentStream({
         {!activities.length && (
           <div className="stream-empty">
             {["awaiting_assignment", "awaiting_goal"].includes(agent.state)
-              ? "Waiting for one concrete primary-manager goal."
+              ? "Waiting for one concrete goal from the lead."
               : "Waiting for this agent’s first durable turn."}
           </div>
         )}
@@ -636,7 +636,7 @@ function ExperimentLoopPanel({
         )}
         {!contracts.length ? (
           <p className="experiment-empty">
-            Dormant. A primary manager may bind one worker, one mutable file,
+            Dormant. The lead may bind one worker, one mutable file,
             and one immutable evaluator when the question is measurable.
           </p>
         ) : (

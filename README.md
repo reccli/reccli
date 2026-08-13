@@ -72,38 +72,29 @@ agents in parallel, so status distinguishes the round countdown from cumulative
 agent turns. A candidate already in flight at the cap may use up to four
 review-only closeout boundaries; workers and new experiments cannot run there.
 
-Event-driven organizations use a delegation barrier rather than unstructured
-simultaneous starts. Round one belongs to the lead's macro reconnaissance;
-round two belongs to managers refining that map. A worker's first turn requires
-a specific primary-manager assignment with a named work item and risk. Every
-manager must receive an explicit lead work item after round one, and every
-worker must receive an explicit primary-manager work item after round two; the
-run fails closed instead of entering unsynchronized execution when either
-barrier is incomplete. Once assigned, workers execute concurrently. Managers consolidate routine
-dependencies and progress upward, while the lead wakes on new macro information
-instead of churning as another worker.
+Every launch passes a host-enforced admission gate: a named downstream
+consumer, one of six meaningful-work classes, a falsifiable done condition, and
+stop conditions. The lead may end a run as `completed_no_op` when the done
+condition is already satisfied or a stop condition holds; stopping is a
+successful outcome. Every terminal run, approval, and rejection appends to a
+project-level outcome ledger, and `organization list` reports the waste rate:
+runs whose candidates were never merged or consumed, and what they cost.
 
-RecCli offers a `flat` topology: one coordinator, six workers and two
-independent auditors, with no management layer. The coordinator assigns each
-worker a falsifiable question it can answer by executing something, consumes the
-result, and re-tasks immediately. Auditors attempt to refute an exact candidate
-and may veto but never promote. Prefer it when the work decomposes into
-independently answerable questions; a recorded hierarchical run spent 78% of its
-turns inside the management layer, and one of its four workers took a single turn
-across twelve rounds.
+The organization is a `flat` fleet, the only structure: one coordinator, six
+workers and two independent auditors, with no management layer. The coordinator
+assigns each worker a falsifiable question it can answer by executing
+something, consumes the result, and re-tasks immediately. RecCli binds one
+visible problem-solving goal to each worker; only the coordinator or an
+explicit human `plan` may replace it. Unrelated issues and contradictory
+context are flagged without becoming worker scope; the coordinator adjudicates
+each flag directly. Auditors attempt to refute an exact candidate and may veto
+but never promote; the release auditor must clear the exact candidate, and a
+fresh read-only agent independently verifies the exact final commit. The
+hierarchical topologies were deleted after recorded runs measured the
+management layer consuming 78% of turns while producing prose instead of work;
+their names alias to `flat` so existing launch contracts keep working.
 
-The default `google-rotating` structure has one mission lead, four engineering
-managers, and four workers. RecCli binds one visible problem-solving goal to
-each worker; only its primary manager or an explicit human `plan` may replace
-it. Workers read the mission, code, tests, RecCli project memory, and
-task-relevant repository documentation. Unrelated issues and contradictory
-context are flagged without becoming worker scope; one peer-manager
-consultation validates a redirect. Routine traffic stays at the manager layer;
-immutable worker candidates receive rotating
-alternate-manager review before the release manager can integrate them. A
-fresh read-only agent independently verifies the exact final commit.
-
-For evidence-heavy work, the single `scientific` topology gives workers broad
+For evidence-heavy work, workers have broad
 agency to choose and run reversible experiments in disposable branches. Pass
 `evidence_paths` for a shared read-only hashed view, `protected_paths` for
 tracked deny-write authority, and `max_experiments` for a hard generated-output

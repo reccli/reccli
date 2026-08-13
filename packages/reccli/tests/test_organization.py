@@ -144,9 +144,7 @@ def _add_context_manifest(
             }
             for letter in "abcd"
         },
-        "full_context_agents": [
-            "lead", "manager-a", "manager-b", "manager-c", "manager-d",
-        ],
+        "full_context_agents": ["lead"],
     }
     if lane_paths_mode is not None:
         definition["lane_paths_mode"] = lane_paths_mode
@@ -236,42 +234,6 @@ def _add_experiment_policy(
 
 
 class OrganizationTopologyTests(unittest.TestCase):
-    def test_google_rotating_enforces_selective_escalation(self):
-        topology = get_topology("google-rotating")
-        self.assertFalse(topology.can_route("worker-a", "lead", "question")[0])
-        self.assertFalse(topology.can_route("worker-a", "worker-b", "question")[0])
-        self.assertTrue(topology.can_route("manager-a", "manager-b", "question")[0])
-        self.assertTrue(topology.can_route("worker-a", "manager-c", "question")[0])
-        self.assertEqual(topology.finalizer_id, "manager-d")
-
-    def test_alternate_manager_review_blocks_premature_forward(self):
-        topology = get_topology("google-rotating")
-        governance = Governance(topology, "stable-run")
-        message = {
-            "to": "manager-a", "tag": "handoff", "content": "Ready.",
-            "candidate": "abc123", "workItem": "feature-a", "risk": "routine",
-        }
-        accepted, _, system_message = governance.process_message("worker-a", message, 1)
-        self.assertTrue(accepted)
-        self.assertIsNotNone(system_message)
-        reviewer = governance.assignments["abc123"]["reviewerId"]
-        self.assertNotIn(reviewer, {"manager-a", "manager-d"})
-
-        accepted, reason, _ = governance.process_message(
-            "manager-a", {**message, "to": "manager-d"}, 2,
-        )
-        self.assertFalse(accepted)
-        self.assertIn("lacks approval", reason)
-
-        governance.record_decision(reviewer, {
-            "to": "manager-a", "tag": "decision", "content": "APPROVED: checks pass.",
-            "candidate": "abc123", "workItem": "feature-a", "risk": "routine",
-        })
-        accepted, _, _ = governance.process_message(
-            "manager-a", {**message, "to": "manager-d"}, 3,
-        )
-        self.assertTrue(accepted)
-
     def test_reply_validation_rejects_protocol_drift(self):
         self.assertEqual(validate_agent_reply(_reply())["summary"], "ok")
         pending = _reply()
@@ -290,63 +252,51 @@ class OrganizationTopologyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fields must be exactly"):
             validate_agent_reply(invalid)
 
-    def test_mixed_governance_prefers_cross_provider_reviews(self):
-        topology = get_topology("google-rotating")
-        assignments = build_provider_assignments(topology, "claude", "codex")
-        governance = Governance(topology, "mixed-run", assignments)
-        accepted, _, system_message = governance.process_message("worker-a", {
-            "to": "manager-a", "tag": "handoff", "content": "Ready.",
-            "candidate": "abc123", "workItem": "feature-a", "risk": "routine",
-        }, 1)
-        self.assertTrue(accepted)
-        reviewer = system_message["to"]
-        self.assertNotEqual(assignments[reviewer], assignments["worker-a"])
-        self.assertNotEqual(
-            assignments[governance.release_reviewer_id],
-            assignments[topology.release_manager_id],
+    def test_flat_review_is_fully_sighted_veto_not_truth_approval(self):
+        topology = get_topology("flat")
+        governance = Governance(topology, "flat-run")
+        release_reviewer = governance.release_reviewer_id
+        self.assertIn(release_reviewer, topology.final_reviewer_pool)
+        non_release_auditor = next(
+            auditor for auditor in topology.final_reviewer_pool
+            if auditor != release_reviewer
         )
-
-    def test_scientific_review_is_fully_sighted_veto_not_truth_approval(self):
-        topology = get_topology("scientific")
-        governance = Governance(topology, "scientific-run")
         handoff = {
-            "to": "manager-a", "tag": "handoff", "content": "Sandbox result ready.",
+            "to": "lead", "tag": "handoff", "content": "Sandbox result ready.",
             "candidate": "candidate-1", "workItem": "tmp-hypothesis", "risk": "high",
         }
         accepted, _, review = governance.process_message("worker-a", handoff, 1)
         self.assertTrue(accepted)
-        reviewer = review["to"]
-        self.assertEqual(reviewer, "manager-b")
+        self.assertEqual(review["to"], non_release_auditor)
         self.assertIn("NO_VETO", review["content"])
 
-        governance.record_decision(reviewer, {
-            "to": "manager-a", "tag": "decision",
+        governance.record_decision(non_release_auditor, {
+            "to": "lead", "tag": "decision",
             "content": "NO_VETO: no blocking falsification; visual meaning remains human judgment.",
             "candidate": "candidate-1", "workItem": "tmp-hypothesis", "risk": "high",
         })
         self.assertEqual(governance.assignments["candidate-1"]["status"], "reviewed")
-        accepted, _, _ = governance.process_message(
-            "manager-a", {**handoff, "to": "manager-d"}, 2,
-        )
-        self.assertTrue(accepted)
 
-        governance.record_decision("manager-c", {
-            "to": "manager-d", "tag": "decision",
+        governance.record_decision(release_reviewer, {
+            "to": "lead", "tag": "decision",
             "content": "BLOCKED: primary receipt contradicts the claimed sign.",
             "candidate": "release-1", "workItem": "final-release", "risk": "release",
         })
-        self.assertIn("manager-c", governance.missing_final_approvers("release-1"))
+        self.assertIn(
+            release_reviewer, governance.missing_final_approvers("release-1"),
+        )
 
-    def test_scientific_candidate_review_rotates_by_lane_and_excludes_final_veto(self):
-        topology = get_topology("scientific")
-        governance = Governance(topology, "scientific-rotation")
+    def test_flat_candidate_review_assigns_the_non_release_auditor(self):
+        topology = get_topology("flat")
+        governance = Governance(topology, "flat-rotation")
+        non_release_auditor = next(
+            auditor for auditor in topology.final_reviewer_pool
+            if auditor != governance.release_reviewer_id
+        )
         reviewers = []
-        for index, (worker, primary) in enumerate((
-            ("worker-a", "manager-a"),
-            ("worker-b", "manager-b"),
-        )):
+        for index, worker in enumerate(("worker-a", "worker-b")):
             accepted, _, review = governance.process_message(worker, {
-                "to": primary,
+                "to": "lead",
                 "tag": "handoff",
                 "content": "Candidate ready.",
                 "candidate": f"candidate-{index}",
@@ -355,91 +305,45 @@ class OrganizationTopologyTests(unittest.TestCase):
             }, index + 1)
             self.assertTrue(accepted)
             reviewers.append(review["to"])
-        self.assertEqual(set(reviewers), {"manager-a", "manager-b"})
-        self.assertEqual(governance.release_reviewer_id, "manager-c")
+        self.assertEqual(set(reviewers), {non_release_auditor})
         self.assertNotIn(governance.release_reviewer_id, reviewers)
 
-    def test_scientific_topology_grants_reversible_worker_agency(self):
-        topology = get_topology("scientific")
+    def test_flat_topology_grants_reversible_worker_agency(self):
+        topology = get_topology("flat")
         scopes = {agent.agent_id: agent.write_scope for agent in topology.agents}
         web_research = {
             agent.agent_id for agent in topology.agents if agent.web_research
         }
-        self.assertEqual(scopes["manager-d"], "integration")
+        self.assertEqual(scopes["lead"], "integration")
         self.assertEqual(
             {agent_id for agent_id, scope in scopes.items() if scope == "workspace"},
-            {"worker-a", "worker-b", "worker-c", "worker-d"},
+            {f"worker-{letter}" for letter in "abcdef"},
         )
-        self.assertEqual(scopes["manager-b"], "artifacts")
-        self.assertEqual(scopes["research-scout"], "artifacts")
-        self.assertEqual(scopes["math-auditor"], "artifacts")
-        self.assertEqual(
-            web_research,
-            {
-                "lead",
-                "manager-a",
-                "manager-b",
-                "manager-c",
-                "manager-d",
-                "research-scout",
-                "math-auditor",
-            },
-        )
-        self.assertFalse(topology.can_route("worker-a", "lead", "question")[0])
-        self.assertTrue(topology.can_route("manager-a", "manager-c", "review")[0])
+        self.assertEqual(scopes["auditor-a"], "none")
+        self.assertEqual(scopes["auditor-b"], "none")
+        self.assertEqual(web_research, {"lead", "auditor-a", "auditor-b"})
+        self.assertTrue(topology.can_route("worker-a", "lead", "question")[0])
+        self.assertFalse(topology.can_route("worker-a", "worker-b", "question")[0])
+        self.assertTrue(topology.can_route("auditor-a", "worker-a", "question")[0])
         self.assertEqual(topology.review_policy, "veto")
         self.assertTrue(topology.human_promotion_required)
-        self.assertFalse(topology.blind_final_review)
-        self.assertNotIn("manager-c", topology.primary_manager_by_worker.values())
-        self.assertEqual(topology.research_director_id, "manager-b")
+        self.assertTrue(topology.blind_final_review)
+        self.assertEqual(topology.leader_id, "lead")
+        self.assertEqual(topology.finalizer_id, "lead")
+        self.assertIsNone(topology.release_manager_id)
+        self.assertEqual(topology.manager_ids, [])
         self.assertEqual(
-            topology.research_specialist_ids,
-            ["research-scout", "math-auditor"],
-        )
-        self.assertTrue(topology.agent("research-scout").fresh_session)
-        self.assertTrue(topology.agent("math-auditor").fresh_session)
-        self.assertTrue(
-            topology.can_route(
-                "manager-b", "research-scout", "question",
-            )[0]
-        )
-        self.assertFalse(
-            topology.can_route("lead", "research-scout", "question")[0]
-        )
-        self.assertFalse(
-            topology.can_route("research-scout", "math-auditor", "answer")[0]
+            topology.final_reviewer_pool, ["auditor-a", "auditor-b"],
         )
 
-    def test_engineering_topologies_give_lead_and_managers_web_research_not_workers(self):
-        for topology_name in ("google", "google-rotating"):
-            topology = get_topology(topology_name)
-            capabilities = {
-                agent.agent_id: agent.web_research for agent in topology.agents
-            }
-            self.assertTrue(capabilities["lead"], topology_name)
-            for manager in ("manager-a", "manager-b", "manager-c", "manager-d"):
-                self.assertTrue(capabilities[manager], topology_name)
-            for worker in ("worker-a", "worker-b", "worker-c", "worker-d"):
-                self.assertFalse(capabilities[worker], topology_name)
-
-    def test_scientific_role_slots_are_project_neutral(self):
-        topology = get_topology("scientific")
+    def test_flat_role_slots_are_project_neutral(self):
+        topology = get_topology("flat")
         roles = {agent.agent_id: agent.role for agent in topology.agents}
-        self.assertEqual(roles["worker-a"], "reproduction experimenter")
-        self.assertEqual(roles["worker-b"], "hypothesis and model experimenter")
-        self.assertEqual(roles["worker-c"], "structural and integration validator")
-        self.assertEqual(
-            roles["worker-d"],
-            "uncertainty and alternative-explanation experimenter",
-        )
-        self.assertEqual(
-            roles["research-scout"],
-            "primary-source research scout",
-        )
-        self.assertEqual(
-            roles["math-auditor"],
-            "independent mathematical auditor",
-        )
+        self.assertEqual(roles["lead"], "coordinator")
+        for worker_id in topology.worker_ids:
+            self.assertEqual(roles[worker_id], "worker")
+        self.assertEqual(roles["auditor-a"], "independent auditor")
+        self.assertEqual(roles["auditor-b"], "independent auditor")
         role_contract = "\n".join(
             f"{agent.role}\n{agent.instructions}" for agent in topology.agents
         ).lower()
@@ -449,25 +353,11 @@ class OrganizationTopologyTests(unittest.TestCase):
         ):
             self.assertNotIn(project_term, role_contract)
 
-    def test_scientific_phase_binary_is_not_a_public_topology(self):
-        with self.assertRaisesRegex(ValueError, "scientific"):
+    def test_legacy_topology_names_alias_to_flat_and_unknown_names_raise(self):
+        for legacy in ("google", "google-rotating", "scientific"):
+            self.assertEqual(get_topology(legacy).topology_id, "flat")
+        with self.assertRaisesRegex(ValueError, "flat"):
             get_topology("scientific-takeover")
-
-    def test_scientific_mixed_plan_keeps_auditor_off_release_provider(self):
-        topology = get_topology("scientific")
-        assignments = build_provider_assignments(topology, "claude", "codex")
-        self.assertEqual(assignments["manager-d"], "claude")
-        self.assertEqual(assignments["manager-c"], "codex")
-        self.assertEqual(
-            assignments["research-scout"],
-            assignments["manager-b"],
-        )
-        self.assertNotEqual(
-            assignments["math-auditor"],
-            assignments["research-scout"],
-        )
-        for worker, primary in topology.primary_manager_by_worker.items():
-            self.assertEqual(assignments[worker], assignments[primary])
 
 
 class ProviderPlanTests(unittest.TestCase):
@@ -476,20 +366,19 @@ class ProviderPlanTests(unittest.TestCase):
         return f"/fake/{name}" if name in {"claude", "codex"} else None
 
     def test_auto_mixes_two_authenticated_native_clis(self):
-        topology = get_topology("google-rotating")
+        topology = get_topology("flat")
         with patch("reccli.organization.shutil.which", side_effect=self._which), patch(
             "reccli.organization._provider_authentication_status", return_value="authenticated",
         ), patch.dict(os.environ, {"RECCLI_HOST": "claude"}, clear=False):
             plan = resolve_provider_plan("auto", topology)
         self.assertEqual(plan.mode, "mixed")
         self.assertEqual(plan.host_provider, "claude")
-        self.assertEqual(plan.provider_assignments["manager-d"], "claude")
+        self.assertEqual(plan.provider_assignments["lead"], "claude")
         self.assertEqual(plan.provider_assignments["worker-a"], "codex")
-        self.assertEqual(plan.provider_assignments["manager-a"], "codex")
         self.assertEqual(plan.blind_verifier_provider, "codex")
 
     def test_auto_falls_back_when_only_one_cli_is_usable(self):
-        topology = get_topology("google-rotating")
+        topology = get_topology("flat")
         statuses = {"claude": "authenticated", "codex": "not_authenticated"}
         with patch("reccli.organization.shutil.which", side_effect=self._which), patch(
             "reccli.organization._provider_authentication_status",
@@ -500,7 +389,7 @@ class ProviderPlanTests(unittest.TestCase):
         self.assertEqual(set(plan.provider_assignments.values()), {"claude"})
 
     def test_explicit_mixed_rejects_missing_subscription_auth(self):
-        topology = get_topology("google-rotating")
+        topology = get_topology("flat")
         statuses = {"claude": "authenticated", "codex": "not_authenticated"}
         with patch("reccli.organization.shutil.which", side_effect=self._which), patch(
             "reccli.organization._provider_authentication_status",
@@ -510,7 +399,7 @@ class ProviderPlanTests(unittest.TestCase):
                 resolve_provider_plan("mixed", topology)
 
     def test_explicit_provider_remains_homogeneous(self):
-        topology = get_topology("google-rotating")
+        topology = get_topology("flat")
         with patch("reccli.organization.shutil.which", side_effect=self._which), patch(
             "reccli.organization._provider_authentication_status", return_value="authenticated",
         ):
@@ -734,7 +623,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 "project_root": str(root),
                 "provider": "claude",
                 "provider_assignments": {"lead": "claude"},
-                "topology": "scientific",
+                "topology": "flat",
                 "max_experiments": 3,
             }), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({
@@ -860,7 +749,7 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(request["provider"], "mixed")
             self.assertEqual(request["max_rounds"], 8)
             self.assertEqual(request["host_provider"], "codex")
-            self.assertEqual(request["provider_assignments"]["manager-d"], "codex")
+            self.assertEqual(request["provider_assignments"]["lead"], "codex")
             self.assertEqual(request["blind_verifier_provider"], "claude")
             persisted = json.loads(Path(request["run_dir"], "request.json").read_text())
             self.assertEqual(persisted["provider_assignments"], request["provider_assignments"])
@@ -882,7 +771,7 @@ class OrganizationProjectTests(unittest.TestCase):
             with patch("reccli.organization.shutil.which", return_value="/fake/claude"):
                 request = create_run_request(
                     str(root), "Audit the accepted geometry.", provider="claude",
-                    topology="scientific",
+                    topology="flat",
                     evidence_paths=["out", str(external)],
                     protected_paths=["app.py"], max_experiments=2,
                 )
@@ -904,7 +793,7 @@ class OrganizationProjectTests(unittest.TestCase):
             with patch("reccli.organization.shutil.which", return_value="/fake/claude"):
                 request = create_run_request(
                     str(root), "Qualify the pipeline.", provider="claude",
-                    topology="scientific",
+                    topology="flat",
                     context_manifest="context-packs.json",
                 )
             self.assertEqual(request["context_manifest"], "context-packs.json")
@@ -929,7 +818,7 @@ class OrganizationProjectTests(unittest.TestCase):
                     str(root),
                     "Optimize the bounded evaluator target.",
                     provider="claude",
-                    topology="scientific",
+                    topology="flat",
                     experiment_policy="experiment-policy.json",
                 )
             self.assertEqual(
@@ -949,7 +838,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             self.assertIn("evaluator.py", request["protected_paths"])
 
-    def test_context_packs_route_worker_lanes_and_full_manager_union(self):
+    def test_context_packs_route_worker_lanes_and_full_lead_union(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "project"
             root.mkdir()
@@ -958,11 +847,11 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "context-run"
             run_dir.mkdir(parents=True)
             manifest = prepare_context_packs(
-                root, run_dir, "context-packs.json", get_topology("scientific"),
+                root, run_dir, "context-packs.json", get_topology("flat"),
             )
             self.assertIsNotNone(manifest)
             worker = manifest["agent_packs"]["worker-a"]
-            manager = manifest["agent_packs"]["manager-c"]
+            manager = manifest["agent_packs"]["lead"]
             worker_root = Path(worker["root"]) / "canonical"
             manager_root = Path(manager["root"]) / "canonical"
             self.assertTrue((worker_root / "docs/common.md").is_file())
@@ -1021,7 +910,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "context-jit"
             run_dir.mkdir(parents=True)
             manifest = prepare_context_packs(
-                root, run_dir, "context-packs.json", get_topology("scientific"),
+                root, run_dir, "context-packs.json", get_topology("flat"),
             )
 
             worker = manifest["agent_packs"]["worker-a"]
@@ -1036,7 +925,7 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertTrue((canonical / "docs/library-a.md").is_file())
 
             runner = OrganizationRunner(
-                root, "Qualify the pipeline.", "claude", "scientific",
+                root, "Qualify the pipeline.", "claude", "flat",
                 "context-jit", run_dir, context_manifest="context-packs.json",
             )
             runner.context_pack_manifest = manifest
@@ -1083,7 +972,7 @@ class OrganizationProjectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
-            topology = get_topology("google-rotating")
+            topology = get_topology("flat")
             shared_evidence = root / "shared-evidence"
             shared_evidence.mkdir()
             workspaces = prepare_workspaces(
@@ -1093,8 +982,8 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             self.assertEqual(len(workspaces), 9)
             self.assertEqual(
-                workspaces["manager-d"].branch,
-                workspaces["manager-d"].integration_branch,
+                workspaces["lead"].branch,
+                workspaces["lead"].integration_branch,
             )
             self.assertNotEqual(workspaces["worker-a"].cwd, workspaces["worker-b"].cwd)
             self.assertIn(shared_evidence.resolve(), workspaces["worker-a"].additional_directories)
@@ -1120,7 +1009,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
 
             workspaces = prepare_workspaces(
-                root, get_topology("scientific"), "protected-symlink-run",
+                root, get_topology("flat"), "protected-symlink-run",
                 protected_paths=["docs/Core"],
             )
             worker_root = workspaces["worker-a"].cwd / "docs" / "Core"
@@ -1176,7 +1065,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
 
             workspaces = prepare_workspaces(
-                root, get_topology("scientific"),
+                root, get_topology("flat"),
                 f"runtime-bridge-{Path(td).name}",
             )
             worker = workspaces["worker-a"]
@@ -1225,7 +1114,7 @@ class OrganizationProjectTests(unittest.TestCase):
             ).stdout.strip()
             runner = OrganizationRunner(
                 root, "Create a reversible candidate.", "codex",
-                "scientific", "host-candidate", Path(td) / "run",
+                "flat", "host-candidate", Path(td) / "run",
             )
             runner.workspaces["worker-a"] = Workspace(
                 root, "worker-a", "main", root, [], base,
@@ -1239,7 +1128,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 reply = _reply("candidate ready")
                 reply["state"] = "done"
                 reply["messages"] = [{
-                    "to": "manager-a", "tag": "handoff",
+                    "to": "lead", "tag": "handoff",
                     "content": "Candidate is ready for adversarial review.",
                     "candidate": HOST_CANDIDATE,
                     "workItem": "host-owned-git", "risk": "high",
@@ -1288,7 +1177,7 @@ class OrganizationProjectTests(unittest.TestCase):
             (bridge / "python").symlink_to(Path(sys.executable))
             runner = OrganizationRunner(
                 root, "Create a reversible candidate.", "codex",
-                "scientific", "runtime-safe-candidate", Path(td) / "run",
+                "flat", "runtime-safe-candidate", Path(td) / "run",
             )
             runner.workspaces["worker-a"] = Workspace(
                 root, "worker-a", "main", root, [], base, {".venv"},
@@ -1301,7 +1190,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 )
                 reply = _reply("candidate ready")
                 reply["messages"] = [{
-                    "to": "manager-a", "tag": "handoff",
+                    "to": "lead", "tag": "handoff",
                     "content": "Review the runtime-safe candidate.",
                     "candidate": HOST_CANDIDATE,
                     "workItem": "runtime-safe", "risk": "high",
@@ -1361,13 +1250,13 @@ class OrganizationProjectTests(unittest.TestCase):
 
             runner = OrganizationRunner(
                 root, "Integrate a reviewed candidate.", "codex",
-                "scientific", "host-integration", Path(td) / "run",
+                "flat", "host-integration", Path(td) / "run",
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, initial_branch, initial_branch, root, [], base,
             )
             handoff = {
-                "to": "manager-a", "tag": "handoff",
+                "to": "lead", "tag": "handoff",
                 "content": "Candidate ready.",
                 "candidate": candidate, "workItem": "integration-test",
                 "risk": "high",
@@ -1376,16 +1265,22 @@ class OrganizationProjectTests(unittest.TestCase):
                 "worker-a", handoff, 3,
             )
             self.assertTrue(accepted)
+            self.assertNotEqual(
+                review["to"], runner.governance.release_reviewer_id,
+            )
             runner.governance.record_decision(review["to"], {
-                "to": "manager-a", "tag": "decision",
+                "to": "lead", "tag": "decision",
                 "content": "NO_VETO: exact diff and tests inspected.",
                 "candidate": candidate, "workItem": "integration-test",
                 "risk": "high",
             })
-            runner.inboxes["manager-d"] = [{
+            # The worker's supervisor IS the finalizer in a flat topology, so
+            # host integration accepts the reviewed handoff directly from the
+            # worker; there is no manager relay.
+            runner.inboxes["lead"] = [{
                 "runId": runner.run_id, "round": 4,
-                "from": "manager-a", "to": "manager-d", "tag": "handoff",
-                "content": "No-veto review complete; integrate.",
+                "from": "worker-a", "to": "lead", "tag": "handoff",
+                "content": "Candidate ready.",
                 "candidate": candidate, "workItem": "integration-test",
                 "risk": "high", "deliveredAt": "test",
             }]
@@ -1397,7 +1292,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             self.assertIn(candidate, runner.integrated_candidates)
             runner._validate_agent_write_scope(
-                runner.topology.agent("manager-d"),
+                runner.topology.agent("lead"),
             )
 
     def test_failed_provider_turn_does_not_consume_inbox(self):
@@ -1406,12 +1301,12 @@ class OrganizationProjectTests(unittest.TestCase):
             _init_project(root)
             run_dir = root / "devsession" / "agent-organizations" / "failed-turn"
             runner = OrganizationRunner(
-                root, "Ship the feature.", "claude", "google-rotating",
+                root, "Ship the feature.", "claude", "flat",
                 "failed-turn", run_dir, max_rounds=2,
             )
             runner.workspaces["lead"] = Workspace(root, "main", "main", root, [])
             message = {
-                "from": "manager-a", "tag": "question", "content": "Need scope.",
+                "from": "worker-a", "tag": "question", "content": "Need scope.",
                 "candidate": None, "workItem": None, "risk": None,
             }
             runner.inboxes["lead"] = [message]
@@ -1431,7 +1326,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "artifact-run"
             runner = OrganizationRunner(
                 root, "Write devsession/agent-organizations/artifact-run/report.md.",
-                "claude", "google-rotating", "artifact-run", run_dir,
+                "claude", "flat", "artifact-run", run_dir,
             )
             runner.workspaces["worker-a"] = Workspace(
                 root, "worker-a", "integration", root, [],
@@ -1447,29 +1342,20 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertIn("Do not run git add, commit", prompt)
             self.assertNotIn("RecCli force-stages that exact prefix", prompt)
 
-    def test_manager_prompt_bounds_external_research_and_worker_routes_questions(self):
+    def test_lead_prompt_bounds_external_research_and_workers_get_none(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             run_dir = root / "devsession" / "agent-organizations" / "web-policy"
             runner = OrganizationRunner(
                 root, "Resolve the documented failure.", "claude",
-                "scientific", "web-policy", run_dir,
-            )
-            runner.workspaces["manager-b"] = Workspace(
-                root, "manager-b", "integration", root, [],
+                "flat", "web-policy", run_dir,
             )
             runner.workspaces["lead"] = Workspace(
                 root, "lead", "integration", root, [],
             )
             runner.workspaces["worker-b"] = Workspace(
                 root, "worker-b", "integration", root, [],
-            )
-            runner.workspaces["research-scout"] = Workspace(
-                root, "research-scout", "integration", root, [],
-            )
-            runner.workspaces["math-auditor"] = Workspace(
-                root, "math-auditor", "integration", root, [],
             )
 
             lead_prompt = runner._build_prompt(
@@ -1479,53 +1365,18 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertIn("Use primary sources", lead_prompt)
             self.assertIn("never disclose private", lead_prompt)
 
-            manager_prompt = runner._build_prompt(
-                runner.topology.agent("manager-b"), [], 1, True,
+            resumed_lead_prompt = runner._build_prompt(
+                runner.topology.agent("lead"), [], 2, False,
             )
-            self.assertIn("External research is available", manager_prompt)
-            self.assertIn("Commission the two research specialists", manager_prompt)
-            self.assertIn("one bounded load-bearing question", manager_prompt)
-            resumed_manager_prompt = runner._build_prompt(
-                runner.topology.agent("manager-b"), [], 2, False,
-            )
-            self.assertNotIn("External research is available", resumed_manager_prompt)
             self.assertNotIn(
-                "Commission the two research specialists",
-                resumed_manager_prompt,
+                "External research is available", resumed_lead_prompt,
             )
-            self.assertLess(len(resumed_manager_prompt), len(manager_prompt))
+            self.assertLess(len(resumed_lead_prompt), len(lead_prompt))
 
             worker_prompt = runner._build_prompt(
                 runner.topology.agent("worker-b"), [], 1, True,
             )
             self.assertNotIn("External research", worker_prompt)
-
-            scout_prompt = runner._build_prompt(
-                runner.topology.agent("research-scout"), [{
-                    "from": "manager-b",
-                    "to": "research-scout",
-                    "tag": "question",
-                    "content": "What observation model supports this claim?",
-                    "candidate": None,
-                    "workItem": "research/observation-model",
-                    "risk": "high",
-                }], 3, True,
-            )
-            self.assertIn("Answer only the current manager-b commission", scout_prompt)
-            self.assertIn("Write one structured fragment", scout_prompt)
-            auditor_prompt = runner._build_prompt(
-                runner.topology.agent("math-auditor"), [{
-                    "from": "manager-b",
-                    "to": "math-auditor",
-                    "tag": "question",
-                    "content": "What observation model supports this claim?",
-                    "candidate": None,
-                    "workItem": "research/observation-model",
-                    "risk": "high",
-                }], 3, True,
-            )
-            self.assertIn("Independently analyze", auditor_prompt)
-            self.assertIn("Answer only the current manager-b commission", auditor_prompt)
 
     def test_prompt_injects_assigned_context_without_hard_read_isolation(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1535,7 +1386,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "context-prompt"
             run_dir.mkdir(parents=True)
             runner = OrganizationRunner(
-                root, "Qualify the pipeline.", "claude", "scientific",
+                root, "Qualify the pipeline.", "claude", "flat",
                 "context-prompt", run_dir, context_manifest="context-packs.json",
             )
             runner.context_pack_manifest = prepare_context_packs(
@@ -1563,186 +1414,6 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertNotIn("## Shared foundation", resumed)
             self.assertNotIn("docs/common.md", resumed)
 
-    def test_research_cell_requires_two_fragments_before_dependent_delegation(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            run_dir = root / "run"
-            runner = OrganizationRunner(
-                root,
-                "Resolve one load-bearing mathematical question.",
-                "claude",
-                "scientific",
-                "research-run",
-                run_dir,
-            )
-            runner.research_cell_root.mkdir(parents=True)
-            work_item = "research/identifiability"
-            for specialist in ("research-scout", "math-auditor"):
-                runner._deliver_message(
-                    "manager-b",
-                    {
-                        "to": specialist,
-                        "tag": "question",
-                        "content": (
-                            "Determine the observation-model requirements for "
-                            "this identifiability claim."
-                        ),
-                        "candidate": None,
-                        "workItem": work_item,
-                        "risk": "high",
-                    },
-                    2,
-                )
-            self.assertEqual(
-                set(runner.research_commissions[work_item]["specialists"]),
-                {"research-scout", "math-auditor"},
-            )
-
-            runner._deliver_message(
-                "manager-b",
-                {
-                    "to": "worker-b",
-                    "tag": "plan",
-                    "content": "Implement the estimator now.",
-                    "candidate": None,
-                    "workItem": work_item,
-                    "risk": "high",
-                },
-                2,
-            )
-            self.assertFalse(runner.inboxes["worker-b"])
-            self.assertEqual(runner.dropped_messages, 1)
-
-            fragment_hashes = []
-            for specialist in ("research-scout", "math-auditor"):
-                fragment_path = root / f"{specialist}.json"
-                payload = {
-                    "schema": "reccli.organization-research-fragment.v1",
-                    "run_id": "research-run",
-                    "work_item": work_item,
-                    "specialist_id": specialist,
-                    "question": "What observation model is required?",
-                    "method": "Primary-source review and independent derivation.",
-                    "findings": ["The observation model must be explicit."],
-                    "sources": [{
-                        "title": "Primary metrology standard",
-                        "url_or_doi": "https://example.test/standard",
-                        "accessed_at": "2026-07-18",
-                        "locator": "Section 4",
-                        "supported_claim": "Define the measurand and model.",
-                        "source_kind": "official_standard",
-                    }],
-                    "assumptions": ["Finite measurement variance."],
-                    "counterexamples": ["Residual-only acceptance."],
-                    "unresolved": [],
-                    "recommendation": "Require an explicit model.",
-                    "source_search_outcome": "sources_found",
-                    "independent_analysis": True,
-                    "peer_conclusion_seen_before_derivation": False,
-                }
-                fragment_path.write_text(
-                    json.dumps(payload),
-                    encoding="utf-8",
-                )
-                record = runner._validate_research_fragment(
-                    runner.topology.agent(specialist),
-                    fragment_path,
-                )
-                runner._register_research_artifacts(
-                    [record],
-                    candidate=f"{specialist}-artifact",
-                    round_number=3,
-                )
-                persisted_path = Path(
-                    runner.research_fragments[record["sha256"]][
-                        "persisted_path"
-                    ]
-                )
-                self.assertEqual(
-                    hashlib.sha256(persisted_path.read_bytes()).hexdigest(),
-                    record["sha256"],
-                )
-                fragment_hashes.append(record["sha256"])
-
-            decision_path = root / "decision.json"
-            decision_path.write_text(json.dumps({
-                "schema": "reccli.organization-research-decision.v1",
-                "run_id": "research-run",
-                "work_item": work_item,
-                "question": "What observation model is required?",
-                "decision_to_unlock": "Bound one estimator change.",
-                "created_by": "manager-b",
-                "disposition": "adopt",
-                "source_basis": "mixed",
-                "source_fragment_sha256": fragment_hashes,
-                "sources": [{
-                    "title": "Primary metrology standard",
-                    "url_or_doi": "https://example.test/standard",
-                    "accessed_at": "2026-07-18",
-                    "locator": "Section 4",
-                    "supported_claim": "Define the measurand and model.",
-                    "source_kind": "official_standard",
-                }],
-                "claim": {
-                    "statement": "Identifiability is conditional on observations.",
-                    "equation": "y = h(theta) + epsilon",
-                    "units": "project-declared units",
-                    "coordinate_conventions": "project frame",
-                },
-                "measurement_model": {
-                    "applicability": "required",
-                    "measurand": "theta",
-                    "observation_process": "sample h(theta)",
-                    "noise_or_covariance": "Sigma",
-                    "correlations": "declared in Sigma",
-                    "registration_uncertainty": "separate pose covariance",
-                    "model_discrepancy": "typed unresolved",
-                },
-                "assumptions": ["Differentiable observation function."],
-                "validity_domain": ["Declared support only."],
-                "alternatives": ["Return not_evaluated."],
-                "degeneracies": ["Rank-deficient Jacobian."],
-                "project_evidence": ["Existing exact fixture."],
-                "external_evidence": ["Cited standard."],
-                "policy_choices": ["Human acceptance remains required."],
-                "falsifier": {
-                    "fixture_or_test": "Exact rank-deficient fixture.",
-                    "expected_observation": "Typed ambiguous result.",
-                    "falsifies_if": "The estimator certifies the fit.",
-                },
-                "implementation_readiness": "authorized_bounded_change",
-                "authorized_work_items": [work_item],
-                "code_implications": ["Add typed ambiguity handling."],
-                "prohibited_inferences": ["Residual alone proves identity."],
-                "unresolved": [],
-            }), encoding="utf-8")
-            decision = runner._validate_research_decision(
-                runner.topology.agent("manager-b"),
-                decision_path,
-            )
-            runner._register_research_artifacts(
-                [decision],
-                candidate="manager-b-artifact",
-                round_number=4,
-            )
-            runner._deliver_message(
-                "manager-b",
-                {
-                    "to": "worker-b",
-                    "tag": "plan",
-                    "content": "Implement only the authorized typed state.",
-                    "candidate": None,
-                    "workItem": work_item,
-                    "risk": "high",
-                },
-                4,
-            )
-            self.assertEqual(
-                runner.inboxes["worker-b"][-1]["workItem"],
-                work_item,
-            )
-
     def test_experiment_loop_runs_baseline_keeps_and_reverts_without_manager_churn(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "project"
@@ -1757,7 +1428,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 root,
                 "Improve one file against an immutable evaluator.",
                 "claude",
-                "scientific",
+                "flat",
                 "experiment-loop-run",
                 run_dir,
                 experiment_policy="experiment-policy.json",
@@ -1777,7 +1448,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            for agent_id in ("manager-a", "worker-a"):
+            for agent_id in ("lead", "worker-a"):
                 runner.workspaces[agent_id] = Workspace(
                     root,
                     agent_id,
@@ -1800,7 +1471,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 "schema": "reccli.organization-experiment-contract.v1",
                 "run_id": runner.run_id,
                 "work_item": work_item,
-                "manager_id": "manager-a",
+                "manager_id": "lead",
                 "worker_id": "worker-a",
                 "baseline_mode": "worker_head_at_activation",
                 "mutable_file": "app.py",
@@ -1812,10 +1483,9 @@ class OrganizationProjectTests(unittest.TestCase):
                 "max_trials": 2,
                 "max_consecutive_non_improving": 2,
                 "max_wall_seconds": 300,
-                "research_decision_sha256": None,
             }), encoding="utf-8")
             contract_head = runner._materialize_agent_candidate(
-                runner.topology.agent("manager-a"),
+                runner.topology.agent("lead"),
                 _reply("contract registered"),
                 base,
                 2,
@@ -1823,7 +1493,7 @@ class OrganizationProjectTests(unittest.TestCase):
             contract_sha = runner.experiment_contract_by_work_item[work_item]
             accepted, reason = runner._bind_worker_goal(
                 worker_id="worker-a",
-                manager_id="manager-a",
+                manager_id="lead",
                 work_item=work_item,
                 objective="Make the immutable evaluator pass.",
                 risk="high",
@@ -1831,7 +1501,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             self.assertTrue(accepted, reason)
             runner._activate_experiment_contract(
-                manager_id="manager-a",
+                manager_id="lead",
                 worker_id="worker-a",
                 work_item=work_item,
                 round_number=2,
@@ -1853,7 +1523,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 **runner.experiment_contracts[contract_sha],
                 "sha256": second_sha,
                 "work_item": "experiment/second-file",
-                "manager_id": "manager-b",
+                "manager_id": "lead",
                 "worker_id": "worker-b",
                 "max_trials": 1,
                 "status": "registered",
@@ -1865,7 +1535,7 @@ class OrganizationProjectTests(unittest.TestCase):
             ] = second_sha
             accepted, reason = runner._bind_worker_goal(
                 worker_id="worker-b",
-                manager_id="manager-b",
+                manager_id="lead",
                 work_item="experiment/second-file",
                 objective="Improve the second file.",
                 risk="high",
@@ -1984,9 +1654,9 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertEqual(runner._experiment_used(), 2)
             self.assertIn("worker-a", runner.experiment_halted_workers)
             self.assertNotIn("worker-a", runner.active_experiment_by_worker)
-            self.assertTrue(runner.inboxes["manager-a"])
+            self.assertTrue(runner.inboxes["lead"])
             self.assertEqual(
-                runner.inboxes["manager-a"][-1]["workItem"],
+                runner.inboxes["lead"][-1]["workItem"],
                 work_item,
             )
             persisted_intent = Path(
@@ -2031,7 +1701,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 root,
                 "Improve app.py through one measured ordinary candidate.",
                 "claude",
-                "scientific",
+                "flat",
                 "ordinary-goal",
                 run_dir,
                 experiment_policy="experiment-policy.json",
@@ -2054,7 +1724,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             accepted, reason = runner._bind_worker_goal(
                 worker_id="worker-a",
-                manager_id="manager-a",
+                manager_id="lead",
                 work_item="ordinary/app-improvement",
                 objective="Make the immutable app evaluator pass.",
                 risk="high",
@@ -2106,7 +1776,7 @@ class OrganizationProjectTests(unittest.TestCase):
             runner._deliver_message(
                 "worker-a",
                 {
-                    "to": "manager-a",
+                    "to": "lead",
                     "tag": "handoff",
                     "content": "Exact ordinary candidate improves the bound predicate.",
                     "candidate": candidate,
@@ -2116,7 +1786,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 3,
             )
             self.assertEqual(
-                runner.inboxes["manager-a"][-1]["candidate"],
+                runner.inboxes["lead"][-1]["candidate"],
                 candidate,
             )
             progress = runner._candidate_goal_progress_verdict(
@@ -2139,7 +1809,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 root,
                 "Do not spend a worker turn on an already-satisfied predicate.",
                 "claude",
-                "scientific",
+                "flat",
                 "saturated-goal",
                 Path(td) / "saturated-run",
                 experiment_policy="experiment-policy.json",
@@ -2155,7 +1825,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             accepted, reason = saturated._bind_worker_goal(
                 worker_id="worker-b",
-                manager_id="manager-b",
+                manager_id="lead",
                 work_item="ordinary/already-satisfied",
                 objective="Make the immutable app evaluator pass.",
                 risk="routine",
@@ -2222,7 +1892,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 root,
                 "Rank bounded challengers.",
                 "claude",
-                "scientific",
+                "flat",
                 "metric-verdict",
                 root / "run",
             )
@@ -2309,7 +1979,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 root,
                 "Bound one trial.",
                 "claude",
-                "scientific",
+                "flat",
                 "patch-shape",
                 root / "run",
             )
@@ -2345,13 +2015,13 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "scope-run"
             runner = OrganizationRunner(
                 root, "Publish a sandbox report.", "claude",
-                "scientific", "scope-run", run_dir,
+                "flat", "scope-run", run_dir,
             )
             artifact_agent = AgentSpec(
-                "manager-d", "artifact-only test role", "Write only the report.",
+                "auditor-a", "artifact-only test role", "Write only the report.",
                 True, "medium", "artifacts",
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["auditor-a"] = Workspace(
                 root, "main", "main", root, [], base,
             )
             session = Mock()
@@ -2362,7 +2032,7 @@ class OrganizationProjectTests(unittest.TestCase):
 
             session.run.side_effect = mutate_source
             session.provider = "claude"
-            runner.sessions["manager-d"] = session
+            runner.sessions["auditor-a"] = session
             with self.assertRaisesRegex(RuntimeError, "may write only"):
                 runner._run_turn(artifact_agent, 1)
 
@@ -2376,26 +2046,25 @@ class OrganizationProjectTests(unittest.TestCase):
             ).stdout.strip()
             runner = OrganizationRunner(
                 root, "Audit without mutation.", "claude",
-                "scientific", "read-only-audit", Path(td) / "run",
+                "flat", "read-only-audit", Path(td) / "run",
             )
-            runner.workspaces["manager-c"] = Workspace(
-                root, "manager-c", "main", root, [], base,
+            runner.workspaces["auditor-a"] = Workspace(
+                root, "auditor-a", "main", root, [], base,
             )
-            session = Mock()
 
-            def mutate_source(*_args, **_kwargs):
+            def mutate_source(_session, *_args, **_kwargs):
                 (root / "app.py").write_text(
                     "print('forbidden reviewer edit')\n", encoding="utf-8",
                 )
                 return {"value": _reply(), "session_id": "audit", "usage": {}}
 
-            session.run.side_effect = mutate_source
-            session.provider = "claude"
-            runner.sessions["manager-c"] = session
-            with self.assertRaisesRegex(RuntimeError, "read-only but changed"):
-                runner._run_turn(
-                    runner.topology.agent("manager-c"), 3,
-                )
+            # Auditors run fresh sessions, so the fake is patched onto the
+            # class instead of injected through runner.sessions.
+            with patch.object(SubscriptionSession, "run", new=mutate_source):
+                with self.assertRaisesRegex(RuntimeError, "read-only but changed"):
+                    runner._run_turn(
+                        runner.topology.agent("auditor-a"), 3,
+                    )
 
     def test_artifact_only_scope_accepts_run_artifact(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2408,13 +2077,13 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "scope-run"
             runner = OrganizationRunner(
                 root, "Publish a sandbox report.", "claude",
-                "scientific", "scope-run", run_dir,
+                "flat", "scope-run", run_dir,
             )
             artifact_agent = AgentSpec(
-                "manager-d", "artifact-only test role", "Write only the report.",
+                "auditor-a", "artifact-only test role", "Write only the report.",
                 True, "medium", "artifacts",
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["auditor-a"] = Workspace(
                 root, "main", "main", root, [], base,
             )
             session = Mock()
@@ -2427,7 +2096,7 @@ class OrganizationProjectTests(unittest.TestCase):
 
             session.run.side_effect = write_artifact
             session.provider = "claude"
-            runner.sessions["manager-d"] = session
+            runner.sessions["auditor-a"] = session
             result = runner._run_turn(artifact_agent, 1)
             self.assertEqual(result["reply"]["summary"], "ok")
 
@@ -2442,13 +2111,13 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "scope-run"
             runner = OrganizationRunner(
                 root, "Publish a sandbox report.", "claude",
-                "scientific", "scope-run", run_dir,
+                "flat", "scope-run", run_dir,
             )
             artifact_agent = AgentSpec(
-                "manager-d", "artifact-only test role", "Write only the report.",
+                "auditor-a", "artifact-only test role", "Write only the report.",
                 True, "medium", "artifacts",
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["auditor-a"] = Workspace(
                 root, "main", "main", root, [], base,
             )
             runner.workspaces["worker-a"] = Workspace(
@@ -2462,7 +2131,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 report.write_text("# Takeover\n", encoding="utf-8")
                 reply = _reply("report ready")
                 reply["messages"] = [{
-                    "to": "manager-c", "tag": "review",
+                    "to": "lead", "tag": "review",
                     "content": "Review this durable report identity.",
                     "candidate": HOST_CANDIDATE,
                     "workItem": "report-only", "risk": "high",
@@ -2471,7 +2140,7 @@ class OrganizationProjectTests(unittest.TestCase):
 
             session.run.side_effect = write_artifact
             session.provider = "claude"
-            runner.sessions["manager-d"] = session
+            runner.sessions["auditor-a"] = session
             result = runner._run_turn(artifact_agent, 1)
             self.assertIsNone(
                 result["reply"]["messages"][0]["candidate"],
@@ -2486,7 +2155,7 @@ class OrganizationProjectTests(unittest.TestCase):
             )
 
             runner._deliver_message("worker-a", {
-                "to": "manager-a", "tag": "handoff",
+                "to": "lead", "tag": "handoff",
                 "content": "Do not route a report commit as implementation.",
                 "candidate": artifact_head,
                 "workItem": "report-only", "risk": "high",
@@ -2500,7 +2169,7 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertIn("not an implementation candidate", dropped[-1]["reason"])
 
             runner._deliver_message("worker-a", {
-                "to": "manager-a", "tag": "review",
+                "to": "lead", "tag": "review",
                 "content": "Review this exact terminal evidence report.",
                 "candidate": artifact_head,
                 "workItem": "L8-EXACT-BLOCKED-CLOSEOUT",
@@ -2515,16 +2184,19 @@ class OrganizationProjectTests(unittest.TestCase):
 
             runner._deliver_message("lead", {
                 "to": "organization", "tag": "status",
-                "content": "Macro checkpoint for every connected manager.",
+                "content": "Macro checkpoint for every connected agent.",
                 "candidate": None, "workItem": None, "risk": None,
             }, 3)
             self.assertTrue(all(
                 any(
                     item.get("content")
-                    == "Macro checkpoint for every connected manager."
-                    for item in runner.inboxes[manager_id]
+                    == "Macro checkpoint for every connected agent."
+                    for item in runner.inboxes[agent_id]
                 )
-                for manager_id in runner.topology.manager_ids
+                for agent_id in [
+                    *runner.topology.worker_ids,
+                    *runner.topology.final_reviewer_pool,
+                ]
             ))
 
     def test_terminal_lead_conclusion_is_durable_and_outside_work_rounds(self):
@@ -2540,7 +2212,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             runner = OrganizationRunner(
                 root, "Qualify the bounded system.", "claude",
-                "scientific", "conclusion", run_dir,
+                "flat", "conclusion", run_dir,
             )
             runner.workspaces["lead"] = Workspace(
                 root, "lead", "main", root, [], base,
@@ -2629,7 +2301,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             runner = OrganizationRunner(
                 root, "Qualify the bounded system.", "claude",
-                "scientific", "cancelled", run_dir,
+                "flat", "cancelled", run_dir,
             )
             runner.workspaces["lead"] = Workspace(
                 root, "lead", "main", root, [], base,
@@ -2676,29 +2348,29 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "integration-run"
             runner = OrganizationRunner(
                 root, "Execute one bounded experiment.", "claude",
-                "scientific", "integration-run", run_dir,
+                "flat", "integration-run", run_dir,
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, initial_branch, initial_branch, root, [], base,
             )
             handoff = {
-                "to": "manager-b", "tag": "handoff", "content": "Ready.",
+                "to": "lead", "tag": "handoff", "content": "Ready.",
                 "candidate": candidate, "workItem": "experiment-a103", "risk": "high",
             }
             accepted, _, review = runner.governance.process_message("worker-d", handoff, 1)
             self.assertTrue(accepted)
             runner.governance.record_decision(review["to"], {
-                "to": "manager-b", "tag": "decision", "content": "NO_VETO: no blocking falsification found.",
+                "to": "lead", "tag": "decision", "content": "NO_VETO: no blocking falsification found.",
                 "candidate": candidate, "workItem": "experiment-a103", "risk": "high",
             })
             subprocess.run(["git", "cherry-pick", candidate], cwd=root, check=True, capture_output=True)
-            runner._validate_agent_write_scope(runner.topology.agent("manager-d"))
+            runner._validate_agent_write_scope(runner.topology.agent("lead"))
 
-            (root / "app.py").write_text("print('manager-authored')\n", encoding="utf-8")
+            (root / "app.py").write_text("print('lead-authored')\n", encoding="utf-8")
             subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "unapproved manager edit"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "unapproved lead edit"], cwd=root, check=True)
             with self.assertRaisesRegex(RuntimeError, "was not eligible"):
-                runner._validate_agent_write_scope(runner.topology.agent("manager-d"))
+                runner._validate_agent_write_scope(runner.topology.agent("lead"))
 
     def test_generated_output_bundle_is_sealed_without_putting_cad_in_git(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2708,7 +2380,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             runner = OrganizationRunner(
                 root, "Execute one bounded experiment.", "claude",
-                "scientific", "bundle-run", run_dir, max_experiments=1,
+                "flat", "bundle-run", run_dir, max_experiments=1,
             )
             runner.candidate_artifact_root.mkdir()
             runner.candidate_artifact_root.chmod(0o555)
@@ -2732,7 +2404,7 @@ class OrganizationProjectTests(unittest.TestCase):
             reply = _reply()
             reply["artifacts"] = ["out/experiments/tmp-worker-d-r2"]
             reply["messages"] = [{
-                "to": "manager-b", "tag": "handoff", "content": "Temporary experiment complete.",
+                "to": "lead", "tag": "handoff", "content": "Temporary experiment complete.",
                 "candidate": candidate, "workItem": "bundle-run/worker-d/r2", "risk": "high",
             }]
 
@@ -2762,7 +2434,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             runner = OrganizationRunner(
                 root, "Delegate bounded work.", "claude",
-                "scientific", "report-run", run_dir, max_experiments=3,
+                "flat", "report-run", run_dir, max_experiments=3,
             )
             runner.candidate_artifact_root.mkdir()
             runner.candidate_artifact_root.chmod(0o555)
@@ -2770,11 +2442,11 @@ class OrganizationProjectTests(unittest.TestCase):
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-b"] = Workspace(
-                root, "manager-b", "main", root, [], base,
+            runner.workspaces["lead"] = Workspace(
+                root, "lead", "main", root, [], base,
             )
             report = (
-                root / runner.artifact_staging_prefix / "manager-b" /
+                root / runner.artifact_staging_prefix / "lead" /
                 "r2" / "delegation.md"
             )
             report.parent.mkdir(parents=True)
@@ -2801,13 +2473,13 @@ class OrganizationProjectTests(unittest.TestCase):
             }]
 
             bundle = runner._seal_reported_artifacts(
-                runner.topology.agent("manager-b"), reply, 2,
+                runner.topology.agent("lead"), reply, 2,
             )
 
             self.assertIsNone(bundle)
             self.assertEqual(runner._experiment_used(), 0)
 
-    def test_scientific_git_backed_probe_consumes_budget_but_report_does_not(self):
+    def test_git_backed_probe_consumes_budget_but_report_does_not(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -2818,7 +2490,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "run"
             runner = OrganizationRunner(
                 root, "Bound empirical work.", "claude",
-                "scientific", "git-experiment-budget", run_dir,
+                "flat", "git-experiment-budget", run_dir,
                 max_experiments=1,
             )
             runner.workspaces["worker-a"] = Workspace(
@@ -2879,13 +2551,13 @@ class OrganizationProjectTests(unittest.TestCase):
                 )
             self.assertEqual(runner._experiment_used(), 1)
 
-    def test_scientific_experiment_channels_share_one_turn_slot(self):
+    def test_experiment_channels_share_one_turn_slot(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Bound empirical work.", "claude",
-                "scientific", "unified-experiment-budget", root / "run",
+                "flat", "unified-experiment-budget", root / "run",
                 max_experiments=1,
             )
             worker = runner.topology.agent("worker-b")
@@ -2909,13 +2581,13 @@ class OrganizationProjectTests(unittest.TestCase):
             )
             self.assertEqual(second["candidate"], "candidate-3")
 
-    def test_scientific_experiment_budget_is_atomic_across_parallel_turns(self):
+    def test_experiment_budget_is_atomic_across_parallel_turns(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Bound parallel empirical work.", "claude",
-                "scientific", "parallel-experiment-budget", root / "run",
+                "flat", "parallel-experiment-budget", root / "run",
                 max_experiments=3,
             )
             worker = runner.topology.agent("worker-c")
@@ -2965,7 +2637,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "protected-run"
             runner = OrganizationRunner(
                 root, "Explore without changing authority.", "claude",
-                "scientific", "protected-run", run_dir,
+                "flat", "protected-run", run_dir,
                 protected_paths=["authority.md"],
             )
             runner.workspaces["worker-a"] = Workspace(
@@ -2993,14 +2665,14 @@ class OrganizationProjectTests(unittest.TestCase):
             ).stdout.strip()
             runner = OrganizationRunner(
                 root, "Explore only in disposable worktrees.", "claude",
-                "scientific", "caller-guard", root / "run",
+                "flat", "caller-guard", root / "run",
             )
             runner.caller_head = base
             (root / "app.py").write_text("print('canonical mutation')\n", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "caller repository changed"):
                 runner._verify_caller_repository_unchanged()
 
-    def test_scientific_completion_writes_human_promotion_request_only(self):
+    def test_completion_writes_human_promotion_request_only(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -3012,15 +2684,15 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             runner = OrganizationRunner(
                 root, "Prepare a reversible promotion proposal.", "claude",
-                "scientific", "promotion-run", run_dir,
+                "flat", "promotion-run", run_dir,
                 protected_paths=["app.py"], max_experiments=2,
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, "main", "main", root, [], base,
             )
             artifact_manifest = {"manifest_sha256": "artifact-manifest-hash"}
             request = runner._write_promotion_request(
-                base, base, "reccli-org/scientific/proposal", artifact_manifest,
+                base, base, "reccli-org/flat/proposal", artifact_manifest,
             )
             self.assertEqual(request["status"], "awaiting_human_authorization")
             self.assertFalse(request["canonical_effects_applied"])
@@ -3046,12 +2718,12 @@ class OrganizationProjectTests(unittest.TestCase):
                 root,
                 "Require an exact sponsor decision.",
                 "claude",
-                "scientific",
+                "flat",
                 "human-gate",
                 run_dir,
             )
             runner.caller_head = base
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, "main", "main", root, [], base,
             )
             dossier_path = (
@@ -3082,7 +2754,7 @@ class OrganizationProjectTests(unittest.TestCase):
             (run_dir / "request.json").write_text(
                 json.dumps({
                     "provider_requested": "claude",
-                    "topology": "scientific",
+                    "topology": "flat",
                     "max_rounds": 8,
                     "max_concurrency": 5,
                     "turn_timeout_seconds": 1200,
@@ -3155,9 +2827,9 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir()
             runner = OrganizationRunner(
                 root, "Review a prior exact candidate.", "claude",
-                "scientific", "new-run", run_dir,
+                "flat", "new-run", run_dir,
             )
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, "main", "main", root, [], candidate,
             )
             promotion, _ = runner._create_promotion_candidate(
@@ -3171,22 +2843,22 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertNotIn(".reccli-org-artifacts/", tree)
             self.assertIn("app.py", tree)
 
-    def test_scientific_scheduler_does_not_treat_worker_turns_as_experiments(self):
+    def test_scheduler_does_not_treat_worker_turns_as_experiments(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Explore within one experiment slot.", "claude",
-                "scientific", "budget-run", root / "run", max_experiments=1,
+                "flat", "budget-run", root / "run", max_experiments=1,
             )
             message = {
-                "from": "manager-a", "tag": "plan", "content": "Run a sandbox experiment.",
+                "from": "lead", "tag": "plan", "content": "Run a sandbox experiment.",
                 "candidate": None, "workItem": "bounded-experiment", "risk": "high",
             }
             runner.inboxes["worker-a"] = [message]
             runner.inboxes["worker-b"] = [{
                 **message,
-                "from": "manager-b",
+                "workItem": "bounded-experiment-b",
             }]
             scheduled = runner._select_agents(3)
             writers = [agent for agent in scheduled if agent.write_scope == "workspace"]
@@ -3195,110 +2867,39 @@ class OrganizationProjectTests(unittest.TestCase):
                 {"worker-a", "worker-b"},
             )
 
-    def test_event_scheduler_enforces_lead_then_manager_delegation(self):
+    def test_event_scheduler_runs_lead_first_and_rewakes_it_on_inbox(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
-                root, "Map, delegate, then execute.", "claude",
-                "scientific", "delegation-run", root / "run",
+                root, "Assign, execute, then integrate.", "claude",
+                "flat", "delegation-run", root / "run",
             )
             self.assertEqual(
                 [agent.agent_id for agent in runner._select_agents(1)],
                 ["lead"],
             )
             lead_message = {
-                "from": "lead", "tag": "plan", "content": "Refine this lane.",
-                "candidate": None, "workItem": "lane-a", "risk": "routine",
-            }
-            runner.inboxes["manager-a"] = [lead_message]
-            runner.inboxes["worker-a"] = [lead_message]
-            runner.states["lead"] = "working"
-            self.assertEqual(
-                [agent.agent_id for agent in runner._select_agents(2)],
-                ["manager-a"],
-            )
-            manager_message = {
-                "from": "manager-a", "tag": "plan",
+                "from": "lead", "tag": "plan",
                 "content": "Execute the bounded lane.",
                 "candidate": None, "workItem": "lane-a", "risk": "routine",
             }
-            runner.inboxes["manager-a"] = []
-            runner.inboxes["worker-a"] = [manager_message]
+            runner.inboxes["worker-a"] = [lead_message]
+            runner.states["lead"] = "working"
             scheduled = {
-                agent.agent_id for agent in runner._select_agents(3)
+                agent.agent_id for agent in runner._select_agents(2)
             }
             self.assertIn("worker-a", scheduled)
             self.assertNotIn("lead", scheduled)
             runner.inboxes["lead"] = [{
-                **manager_message,
-                "from": "manager-a",
-                "content": "Macro result and worker progress.",
+                **lead_message,
+                "from": "worker-a",
+                "content": "Result and observed output.",
             }]
             self.assertIn(
                 "lead",
-                {agent.agent_id for agent in runner._select_agents(3)},
+                {agent.agent_id for agent in runner._select_agents(2)},
             )
-
-    def test_delegation_barrier_activates_working_managers_without_filling_lanes(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = OrganizationRunner(
-                root, "Map every lane before execution.", "claude",
-                "scientific", "barrier-run", root / "run",
-                max_experiments=4,
-            )
-            # The barrier must still DETECT incomplete delegation, but it must not
-            # end the run. One recorded run died at round 2 with every worker
-            # unassigned and no worker ever executing, because two managers had
-            # failed earlier in the round and the barrier took the run down with
-            # them. Detection is kept; the abort is replaced by direct assignment.
-            runner._assert_delegation_barrier(1)
-            degraded = {item["agent_id"] for item in runner.degraded_delegations}
-            self.assertEqual(degraded, {"manager-a", "manager-b"})
-            self.assertTrue(
-                all(item["level"] == "lead-to-manager" for item in runner.degraded_delegations)
-            )
-            for manager_id in ("manager-a", "manager-b"):
-                self.assertTrue(
-                    runner._has_delegation(
-                        runner.inboxes[manager_id],
-                        sender=runner.topology.leader_id,
-                        recipient=manager_id,
-                    ),
-                    "degradation must leave a delegation the barrier accepts",
-                )
-
-            runner.degraded_delegations.clear()
-            for manager_id in ("manager-a", "manager-b"):
-                runner.inboxes[manager_id] = [{
-                    "from": "lead",
-                    "to": manager_id,
-                    "tag": "review" if manager_id == "manager-c" else "plan",
-                    "content": "Refine the assigned lane.",
-                    "candidate": None,
-                    "workItem": f"map-{manager_id}",
-                    "risk": "routine",
-                }]
-            runner._assert_delegation_barrier(1)
-            self.assertEqual(
-                runner.degraded_delegations, [],
-                "a properly delegated round must not record a degradation",
-            )
-            runner._assert_delegation_barrier(2)
-            self.assertEqual(
-                {
-                    agent.agent_id
-                    for agent in runner._select_agents(3)
-                    if agent.agent_id in runner.topology.worker_ids
-                },
-                set(),
-            )
-            # Reviewer and release lanes stay dormant: degradation assigns the
-            # roles the barrier was waiting on, and must not wake anything else.
-            self.assertEqual(runner.inboxes["manager-c"], [])
-            self.assertEqual(runner.inboxes["manager-d"], [])
 
     def test_worker_has_one_host_owned_problem_solving_goal(self):
         with tempfile.TemporaryDirectory() as td:
@@ -3307,7 +2908,7 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "run"
             runner = OrganizationRunner(
                 root, "Fix the delivery pipeline.", "claude",
-                "scientific", "one-goal", run_dir,
+                "flat", "one-goal", run_dir,
             )
             goal = {
                 "to": "worker-a",
@@ -3318,9 +2919,11 @@ class OrganizationProjectTests(unittest.TestCase):
                 "risk": "high",
             }
 
-            runner._deliver_message("manager-b", goal, 2)
+            # A plan from anyone but the worker's supervisor is dropped by the
+            # supervisor-only gate before it can bind anything.
+            runner._deliver_message("auditor-a", goal, 2)
             self.assertEqual(runner.inboxes["worker-a"], [])
-            runner._deliver_message("manager-a", goal, 2)
+            runner._deliver_message("lead", goal, 2)
             self.assertEqual(
                 runner.worker_goals["worker-a"]["work_item"],
                 "radius-qualifier",
@@ -3330,7 +2933,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 "active",
             )
 
-            runner._deliver_message("manager-a", {
+            runner._deliver_message("lead", {
                 **goal,
                 "content": "Standby and monitor the repository.",
                 "workItem": "standby-lane",
@@ -3339,7 +2942,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 runner.worker_goals["worker-a"]["work_item"],
                 "radius-qualifier",
             )
-            runner._deliver_message("manager-a", {
+            runner._deliver_message("lead", {
                 **goal,
                 "content": "Also refactor unrelated documentation.",
                 "workItem": "unrelated-docs",
@@ -3385,7 +2988,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 json.loads(line)
                 for line in (run_dir / "messages.jsonl").read_text().splitlines()
             ]
-            self.assertIn("primary manager", records[0]["reason"])
+            self.assertIn("may come only from lead", records[0]["reason"])
             reasons = [
                 str(record.get("reason") or "")
                 for record in records
@@ -3398,16 +3001,25 @@ class OrganizationProjectTests(unittest.TestCase):
                 "already has active goal" in reason for reason in reasons
             ))
 
-    def test_off_goal_flag_requires_exactly_one_peer_manager_consult(self):
+    def test_off_goal_flag_is_raised_then_acted_by_a_supervisor_decision(self):
+        """A workItem-matched supervisor decision adjudicates an open flag.
+
+        KNOWN DEFECT (organization.py): _record_off_goal_flag stores
+        manager_id from primary_manager_by_worker (None in flat), while the
+        decision path looks the flag up with manager_id=sender ("lead"), so
+        the supervisor's decision never matches and the flag stays raised.
+        The lookup should resolve through _supervisor_of. This test encodes
+        the intended contract and fails until that is fixed.
+        """
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             run_dir = root / "run"
             runner = OrganizationRunner(
                 root, "Fix the delivery pipeline.", "claude",
-                "scientific", "off-goal-consult", run_dir,
+                "flat", "off-goal-decision", run_dir,
             )
-            runner._deliver_message("manager-a", {
+            runner._deliver_message("lead", {
                 "to": "worker-a",
                 "tag": "plan",
                 "content": "Fix the primitive qualifier and run its tests.",
@@ -3416,7 +3028,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 "risk": "high",
             }, 2)
             runner._deliver_message("worker-a", {
-                "to": "manager-a",
+                "to": "lead",
                 "tag": "flag",
                 "content": (
                     "docs/a.md contradicts docs/b.md about an unrelated "
@@ -3427,62 +3039,73 @@ class OrganizationProjectTests(unittest.TestCase):
                 "risk": "high",
             }, 3)
             flag = next(iter(runner.off_goal_flags.values()))
-            self.assertEqual(flag["status"], "needs_consult")
+            self.assertEqual(flag["status"], "raised")
 
-            runner._deliver_message("manager-a", {
-                "to": "worker-a",
-                "tag": "plan",
-                "content": "Switch to fixing the naming rule.",
-                "candidate": None,
-                "workItem": "naming-rule",
-                "risk": "routine",
-            }, 3)
+            # An open flag does not let the worker switch scope by itself.
             self.assertEqual(
                 runner.worker_goals["worker-a"]["work_item"],
                 "primitive-qualifier",
             )
 
-            runner._deliver_message("manager-a", {
-                "to": "manager-c",
-                "tag": "question",
-                "content": "Validate whether the naming contradiction is real.",
-                "candidate": None,
-                "workItem": "primitive-qualifier",
-                "risk": "routine",
-            }, 4)
-            self.assertEqual(flag["status"], "consulting")
-            self.assertEqual(flag["consulted_manager_id"], "manager-c")
-            runner._deliver_message("manager-a", {
-                "to": "manager-b",
-                "tag": "question",
-                "content": "Provide a second validation too.",
-                "candidate": None,
-                "workItem": "primitive-qualifier",
-                "risk": "routine",
-            }, 4)
-            self.assertFalse(any(
-                message.get("content") == "Provide a second validation too."
-                for message in runner.inboxes["manager-b"]
-            ))
-
-            runner._deliver_message("manager-c", {
-                "to": "manager-a",
-                "tag": "answer",
+            runner._deliver_message("lead", {
+                "to": "worker-a",
+                "tag": "decision",
                 "content": "Confirmed, but it does not affect the active fix.",
                 "candidate": None,
                 "workItem": "primitive-qualifier",
-                "risk": "routine",
-            }, 5)
-            self.assertEqual(flag["status"], "validated")
-            runner._deliver_message("manager-a", {
+                "risk": "high",
+            }, 4)
+            self.assertEqual(flag["status"], "acted")
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["work_item"],
+                "primitive-qualifier",
+            )
+
+    def test_rebind_with_an_open_off_goal_flag_replaces_the_goal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "run"
+            runner = OrganizationRunner(
+                root, "Fix the delivery pipeline.", "claude",
+                "flat", "off-goal-rebind", run_dir,
+            )
+            runner._deliver_message("lead", {
+                "to": "worker-a",
+                "tag": "plan",
+                "content": "Fix the primitive qualifier and run its tests.",
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "high",
+            }, 2)
+            runner._deliver_message("worker-a", {
+                "to": "lead",
+                "tag": "flag",
+                "content": (
+                    "docs/a.md contradicts docs/b.md about an unrelated "
+                    "release naming rule; no code was changed for it."
+                ),
+                "candidate": None,
+                "workItem": "primitive-qualifier",
+                "risk": "high",
+            }, 3)
+            flag = next(iter(runner.off_goal_flags.values()))
+            self.assertEqual(flag["status"], "raised")
+
+            # An open raised flag on the current goal UNLOCKS a rebind, and
+            # the rebind is the adjudication.
+            runner._deliver_message("lead", {
                 "to": "worker-a",
                 "tag": "plan",
                 "content": "Fix the validated release naming contradiction.",
                 "candidate": None,
                 "workItem": "naming-rule",
                 "risk": "routine",
-            }, 5)
+            }, 4)
             self.assertEqual(flag["status"], "acted")
+            self.assertEqual(
+                flag["decision"], "Replaced goal with naming-rule",
+            )
             self.assertEqual(
                 runner.worker_goals["worker-a"]["work_item"],
                 "naming-rule",
@@ -3492,26 +3115,26 @@ class OrganizationProjectTests(unittest.TestCase):
                 "primitive-qualifier",
             )
 
-    def test_event_scheduler_keeps_managers_inbox_driven(self):
+    def test_event_scheduler_keeps_the_lead_inbox_driven(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Do bounded work.", "claude",
-                "scientific", "event-run", root / "run",
+                "flat", "event-run", root / "run",
             )
-            runner.states["manager-a"] = "working"
+            runner.states["lead"] = "working"
             runner.states["worker-a"] = "working"
-            runner.turned.update({"manager-a", "worker-a"})
+            runner.turned.update({"lead", "worker-a"})
             runner.inboxes["worker-a"] = [{
-                "from": "manager-a", "to": "worker-a", "tag": "plan",
+                "from": "lead", "to": "worker-a", "tag": "plan",
                 "content": "Continue the bounded implementation.",
                 "candidate": None, "workItem": "work-a", "risk": "routine",
             }]
             selected = {
                 agent.agent_id for agent in runner._select_agents(3)
             }
-            self.assertNotIn("manager-a", selected)
+            self.assertNotIn("lead", selected)
             self.assertIn("worker-a", selected)
 
     def test_veto_auditor_requires_exact_candidate_for_review_traffic(self):
@@ -3521,22 +3144,22 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "run"
             runner = OrganizationRunner(
                 root, "Review only exact candidates.", "claude",
-                "scientific", "review-run", run_dir,
+                "flat", "review-run", run_dir,
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-a"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, "main", "main", root, [], base,
             )
             candidate_less = {
-                "to": "manager-c", "tag": "review",
+                "to": "auditor-a", "tag": "review",
                 "content": "Please re-check repository state.",
                 "candidate": None, "workItem": "census", "risk": "routine",
             }
-            runner._deliver_message("manager-a", candidate_less, 3)
-            self.assertEqual(runner.inboxes["manager-c"], [])
+            runner._deliver_message("lead", candidate_less, 3)
+            self.assertEqual(runner.inboxes["auditor-a"], [])
             self.assertEqual(runner.dropped_messages, 1)
 
             exact = {
@@ -3546,9 +3169,9 @@ class OrganizationProjectTests(unittest.TestCase):
                 "workItem": "final-report",
                 "risk": "release",
             }
-            runner._deliver_message("manager-a", exact, 4)
+            runner._deliver_message("lead", exact, 4)
             self.assertEqual(
-                runner.inboxes["manager-c"][0]["candidate"], base,
+                runner.inboxes["auditor-a"][0]["candidate"], base,
             )
 
     def test_exact_no_veto_review_is_normalized_into_final_decision(self):
@@ -3558,17 +3181,18 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "run"
             runner = OrganizationRunner(
                 root, "Review one exact release dossier.", "claude",
-                "scientific", "normalize-review", run_dir,
+                "flat", "normalize-review", run_dir,
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-c"] = Workspace(
+            release_reviewer = runner.governance.release_reviewer_id
+            runner.workspaces[release_reviewer] = Workspace(
                 root, "main", "main", root, [], base,
             )
-            runner._deliver_message("manager-c", {
-                "to": "manager-d",
+            runner._deliver_message(release_reviewer, {
+                "to": "lead",
                 "tag": "review",
                 "content": (
                     f"NO_VETO {base}: no blocking falsification was "
@@ -3579,11 +3203,11 @@ class OrganizationProjectTests(unittest.TestCase):
                 "risk": "release",
             }, 4)
 
-            delivered = runner.inboxes["manager-d"][0]
+            delivered = runner.inboxes["lead"][0]
             self.assertEqual(delivered["tag"], "decision")
             self.assertEqual(delivered["normalizedFromTag"], "review")
             self.assertEqual(
-                runner.governance.candidate_approvals["manager-c"], base,
+                runner.governance.candidate_approvals[release_reviewer], base,
             )
             events = [
                 json.loads(line)
@@ -3601,17 +3225,18 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir = root / "run"
             runner = OrganizationRunner(
                 root, "Review one exact release dossier.", "claude",
-                "scientific", "reject-ambiguous-review", run_dir,
+                "flat", "reject-ambiguous-review", run_dir,
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-c"] = Workspace(
+            release_reviewer = runner.governance.release_reviewer_id
+            runner.workspaces[release_reviewer] = Workspace(
                 root, "main", "main", root, [], base,
             )
-            runner._deliver_message("manager-c", {
-                "to": "manager-d",
+            runner._deliver_message(release_reviewer, {
+                "to": "lead",
                 "tag": "review",
                 "content": "NO_VETO: the dossier appears internally consistent.",
                 "candidate": base,
@@ -3619,11 +3244,11 @@ class OrganizationProjectTests(unittest.TestCase):
                 "risk": "release",
             }, 4)
 
-            self.assertEqual(runner.inboxes["manager-d"], [])
+            self.assertEqual(runner.inboxes["lead"], [])
             self.assertNotIn(
-                "manager-c", runner.governance.candidate_approvals,
+                release_reviewer, runner.governance.candidate_approvals,
             )
-            retry = runner.inboxes["manager-c"][0]
+            retry = runner.inboxes[release_reviewer][0]
             self.assertEqual(retry["tag"], "blocker")
             self.assertIn(base, retry["content"])
             messages = [
@@ -3639,29 +3264,34 @@ class OrganizationProjectTests(unittest.TestCase):
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Close out efficiently.", "claude",
-                "scientific", "closeout-run", root / "run",
+                "flat", "closeout-run", root / "run",
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-d"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, "main", "main", root, [], base,
             )
-            runner.inboxes["manager-a"] = [{
+            runner.inboxes["worker-a"] = [{
                 "from": "lead", "tag": "status", "content": "Still waiting.",
                 "candidate": None, "workItem": "status", "risk": "routine",
             }]
+            runner.inboxes["lead"] = [{
+                "from": "auditor-a", "tag": "status",
+                "content": "Still waiting.",
+                "candidate": None, "workItem": "status", "risk": "routine",
+            }]
             self.assertEqual(runner._select_closeout_agents(), [])
-            runner.inboxes["manager-d"] = [{
-                "from": "lead", "tag": "plan",
+            runner.inboxes["lead"].append({
+                "from": "auditor-a", "tag": "plan",
                 "content": "Assemble the terminal dossier.",
                 "candidate": None, "workItem": "final-report",
                 "risk": "release",
-            }]
+            })
             self.assertEqual(
                 [agent.agent_id for agent in runner._select_closeout_agents()],
-                ["manager-d"],
+                ["lead"],
             )
             first = runner._closeout_progress_signature()
             second = runner._closeout_progress_signature()
@@ -3673,12 +3303,12 @@ class OrganizationProjectTests(unittest.TestCase):
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Count tokens.", "mixed",
-                "scientific", "usage-run", root / "run",
+                "flat", "usage-run", root / "run",
                 provider_assignments={
                     agent.agent_id: (
                         "codex" if agent.agent_id == "lead" else "claude"
                     )
-                    for agent in get_topology("scientific").agents
+                    for agent in get_topology("flat").agents
                 },
             )
             first = runner._add_usage({
@@ -3715,7 +3345,7 @@ class OrganizationProjectTests(unittest.TestCase):
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Inspect " + ("the declared acceptance contract. " * 80),
-                "claude", "scientific", "prompt-run", root / "run",
+                "claude", "flat", "prompt-run", root / "run",
                 protected_paths=[f"docs/protected-{index}" for index in range(20)],
             )
             base = subprocess.run(
@@ -3791,22 +3421,22 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir()
             runner = OrganizationRunner(
                 root, "Review one exact candidate.", "claude",
-                "scientific", "review-once", run_dir,
+                "flat", "review-once", run_dir,
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-c"] = Workspace(
-                root, "manager-c", "main", root, [], base,
+            runner.workspaces["auditor-a"] = Workspace(
+                root, "auditor-a", "main", root, [], base,
             )
             candidate = "a" * 40
             unrelated = "f" * 40
             review = {
                 "runId": "review-once",
                 "round": 4,
-                "from": "manager-a",
-                "to": "manager-c",
+                "from": "worker-a",
+                "to": "auditor-a",
                 "tag": "review",
                 "content": "REVIEW_THIS_EXACT_CANDIDATE_ONCE",
                 "candidate": candidate,
@@ -3818,7 +3448,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 json.dumps(review) + "\n",
                 encoding="utf-8",
             )
-            runner.inboxes["manager-c"] = [review]
+            runner.inboxes["auditor-a"] = [review]
             runner.host_state_brief = {
                 "content_sha256": "host-state",
                 "round": 4,
@@ -3834,7 +3464,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 },
             }
             prompt = runner._build_prompt(
-                runner.topology.agent("manager-c"), [review], 4, True,
+                runner.topology.agent("auditor-a"), [review], 4, True,
             )
             self.assertEqual(
                 prompt.count("REVIEW_THIS_EXACT_CANDIDATE_ONCE"),
@@ -3846,13 +3476,13 @@ class OrganizationProjectTests(unittest.TestCase):
             self.assertNotIn("experiment_budget", prompt)
             self.assertNotIn("ASSIGNABLE PREDICATES", prompt)
 
-    def test_research_and_release_roles_do_not_receive_worker_planning_state(self):
+    def test_auditors_do_not_receive_worker_planning_state(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Answer one bounded question.", "claude",
-                "scientific", "role-state", root / "run",
+                "flat", "role-state", root / "run",
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
@@ -3860,7 +3490,7 @@ class OrganizationProjectTests(unittest.TestCase):
             ).stdout.strip()
             runner.worker_goals["worker-a"] = {
                 "worker_id": "worker-a",
-                "manager_id": "manager-a",
+                "manager_id": "lead",
                 "work_item": "SECRET_UNRELATED_WORK_ITEM",
                 "objective": "SECRET_UNRELATED_OBJECTIVE",
                 "risk": "routine",
@@ -3874,7 +3504,9 @@ class OrganizationProjectTests(unittest.TestCase):
                     "maximum": 3, "used": 0, "remaining": 3,
                 },
             }
-            for agent_id in ("manager-c", "manager-d", "research-scout"):
+            # The lead is deliberately absent here: it is the planner, and the
+            # goal state is exactly what it plans with.
+            for agent_id in ("auditor-a", "auditor-b"):
                 runner.workspaces[agent_id] = Workspace(
                     root, agent_id, "main", root, [], base,
                 )
@@ -3886,25 +3518,25 @@ class OrganizationProjectTests(unittest.TestCase):
                 self.assertNotIn("experiment_budget", prompt)
                 self.assertNotIn("ASSIGNABLE PREDICATES", prompt)
 
-    def test_primary_manager_goal_packet_omits_terminal_worker_goals(self):
+    def test_lead_goal_packet_omits_terminal_worker_goals(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Assign only current measurable work.", "claude",
-                "scientific", "manager-current-goals", root / "run",
+                "flat", "lead-current-goals", root / "run",
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            runner.workspaces["manager-a"] = Workspace(
-                root, "manager-a", "main", root, [], base,
+            runner.workspaces["lead"] = Workspace(
+                root, "lead", "main", root, [], base,
             )
             runner.worker_goals = {
                 "worker-a": {
                     "worker_id": "worker-a",
-                    "manager_id": "manager-a",
+                    "manager_id": "lead",
                     "work_item": "CURRENT_GOAL",
                     "objective": "Change the measured production behavior.",
                     "risk": "routine",
@@ -3914,7 +3546,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 },
                 "worker-c": {
                     "worker_id": "worker-c",
-                    "manager_id": "manager-a",
+                    "manager_id": "lead",
                     "work_item": "STALE_TERMINAL_GOAL",
                     "objective": "This goal is already closed.",
                     "risk": "routine",
@@ -3924,7 +3556,7 @@ class OrganizationProjectTests(unittest.TestCase):
                 },
             }
             prompt = runner._build_prompt(
-                runner.topology.agent("manager-a"), [], 3, True,
+                runner.topology.agent("lead"), [], 3, True,
             )
             self.assertIn("CURRENT_GOAL", prompt)
             self.assertNotIn("STALE_TERMINAL_GOAL", prompt)
@@ -3936,7 +3568,7 @@ class OrganizationProjectTests(unittest.TestCase):
             _init_project(root)
             runner = OrganizationRunner(
                 root, "Run one exact bounded experiment.", "claude",
-                "scientific", "experiment-once", root / "run",
+                "flat", "experiment-once", root / "run",
             )
             base = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root, check=True,
@@ -3983,10 +3615,10 @@ class OrganizationProjectTests(unittest.TestCase):
             run_dir.mkdir()
             runner = OrganizationRunner(
                 root, f"Compare exact candidate {ancestor}.", "claude",
-                "scientific", "host-state-run", run_dir,
+                "flat", "host-state-run", run_dir,
             )
             runner.caller_head = launch
-            runner.workspaces["manager-a"] = Workspace(
+            runner.workspaces["lead"] = Workspace(
                 root, "main", "main", root, [], launch,
             )
             state = runner._write_host_state_brief(0)
@@ -4005,7 +3637,7 @@ class OrganizationProjectTests(unittest.TestCase):
 
 
 class OrganizationRunnerTests(unittest.TestCase):
-    def test_scientific_run_explores_then_emits_human_promotion_request(self):
+    def test_flat_run_explores_then_emits_human_promotion_request(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
@@ -4013,13 +3645,14 @@ class OrganizationRunnerTests(unittest.TestCase):
             authority.write_text("human-frozen standard\n", encoding="utf-8")
             subprocess.run(["git", "add", "authority.md"], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "freeze authority"], cwd=root, check=True)
-            run_dir = root / "devsession" / "agent-organizations" / "scientific-run"
+            run_dir = root / "devsession" / "agent-organizations" / "flat-promo-run"
             runner = OrganizationRunner(
                 root, "Explore one reversible hypothesis and prepare promotion evidence.",
-                "claude", "scientific", "scientific-run", run_dir,
+                "claude", "flat", "flat-promo-run", run_dir,
                 max_rounds=9, max_experiments=1,
                 protected_paths=["authority.md"],
             )
+            release_reviewer = runner.governance.release_reviewer_id
             worker_candidate = {"sha": None}
             release_candidate = {"sha": None}
 
@@ -4031,7 +3664,7 @@ class OrganizationRunnerTests(unittest.TestCase):
 
             def response(messages=None, state="idle", artifacts=None, candidate=None, risk=None, disposition="continue", final=False):
                 return {
-                    "messages": messages or [], "summary": "scientific simulated turn",
+                    "messages": messages or [], "summary": "flat simulated turn",
                     "state": state, "artifacts": artifacts or [], "candidate": candidate,
                     "risk": risk, "disposition": disposition, "final": final,
                 }
@@ -4042,108 +3675,40 @@ class OrganizationRunnerTests(unittest.TestCase):
                 if schema is RUN_CONCLUSION_SCHEMA:
                     return {
                         "value": _conclusion(
-                            "The scientific organization produced a "
+                            "The flat organization produced a "
                             "human-reviewable promotion proposal."
                         ),
                         "session_id": f"session-{agent_id}",
                         "usage": {},
                     }
+                if agent_id.startswith("blind-verifier-"):
+                    verified = agent_id[len("blind-verifier-"):]
+                    return {
+                        "value": {
+                            "candidate": verified,
+                            "verdict": "approved", "summary": "Checks passed.",
+                            "evidence": ["Exact HEAD and dossier verified."],
+                            "blockers": [],
+                        },
+                        "session_id": "blind", "usage": {},
+                    }
                 reply = response()
                 if agent_id == "lead":
                     if session.turn == 1:
-                        reply = response([
-                            message(
-                                manager_id, "plan",
-                                "Refine this bounded scientific lane and delegate an explicit worker task where you own one.",
-                                None, f"scientific-map/{manager_id}", "high",
-                            )
-                            for manager_id in (
-                                "manager-a", "manager-b", "manager-c", "manager-d",
-                            )
-                        ])
-                    elif release_candidate["sha"] and "final-release" in prompt:
                         reply = response([message(
-                            "manager-d", "decision", "APPROVED: complete reversible promotion dossier.",
-                            release_candidate["sha"], "final-release", "release",
+                            "worker-a", "plan",
+                            "Run one bounded reversible experiment and hand back its exact candidate; preserve its generated receipt.",
+                            None, "flat-promo-run/worker-a/r2", "high",
                         )])
-                elif agent_id == "manager-a":
-                    if session.turn == 1:
-                        reply = response([
-                            message(
-                                "worker-a", "plan",
-                                "Choose a bounded experiment; preserve its generated receipt.",
-                                None, "scientific-run/worker-a/r3", "high",
-                            ),
-                            message(
-                                "worker-c", "plan",
-                                "Audit the topology predicates for the selected experiment without opening a second experiment.",
-                                None, "scientific-run/worker-c/audit", "high",
-                            ),
-                        ])
-                    elif worker_candidate["sha"] and "NO_VETO:" in prompt:
-                        reply = response([message(
-                            "manager-d", "handoff", "Adversarial review completed without veto; integrate sandbox patch.",
-                            worker_candidate["sha"], "scientific-run/worker-a/r3", "high",
-                        )])
-                elif agent_id == "manager-b":
-                    if session.turn == 1:
-                        reply = response([
-                            message(
-                                "worker-b", "plan",
-                                "Research the nearest model-selection control and report a bounded recommendation.",
-                                None, "scientific-run/worker-b/research", "high",
-                            ),
-                            message(
-                                "worker-d", "plan",
-                                "Audit missing-information limits and prepare an explicit uncertainty finding.",
-                                None, "scientific-run/worker-d/uncertainty", "high",
-                            ),
-                        ])
-                    elif "Adversarial review assignment" in prompt:
-                        reply = response([message(
-                            "manager-a", "decision",
-                            "NO_VETO: no blocking falsification; no truth approval implied.",
-                            worker_candidate["sha"],
-                            "scientific-run/worker-a/r3", "high",
-                        )])
-                elif agent_id == "worker-a" and worker_candidate["sha"] is None:
-                    (session.workspace.cwd / "app.py").write_text(
-                        "print('reversible hypothesis')\n", encoding="utf-8",
-                    )
-                    subprocess.run(["git", "add", "app.py"], cwd=session.workspace.cwd, check=True)
-                    subprocess.run(["git", "commit", "-qm", "sandbox experiment"], cwd=session.workspace.cwd, check=True)
-                    worker_candidate["sha"] = subprocess.run(
-                        ["git", "rev-parse", "HEAD"], cwd=session.workspace.cwd,
-                        check=True, capture_output=True, text=True,
-                    ).stdout.strip()
-                    output = session.workspace.cwd / "out" / "tmp-worker-a-r3"
-                    output.mkdir(parents=True)
-                    (output / "receipt.json").write_text('{"result":"provisional"}\n', encoding="utf-8")
-                    reply = response(
-                        [message(
-                            "manager-a", "handoff", "Sandbox experiment and provisional receipt ready.",
-                            worker_candidate["sha"], "scientific-run/worker-a/r3", "high",
-                        )],
-                        state="done", artifacts=["out/tmp-worker-a-r3"],
-                    )
-                elif agent_id == "manager-c":
-                    if release_candidate["sha"] and "final-release" in prompt:
-                        reply = response([message(
-                            "manager-d", "decision", "NO_VETO: dossier exposes provisional status and primary receipt.",
-                            release_candidate["sha"], "final-release", "release",
-                        )])
-                    elif "Adversarial review assignment" in prompt:
-                        reply = response([message(
-                            "manager-a", "decision", "NO_VETO: no blocking falsification; no truth approval implied.",
-                            worker_candidate["sha"], "scientific-run/worker-a/r3", "high",
-                        )])
-                elif agent_id == "manager-d":
-                    if worker_candidate["sha"] and release_candidate["sha"] is None and "integrate sandbox patch" in prompt:
+                    elif (
+                        release_candidate["sha"] is None
+                        and "exact integration HEAD is" in prompt
+                    ):
                         report = session.workspace.cwd / runner.artifact_staging_prefix / "promotion-dossier.md"
                         report.parent.mkdir(parents=True)
                         report.write_text("# Provisional promotion dossier\n", encoding="utf-8")
                         subprocess.run(
-                            ["git", "add", runner.artifact_staging_prefix],
+                            ["git", "add", "-f", runner.artifact_staging_prefix],
                             cwd=session.workspace.cwd, check=True,
                         )
                         subprocess.run(
@@ -4154,21 +3719,75 @@ class OrganizationRunnerTests(unittest.TestCase):
                             ["git", "rev-parse", "HEAD"], cwd=session.workspace.cwd,
                             check=True, capture_output=True, text=True,
                         ).stdout.strip()
-                        reply = response([
-                            message(
-                                "lead", "review", "Review the complete reversible promotion dossier.",
-                                release_candidate["sha"], "final-release", "release",
-                            ),
-                            message(
-                                "manager-c", "review", "Veto or annotate the fully-sighted final dossier.",
-                                release_candidate["sha"], "final-release", "release",
-                            ),
-                        ], state="working")
-                    elif release_candidate["sha"] and "APPROVED:" in prompt and "NO_VETO:" in prompt:
+                        reply = response([message(
+                            release_reviewer, "review",
+                            "Veto or annotate the fully-sighted final dossier.",
+                            release_candidate["sha"], "final-release", "release",
+                        )], state="working")
+                    elif (
+                        release_candidate["sha"]
+                        and "final-release" in prompt
+                        and "NO_VETO" in prompt
+                    ):
                         reply = response(
                             state="done", candidate=release_candidate["sha"],
                             risk="release", disposition="promote", final=True,
                         )
+                elif agent_id == "worker-a":
+                    if worker_candidate["sha"] is None:
+                        (session.workspace.cwd / "app.py").write_text(
+                            "print('reversible hypothesis')\n", encoding="utf-8",
+                        )
+                        subprocess.run(["git", "add", "app.py"], cwd=session.workspace.cwd, check=True)
+                        subprocess.run(["git", "commit", "-qm", "sandbox experiment"], cwd=session.workspace.cwd, check=True)
+                        worker_candidate["sha"] = subprocess.run(
+                            ["git", "rev-parse", "HEAD"], cwd=session.workspace.cwd,
+                            check=True, capture_output=True, text=True,
+                        ).stdout.strip()
+                        output = session.workspace.cwd / "out" / "tmp-worker-a-r2"
+                        output.mkdir(parents=True)
+                        (output / "receipt.json").write_text('{"result":"provisional"}\n', encoding="utf-8")
+                        reply = response(
+                            [message(
+                                "lead", "handoff", "Sandbox experiment and provisional receipt ready.",
+                                worker_candidate["sha"], "flat-promo-run/worker-a/r2", "high",
+                            )],
+                            state="working", artifacts=["out/tmp-worker-a-r2"],
+                        )
+                    else:
+                        # Re-send the handoff so it is still in the lead inbox
+                        # when the adversarial review completes; the sealed
+                        # receipt bundle already holds the generated output.
+                        shutil.rmtree(session.workspace.cwd / "out", ignore_errors=True)
+                        reply = response(
+                            [message(
+                                "lead", "handoff", "Sandbox experiment and provisional receipt ready.",
+                                worker_candidate["sha"], "flat-promo-run/worker-a/r2", "high",
+                            )],
+                            state="done",
+                        )
+                elif agent_id in {"auditor-a", "auditor-b"}:
+                    # The final-review branch is checked first: the prior
+                    # review evidence section embeds the earlier candidate
+                    # assignment prose in later prompts.
+                    if (
+                        release_candidate["sha"]
+                        and "fully-sighted final dossier" in prompt
+                    ):
+                        reply = response([message(
+                            "lead", "decision",
+                            f"NO_VETO {release_candidate['sha']}: dossier exposes provisional status and primary receipt.",
+                            release_candidate["sha"], "final-release", "release",
+                        )])
+                    elif (
+                        worker_candidate["sha"]
+                        and "Adversarial review assignment" in prompt
+                    ):
+                        reply = response([message(
+                            "lead", "decision",
+                            f"NO_VETO {worker_candidate['sha']}: no blocking falsification; no truth approval implied.",
+                            worker_candidate["sha"], "flat-promo-run/worker-a/r2", "high",
+                        )])
                 return {"value": reply, "session_id": f"session-{agent_id}", "usage": {}}
 
             worktree_parent = None
@@ -4183,7 +3802,14 @@ class OrganizationRunnerTests(unittest.TestCase):
                 self.assertEqual(result["conclusion"]["generated_by"], "lead")
                 self.assertTrue(Path(result["conclusion_json"]).is_file())
                 self.assertTrue(Path(result["conclusion_markdown"]).is_file())
-                self.assertEqual(result["blind_review"], None)
+                self.assertEqual(
+                    result["blind_review"]["candidate"],
+                    release_candidate["sha"],
+                )
+                self.assertEqual(result["blind_review"]["verdict"], "approved")
+                self.assertEqual(
+                    result["verified_candidate"], release_candidate["sha"],
+                )
                 self.assertEqual(result["experiment_budget"]["used"], 1)
                 promotion = json.loads(Path(result["promotion_request"]).read_text())
                 self.assertEqual(promotion["status"], "awaiting_human_authorization")
@@ -4197,12 +3823,12 @@ class OrganizationRunnerTests(unittest.TestCase):
                 if worktree_parent is not None:
                     shutil.rmtree(worktree_parent, ignore_errors=True)
 
-    def test_google_rotating_completes_exact_candidate_release(self):
+    def test_flat_mixed_run_completes_exact_candidate_release(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             run_dir = root / "devsession" / "agent-organizations" / "system-run"
-            topology = get_topology("google-rotating")
+            topology = get_topology("flat")
             provider_assignments = build_provider_assignments(
                 topology, "claude", "codex",
             )
@@ -4211,15 +3837,15 @@ class OrganizationRunnerTests(unittest.TestCase):
             evidence.write_text("A005 accepted\n", encoding="utf-8")
             runner = OrganizationRunner(
                 root, "Change app.py to print shipped and verify it.", "mixed",
-                "google-rotating", "system-run", run_dir,
+                "flat", "system-run", run_dir,
                 max_rounds=4, max_concurrency=5,
                 provider_assignments=provider_assignments,
                 host_provider="claude", blind_verifier_provider="codex",
                 evidence_paths=["out"],
             )
+            release_reviewer = runner.governance.release_reviewer_id
             worker_candidate = {"sha": None}
             release_candidate = {"sha": None}
-            worker_reviewer = {"id": None}
             seen_providers = {}
 
             def message(to, tag, content, candidate=None, work_item=None, risk=None):
@@ -4263,124 +3889,97 @@ class OrganizationRunnerTests(unittest.TestCase):
                     if session.turn == 1:
                         reply = response([
                             message(
-                                manager_id, "plan",
-                                "Refine this delivery lane and give its worker a bounded assignment.",
-                                None, f"delivery-map/{manager_id}", "routine",
-                            )
-                            for manager_id in (
-                                "manager-a", "manager-b", "manager-c", "manager-d",
-                            )
-                        ])
-                    elif release_candidate["sha"] and "Approve exact release candidate" in prompt:
-                        reply = response([
-                            message(
-                                "manager-d", "decision", "APPROVED: exact scope matches mission.",
-                                release_candidate["sha"], "final-release", "release",
-                            ),
-                        ])
-                elif agent_id == "manager-a":
-                    if release_candidate["sha"] and "Approve exact release candidate" in prompt:
-                        reply = response([
-                            message(
-                                "manager-d", "decision", "APPROVED: independent integrated review passes.",
-                                release_candidate["sha"], "final-release", "release",
-                            ),
-                        ])
-                    elif session.turn == 1:
-                        reply = response([
-                            message(
                                 "worker-a", "plan",
-                                "Implement and commit the app.py change.",
+                                "Implement the app.py change and hand back the exact candidate.",
                                 None, "app-change", "routine",
                             ),
                         ])
-                    elif worker_candidate["sha"] and "APPROVED:" in prompt:
-                        reply = response([
-                            message(
-                                "manager-d", "handoff", "Alternate review passed; integrate.",
-                                worker_candidate["sha"], "app-change", "routine",
-                            ),
-                        ])
-                elif agent_id in {"manager-b", "manager-c"} and session.turn == 1:
-                    worker_id = agent_id.replace("manager", "worker")
-                    reply = response([
-                        message(
-                            worker_id, "plan",
-                            "Inspect the assigned interface and report compatibility evidence.",
-                            None, f"compatibility/{worker_id}", "routine",
-                        ),
-                    ])
-                elif agent_id == "worker-a" and worker_candidate["sha"] is None:
-                    (session.workspace.cwd / "app.py").write_text("print('shipped')\n", encoding="utf-8")
-                    artifact = (
-                        session.workspace.cwd / runner.artifact_staging_prefix /
-                        "delivery.md"
-                    )
-                    artifact.parent.mkdir(parents=True, exist_ok=True)
-                    artifact.write_text("# Verified delivery\n", encoding="utf-8")
-                    subprocess.run(
-                        ["git", "add", "app.py", runner.artifact_staging_prefix],
-                        cwd=session.workspace.cwd, check=True,
-                    )
-                    subprocess.run(
-                        ["git", "commit", "-qm", "ship app change"],
-                        cwd=session.workspace.cwd, check=True,
-                    )
-                    worker_candidate["sha"] = subprocess.run(
-                        ["git", "rev-parse", "HEAD"], cwd=session.workspace.cwd,
-                        check=True, capture_output=True, text=True,
-                    ).stdout.strip()
-                    reply = response([
-                        message(
-                            "manager-a", "handoff", "Implementation and focused check complete.",
-                            worker_candidate["sha"], "app-change", "routine",
-                        ),
-                    ], state="done")
-                elif agent_id == "manager-d":
-                    if session.turn == 1:
-                        reply = response([
-                            message(
-                                "worker-d", "plan",
-                                "Run composed release validation tests against the integration path.",
-                                None, "release/worker-d", "routine",
-                            ),
-                        ])
-                    elif worker_candidate["sha"] and release_candidate["sha"] is None and "Alternate review passed" in prompt:
+                    elif (
+                        release_candidate["sha"] is None
+                        and "exact integration HEAD is" in prompt
+                    ):
                         release_candidate["sha"] = subprocess.run(
                             ["git", "rev-parse", "HEAD"], cwd=session.workspace.cwd,
                             check=True, capture_output=True, text=True,
                         ).stdout.strip()
-                        final_reviewer = runner.governance.release_reviewer_id
                         reply = response([
                             message(
-                                "lead", "review", "Approve exact release candidate for mission scope.",
-                                release_candidate["sha"], "final-release", "release",
-                            ),
-                            message(
-                                final_reviewer, "review", "Approve exact release candidate independently.",
+                                release_reviewer, "review",
+                                "Approve exact release candidate independently.",
                                 release_candidate["sha"], "final-release", "release",
                             ),
                         ], state="working")
-                    elif release_candidate["sha"] and prompt.count("APPROVED:") >= 2:
+                    elif (
+                        release_candidate["sha"]
+                        and "final-release" in prompt
+                        and "NO_VETO" in prompt
+                    ):
                         reply = response(
                             state="done", candidate=release_candidate["sha"],
                             risk="release", disposition="promote", final=True,
                         )
-                elif "Independent review assignment" in prompt:
-                    worker_reviewer["id"] = agent_id
-                    reply = response([
-                        message(
-                            "manager-a", "decision", "APPROVED: diff and focused evidence pass.",
-                            worker_candidate["sha"], "app-change", "routine",
-                        ),
-                    ])
-                elif release_candidate["sha"] and "Approve exact release candidate independently" in prompt:
-                    reply = response([
-                        message(
-                            "manager-d", "decision", "APPROVED: independent integrated review passes.",
-                            release_candidate["sha"], "final-release", "release",
-                        ),
-                    ])
+                elif agent_id == "worker-a":
+                    if worker_candidate["sha"] is None:
+                        (session.workspace.cwd / "app.py").write_text("print('shipped')\n", encoding="utf-8")
+                        artifact = (
+                            session.workspace.cwd / runner.artifact_staging_prefix /
+                            "delivery.md"
+                        )
+                        artifact.parent.mkdir(parents=True, exist_ok=True)
+                        artifact.write_text("# Verified delivery\n", encoding="utf-8")
+                        subprocess.run(
+                            ["git", "add", "app.py", runner.artifact_staging_prefix],
+                            cwd=session.workspace.cwd, check=True,
+                        )
+                        subprocess.run(
+                            ["git", "commit", "-qm", "ship app change"],
+                            cwd=session.workspace.cwd, check=True,
+                        )
+                        worker_candidate["sha"] = subprocess.run(
+                            ["git", "rev-parse", "HEAD"], cwd=session.workspace.cwd,
+                            check=True, capture_output=True, text=True,
+                        ).stdout.strip()
+                        reply = response([
+                            message(
+                                "lead", "handoff", "Implementation and focused check complete.",
+                                worker_candidate["sha"], "app-change", "routine",
+                            ),
+                        ], state="working")
+                    else:
+                        # Keep the handoff in the lead inbox until the
+                        # adversarial review lands, then stand down.
+                        reply = response([
+                            message(
+                                "lead", "handoff", "Implementation and focused check complete.",
+                                worker_candidate["sha"], "app-change", "routine",
+                            ),
+                        ], state="done")
+                elif agent_id in {"auditor-a", "auditor-b"}:
+                    # The final-review branch is checked first: the prior
+                    # review evidence section embeds the earlier candidate
+                    # assignment prose in later prompts.
+                    if (
+                        release_candidate["sha"]
+                        and "Approve exact release candidate independently" in prompt
+                    ):
+                        reply = response([
+                            message(
+                                "lead", "decision",
+                                f"NO_VETO {release_candidate['sha']}: independent integrated review passes.",
+                                release_candidate["sha"], "final-release", "release",
+                            ),
+                        ])
+                    elif (
+                        worker_candidate["sha"]
+                        and "Adversarial review assignment" in prompt
+                    ):
+                        reply = response([
+                            message(
+                                "lead", "decision",
+                                f"NO_VETO {worker_candidate['sha']}: diff and focused evidence pass.",
+                                worker_candidate["sha"], "app-change", "routine",
+                            ),
+                        ])
 
                 return {"value": reply, "session_id": f"session-{agent_id}", "usage": {}}
 
@@ -4390,10 +3989,10 @@ class OrganizationRunnerTests(unittest.TestCase):
                     result = runner.run()
                 worktree_parent = Path(result["integration_workspace"]).parent
                 self.assertEqual(result["status"], "completed")
-                self.assertEqual(result["rounds"], 8)
+                self.assertEqual(result["rounds"], 6)
                 self.assertEqual(result["working_rounds"], 4)
-                self.assertEqual(result["closeout_rounds"], 4)
-                self.assertGreater(result["completed_turns"], 8)
+                self.assertEqual(result["closeout_rounds"], 2)
+                self.assertGreaterEqual(result["completed_turns"], 8)
                 self.assertEqual(result["provider"], "mixed")
                 self.assertEqual(result["provider_assignments"], provider_assignments)
                 self.assertEqual(result["blind_verifier_provider"], "codex")
@@ -4419,14 +4018,8 @@ class OrganizationRunnerTests(unittest.TestCase):
                     (Path(result["integration_workspace"]) / "app.py").read_text(),
                     "print('shipped')\n",
                 )
-                self.assertNotIn(
-                    worker_reviewer["id"], {"manager-a", "manager-d"},
-                )
-                self.assertNotEqual(
-                    seen_providers[worker_reviewer["id"]],
-                    seen_providers["worker-a"],
-                )
-                self.assertEqual(seen_providers["manager-d"], "claude")
+                self.assertEqual(seen_providers["lead"], "claude")
+                self.assertEqual(seen_providers["worker-a"], "codex")
                 self.assertEqual(
                     seen_providers[f"blind-verifier-{release_candidate['sha']}"],
                     "codex",
@@ -4435,16 +4028,17 @@ class OrganizationRunnerTests(unittest.TestCase):
                 if worktree_parent is not None:
                     shutil.rmtree(worktree_parent, ignore_errors=True)
 
-    def test_scientific_no_promotion_report_ends_without_round_limit(self):
+    def test_flat_no_promotion_report_ends_without_round_limit(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             run_dir = root / "devsession" / "agent-organizations" / "no-promotion"
             runner = OrganizationRunner(
                 root, "Determine whether a change is justified.", "claude",
-                "scientific", "no-promotion", run_dir,
+                "flat", "no-promotion", run_dir,
                 max_rounds=5, max_closeout_rounds=2,
             )
+            release_reviewer = runner.governance.release_reviewer_id
             report = {"candidate": None}
 
             def message(to, tag, content, candidate=None, work_item=None, risk=None):
@@ -4480,34 +4074,9 @@ class OrganizationRunnerTests(unittest.TestCase):
                         "usage": {},
                     }
                 if agent_id == "lead" and session.turn == 1:
-                    reply = response([
-                        message(
-                            manager, "plan", f"Map bounded lane {manager}.",
-                            work_item=f"map-{manager}",
-                            risk=(
-                                "release"
-                                if manager == "manager-d" else "routine"
-                            ),
-                        )
-                        for manager in ("manager-a", "manager-b", "manager-c", "manager-d")
-                    ], state="idle")
-                elif session.turn == 1 and agent_id == "manager-a":
-                    reply = response([
-                        message(
-                            worker, "plan", f"Inspect {worker}.",
-                            work_item=f"inspect-{worker}", risk="routine",
-                        )
-                        for worker in ("worker-a", "worker-c")
-                    ], state="idle")
-                elif session.turn == 1 and agent_id == "manager-b":
-                    reply = response([
-                        message(
-                            worker, "plan", f"Inspect {worker}.",
-                            work_item=f"inspect-{worker}", risk="routine",
-                        )
-                        for worker in ("worker-b", "worker-d")
-                    ], state="idle")
-                elif agent_id == "manager-d" and session.turn == 1:
+                    # The lead authors the terminal dossier itself: RecCli
+                    # commits the staged artifact after the turn, so the
+                    # review names the host-materialized report identity.
                     dossier = (
                         session.workspace.cwd
                         / runner.artifact_staging_prefix
@@ -4520,38 +4089,31 @@ class OrganizationRunnerTests(unittest.TestCase):
                     )
                     reply = response([
                         message(
-                            "lead", "review",
-                            "Approve the exact no-promotion dossier.",
-                            HOST_CANDIDATE, "final-no-promotion", "release",
-                        ),
-                        message(
-                            "manager-c", "review",
+                            release_reviewer, "review",
                             "Independently review the exact no-promotion dossier.",
                             HOST_CANDIDATE, "final-no-promotion", "release",
                         ),
                     ], state="working", candidate=HOST_CANDIDATE,
                         risk="release", disposition="no_promotion")
                 elif (
-                    report["candidate"]
-                    and agent_id in {"lead", "manager-c"}
+                    agent_id == release_reviewer
+                    and report["candidate"]
                     and "final-no-promotion" in prompt
                 ):
-                    prefix = "NO_VETO" if agent_id == "manager-c" else "APPROVED"
                     reply = response([
                         message(
-                            "manager-d",
-                            "review" if agent_id == "manager-c" else "decision",
+                            "lead", "decision",
                             (
-                                f"{prefix} {report['candidate']}: exact "
+                                f"NO_VETO {report['candidate']}: exact "
                                 "no-promotion dossier is supported."
                             ),
                             report["candidate"], "final-no-promotion", "release",
                         ),
                     ])
                 elif (
-                    agent_id == "manager-d"
-                    and session.turn >= 2
+                    agent_id == "lead"
                     and report["candidate"]
+                    and "NO_VETO" in prompt
                 ):
                     reply = response(
                         state="done", candidate=report["candidate"],
@@ -4559,7 +4121,7 @@ class OrganizationRunnerTests(unittest.TestCase):
                     )
                 else:
                     reply = response(
-                        state="working" if agent_id == "manager-d" else "idle"
+                        state="working" if agent_id == "lead" else "idle"
                     )
                 return {
                     "value": reply,
@@ -4572,12 +4134,13 @@ class OrganizationRunnerTests(unittest.TestCase):
             def capture_report(agent, round_number):
                 result = original_run_turn(agent, round_number)
                 reply = result.get("reply") or {}
-                if (
-                    agent.agent_id == "manager-d"
-                    and reply.get("disposition") == "no_promotion"
-                    and reply.get("candidate")
-                ):
-                    report["candidate"] = reply["candidate"]
+                if agent.agent_id == "lead" and report["candidate"] is None:
+                    for sent in reply.get("messages", []):
+                        if (
+                            sent.get("workItem") == "final-no-promotion"
+                            and sent.get("candidate")
+                        ):
+                            report["candidate"] = sent["candidate"]
                 return result
 
             worktree_parent = None
@@ -4624,7 +4187,7 @@ class NoOpDispositionTests(unittest.TestCase):
             run_dir = root / "devsession" / "agent-organizations" / "no-op"
             runner = OrganizationRunner(
                 root, "Verify the controls still hold.", "claude",
-                "google-rotating", "no-op", run_dir,
+                "flat", "no-op", run_dir,
                 max_rounds=4, max_closeout_rounds=0,
                 admission=VALID_ADMISSION,
             )
@@ -4712,101 +4275,13 @@ class NoOpDispositionTests(unittest.TestCase):
                 if worktree_parent is not None:
                     shutil.rmtree(worktree_parent, ignore_errors=True)
 
-    def test_finalizer_no_op_is_rejected_as_lead_only(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            run_dir = (
-                root / "devsession" / "agent-organizations" / "no-op-reject"
-            )
-            runner = OrganizationRunner(
-                root, "Probe the rejection path.", "claude",
-                "google-rotating", "no-op-reject", run_dir,
-                max_rounds=2, max_closeout_rounds=0,
-                admission=VALID_ADMISSION,
-            )
-
-            def message(to, content, work_item):
-                return {
-                    "to": to, "tag": "plan", "content": content,
-                    "candidate": None, "workItem": work_item, "risk": "routine",
-                }
-
-            def fake_run(session, prompt, schema, timeout_seconds):
-                session.turn += 1
-                agent_id = session.session_key
-                if schema is RUN_CONCLUSION_SCHEMA:
-                    return {
-                        "value": _conclusion("The run hit its round limit."),
-                        "session_id": f"session-{agent_id}",
-                        "usage": {},
-                    }
-                if agent_id == "lead" and session.turn == 1:
-                    reply = dict(_reply())
-                    reply["messages"] = [
-                        message(
-                            manager, f"Map bounded lane {manager}.",
-                            f"map-{manager}",
-                        )
-                        for manager in (
-                            "manager-a", "manager-b", "manager-c", "manager-d",
-                        )
-                    ]
-                elif agent_id == "manager-d" and session.turn == 1:
-                    reply = {
-                        "messages": [],
-                        "summary": "Nothing here is worth doing.",
-                        "state": "done",
-                        "artifacts": [],
-                        "candidate": None,
-                        "risk": None,
-                        "disposition": "no_op",
-                        "final": True,
-                    }
-                elif agent_id.startswith("manager-") and session.turn == 1:
-                    worker = f"worker-{agent_id[-1]}"
-                    reply = dict(_reply())
-                    reply["messages"] = [
-                        message(worker, f"Inspect {worker}.", f"inspect-{worker}"),
-                    ]
-                else:
-                    reply = _reply()
-                return {
-                    "value": reply,
-                    "session_id": f"session-{agent_id}",
-                    "usage": {},
-                }
-
-            worktree_parent = None
-            try:
-                with patch.object(SubscriptionSession, "run", new=fake_run):
-                    result = runner.run()
-                worktree_parent = Path(result["integration_workspace"]).parent
-                self.assertNotEqual(result["status"], "completed_no_op")
-                events = [
-                    json.loads(line)
-                    for line in (run_dir / "events.jsonl").read_text(
-                        encoding="utf-8",
-                    ).splitlines()
-                ]
-                rejections = [
-                    event for event in events
-                    if event["type"] == "finalization.rejected"
-                    and event.get("reason") == "only the lead may declare no_op"
-                ]
-                self.assertEqual(len(rejections), 1)
-                self.assertEqual(rejections[0]["agent_id"], "manager-d")
-            finally:
-                if worktree_parent is not None:
-                    shutil.rmtree(worktree_parent, ignore_errors=True)
-
 
 class ArtifactDemotionTests(unittest.TestCase):
     def _runner(self, root: Path) -> OrganizationRunner:
         run_dir = root / "devsession" / "agent-organizations" / "sig"
         return OrganizationRunner(
             root, "Fingerprint progress.", "claude",
-            "google-rotating", "sig", run_dir,
+            "flat", "sig", run_dir,
         )
 
     def test_closeout_signature_ignores_paper_candidates(self):

@@ -1,9 +1,11 @@
-"""Regression tests for five organization-runtime defects.
+"""Regression tests for organization-runtime defects.
 
 Sourced from a forensic audit of nine recorded runs that produced zero promoted
 candidates, zero experiment contracts and zero trials between them. Each test
 below encodes a failure that actually happened, with the measurement that made
-it visible, so a future change cannot quietly restore it.
+it visible, so a future change cannot quietly restore it. (Defect 1, the
+delegation barrier, was removed along with the hierarchical topologies its
+machinery served.)
 """
 
 import json
@@ -29,236 +31,6 @@ from reccli.organization_project_launch import (  # noqa: E402
     _scrub_rejected_candidate,
 )
 from test_organization import _init_project  # noqa: E402
-
-
-class DelegationDegradationTests(unittest.TestCase):
-    """Defect 1. A recorded run died at round 2 with no worker ever executing.
-
-    Two managers had failed earlier in that round, so no worker assignment
-    survived, and the barrier raised RuntimeError and took the run with it. The
-    coordination mechanism, not the work, was the failure.
-    """
-
-    def _runner(self, root, topology="google-rotating"):
-        return OrganizationRunner(
-            root, "Advance the mission.", "claude", topology,
-            "degrade-run", root / "run", max_experiments=3,
-        )
-
-    def test_missing_worker_assignments_no_longer_end_the_run(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)  # must not raise
-            self.assertEqual(
-                {item["agent_id"] for item in runner.degraded_delegations},
-                set(runner.topology.worker_ids),
-            )
-
-    def test_degraded_workers_are_actually_scheduled(self):
-        """Not aborting is worthless if the workers still never run."""
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)
-            scheduled = {agent.agent_id for agent in runner._select_agents(3)}
-            self.assertTrue(
-                set(runner.topology.worker_ids) <= scheduled,
-                "every degraded worker must be woken, not merely unblocked",
-            )
-
-    def test_degraded_workers_receive_a_goal(self):
-        """Worker instructions say to solve the one goal RecCli shows them.
-
-        Scheduling a worker with no bound goal wakes it with nothing to do.
-        """
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)
-            for worker_id in runner.topology.worker_ids:
-                goal = runner.worker_goals.get(worker_id)
-                self.assertIsNotNone(goal, f"{worker_id} has no goal")
-                self.assertEqual(goal.get("source"), "lead-fallback")
-
-    def test_degradation_is_recorded_not_silent(self):
-        """A run that only progressed via fallbacks must not read as healthy."""
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(1)
-            self.assertTrue(runner.degraded_delegations)
-            for item in runner.degraded_delegations:
-                self.assertIn("round", item)
-                self.assertIn("level", item)
-
-    def test_barrier_is_idempotent(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)
-            first = len(runner.degraded_delegations)
-            runner._assert_delegation_barrier(2)
-            self.assertEqual(len(runner.degraded_delegations), first)
-
-    def test_no_worker_is_ever_scheduled_without_a_goal(self):
-        """The failure the first fix actually caused.
-
-        Binding with no predicate selectors is unevaluable on any project
-        declaring more than one predicate, so every fallback was rejected and
-        every worker was still woken, told "do not perform substantive work",
-        and had each message it emitted dropped.
-        """
-        policy = {
-            "promotion_requires_goal_progress": True, "source_sha256": "x",
-            "evaluators": {"eval-v1": {
-                "id": "eval-v1", "profile_sha256": "a" * 64,
-                "immutable_ground_truth_sha256": "b" * 64,
-                "predicates": {
-                    f"p{i}": {"id": f"pred-{i}-v1",
-                              "goal_class": "production_pipeline",
-                              "comparison_rule_id": "gte"}
-                    for i in range(6)
-                }}},
-        }
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner.experiment_policy = policy
-            runner._assert_delegation_barrier(2)
-            scheduled = [
-                agent.agent_id for agent in runner._select_agents(3)
-                if agent.agent_id in runner.topology.worker_ids
-            ]
-            for worker_id in scheduled:
-                self.assertTrue(
-                    runner._goal_is_active(runner.worker_goals.get(worker_id)),
-                    f"{worker_id} was scheduled with no active goal",
-                )
-
-    def test_recorded_degradations_match_workers_that_got_work(self):
-        """The terminal record must not overstate what happened."""
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)
-            recorded = {
-                item["agent_id"] for item in runner.degraded_delegations
-                if item["agent_id"] in runner.topology.worker_ids
-            }
-            with_goals = {
-                worker_id for worker_id in runner.topology.worker_ids
-                if runner._goal_is_active(runner.worker_goals.get(worker_id))
-            }
-            self.assertEqual(recorded, with_goals)
-
-    def test_each_degraded_worker_gets_a_distinct_work_item(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)
-            items = [
-                runner.worker_goals[worker_id]["work_item"]
-                for worker_id in runner.topology.worker_ids
-                if runner.worker_goals.get(worker_id)
-            ]
-            self.assertEqual(len(items), len(set(items)))
-
-    def test_the_barrier_never_raises_even_when_binding_explodes(self):
-        """The barrier exists to stop one failure ending the run."""
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-
-            def boom(**kwargs):
-                raise RuntimeError("evaluator subprocess exploded")
-
-            runner._bind_worker_goal = boom
-            runner._assert_delegation_barrier(2)  # must not raise
-
-    def test_a_manager_can_reclaim_a_degraded_worker(self):
-        """The fallback goal must be provisional, not equal to a real one.
-
-        Binding it with force=True made it indistinguishable from a manager
-        assignment, so the manager's later correct delegation was refused for the
-        rest of the run and the worker stayed on a generic fallback objective.
-        The barrier exists to stop the coordination layer killing a run; it must
-        not stop the coordination layer recovering.
-        """
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-            runner._assert_delegation_barrier(2)
-            self.assertEqual(
-                runner.worker_goals["worker-a"]["source"], "lead-fallback",
-            )
-            accepted, reason = runner._bind_worker_goal(
-                worker_id="worker-a", manager_id="manager-a",
-                work_item="real/worker-a/gate",
-                objective="Fix the tolerance comparison and pass its focused test.",
-                risk="routine", round_number=3,
-            )
-            self.assertTrue(accepted, reason)
-            self.assertEqual(
-                runner.worker_goals["worker-a"]["work_item"], "real/worker-a/gate",
-            )
-
-    def test_a_raising_bind_is_not_reported_as_success(self):
-        """Goals are recorded before their baseline is captured.
-
-        Reading the resulting state as success turned a goal with no baseline
-        into a reported delegation, and every candidate it produced then died on
-        "goal baseline is missing".
-        """
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root)
-
-            def bind_then_raise(**kwargs):
-                runner.worker_goals[kwargs["worker_id"]] = {
-                    "work_item": kwargs["work_item"], "status": "active",
-                    "source": kwargs["source"],
-                }
-                raise RuntimeError("evaluator could not execute")
-
-            runner._bind_worker_goal = bind_then_raise
-            runner._assert_delegation_barrier(2)
-
-            self.assertEqual(runner.degraded_delegations, [])
-            self.assertEqual(
-                [w for w in runner.topology.worker_ids
-                 if runner.worker_goals.get(w)], [],
-                "a partially bound goal must not survive",
-            )
-            self.assertEqual(
-                [a.agent_id for a in runner._select_agents(3)
-                 if a.agent_id in runner.topology.worker_ids], [],
-            )
-
-    def test_a_properly_delegated_round_records_nothing(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            runner = self._runner(root, topology="scientific")
-            for manager_id in ("manager-a", "manager-b"):
-                runner.inboxes[manager_id] = [{
-                    "from": "lead", "to": manager_id, "tag": "plan",
-                    "content": "Refine the lane.", "candidate": None,
-                    "workItem": f"map-{manager_id}", "risk": "routine",
-                }]
-            runner._assert_delegation_barrier(1)
-            self.assertEqual(runner.degraded_delegations, [])
 
 
 class RejectedCandidateSeedingTests(unittest.TestCase):
@@ -402,12 +174,11 @@ class RejectedCandidateSeedingTests(unittest.TestCase):
 class FlatTopologyTests(unittest.TestCase):
     """Defect 2. Management took 50 of 64 turns; one worker took a single turn."""
 
-    def test_flat_is_a_first_class_topology(self):
+    def test_flat_is_the_only_topology(self):
         topology = get_topology("flat")
         self.assertEqual(topology.topology_id, "flat")
         self.assertEqual(topology.manager_ids, [])
         self.assertEqual(topology.primary_manager_by_worker, {})
-        self.assertFalse(topology.delegation_gate)
 
     def test_flat_has_independent_auditors_that_cannot_promote(self):
         topology = get_topology("flat")
@@ -476,32 +247,28 @@ class FlatTopologyTests(unittest.TestCase):
 
     def test_a_worker_still_cannot_message_a_peer(self):
         """Relaxing the routing must not open worker-to-worker traffic."""
-        for topology in ("flat", "scientific"):
-            with tempfile.TemporaryDirectory() as td:
-                root = Path(td)
-                _init_project(root)
-                runner = OrganizationRunner(
-                    root, "m", "claude", topology, f"peer-{topology}",
-                    root / "run", max_experiments=3,
-                )
-                runner._deliver_message("worker-a", {
-                    "from": "worker-a", "to": "worker-b", "tag": "handoff",
-                    "content": "x", "candidate": "c2", "workItem": "t",
-                    "risk": "routine",
-                }, 2)
-                messages = [
-                    json.loads(line) for line in
-                    (runner.run_dir / "messages.jsonl").read_text().splitlines()
-                ]
-                peer = [m for m in messages if m.get("to") == "worker-b"]
-                self.assertTrue(peer, topology)
-                self.assertEqual(peer[0]["status"], "dropped", topology)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = OrganizationRunner(
+                root, "m", "claude", "flat", "peer-flat",
+                root / "run", max_experiments=3,
+            )
+            runner._deliver_message("worker-a", {
+                "from": "worker-a", "to": "worker-b", "tag": "handoff",
+                "content": "x", "candidate": "c2", "workItem": "t",
+                "risk": "routine",
+            }, 2)
+            messages = [
+                json.loads(line) for line in
+                (runner.run_dir / "messages.jsonl").read_text().splitlines()
+            ]
+            peer = [m for m in messages if m.get("to") == "worker-b"]
+            self.assertTrue(peer)
+            self.assertEqual(peer[0]["status"], "dropped")
 
     def test_supervisor_resolves_to_the_lead_without_managers(self):
         self.assertEqual(_supervisor_of(get_topology("flat"), "worker-a"), "lead")
-        self.assertEqual(
-            _supervisor_of(get_topology("scientific"), "worker-a"), "manager-a",
-        )
 
     def test_flat_handoffs_route_to_an_auditor(self):
         """Auditors exist to review; without routing they would never work."""
@@ -528,19 +295,12 @@ class FlatTopologyTests(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertIn("lead", reason)
 
-    def test_hierarchical_topologies_are_unchanged(self):
-        for name in ("google-rotating", "scientific"):
-            topology = get_topology(name)
-            self.assertTrue(topology.manager_ids, name)
-            self.assertTrue(topology.delegation_gate, name)
-
-
 class NoExperimentContractTests(unittest.TestCase):
     """Defect 5. Both runs used 0 of 3 bundles and ran to the round limit anyway."""
 
     def _runner(self, root, **kwargs):
         return OrganizationRunner(
-            root, "m", "claude", "scientific", "r", root / "run", **kwargs,
+            root, "m", "claude", "flat", "r", root / "run", **kwargs,
         )
 
     def test_status_is_terminal_and_distinct(self):
@@ -641,7 +401,8 @@ class NoExperimentContractTests(unittest.TestCase):
             self.assertFalse(runner._experiment_contract_deadline_passed(99))
 
     def test_a_run_too_short_for_workers_never_trips(self):
-        """max_rounds=2 never reaches round 3, when gated workers first act.
+        """Flat workers first act in round 2, so max_rounds=2 gives them at
+        most one round of their own.
 
         Reporting no_experiment_contract there would blame the run for a budget
         it was never given.
@@ -651,20 +412,19 @@ class NoExperimentContractTests(unittest.TestCase):
             _init_project(root)
             runner = self._runner(root, max_experiments=3, max_rounds=2)
             runner.experiment_policy = {"source_sha256": "x"}
-            self.assertTrue(runner.topology.delegation_gate)
             self.assertFalse(runner._experiment_contract_deadline_passed(99))
 
     def test_workers_get_at_least_two_rounds_before_the_deadline(self):
         """Checked at the END of a round, so the deadline round itself runs.
 
-        Gated workers first act in round 3; a deadline of 4 evaluated at the top
-        of the round gave them exactly one round to produce anything.
+        Flat workers first act in round 2; the deadline must leave them at
+        least two rounds of their own to produce anything.
         """
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _init_project(root)
             runner = self._runner(root, max_experiments=3, max_rounds=8)
-            first_worker_round = 3 if runner.topology.delegation_gate else 2
+            first_worker_round = 2
             self.assertGreaterEqual(
                 runner._experiment_contract_deadline - first_worker_round + 1, 2,
             )

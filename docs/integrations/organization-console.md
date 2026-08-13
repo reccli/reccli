@@ -35,21 +35,41 @@ promotion-ready or approval-pending runs cannot trigger this continuation.
 
 ## Layout
 
-- The top rail contains the lead and eight team members. Selecting a person
+- The top rail contains the lead, six workers, and two independent auditors
+  (the flat fleet is the only organization structure). Selecting a person
   changes the operator target.
 - The left pane is the operator conversation: human steering messages,
   acknowledgements, and public organization traffic involving the selected
   agent.
-- The right pane contains eight independently scrolling work streams. Each
-  stream shows the primary-manager assignment, live operational activity,
-  durable turn summaries, routed messages, provider, state, errors, and
-  artifacts.
+- The right pane contains independently scrolling work streams. Each stream
+  shows the lead's assignment, live operational activity, durable turn
+  summaries, routed messages, provider, state, errors, and artifacts.
 - Hidden model reasoning is never exposed. Only durable operational records are
   displayed.
 
+## Admission and outcomes
+
+Every launch passes a host-enforced admission gate: a named downstream
+consumer, one of six meaningful-work classes, a falsifiable done condition,
+and stop conditions, validated in host code before any filesystem effect and
+rendered into every bootstrap prompt. Terminal continuations carry the parent
+run's admission contract.
+
+The lead may end a run as `completed_no_op` when the done condition is already
+satisfied or a stop condition holds. Stopping is a successful outcome; it is
+recorded before any fallback machinery can manufacture work, and chains of
+no-op successors decline auto-continuation.
+
+Every terminal run, every human approval, and every rejection appends to the
+project-level outcome ledger
+(`devsession/agent-organizations/outcome-ledger.jsonl`). A candidate is
+credited only when a human merges it or an approved successor consumes it;
+`organization list` reports productive runs, waste runs, the waste rate, and
+total versus wasted tokens.
+
 ## Approval staging
 
-When the only remaining dependency is human authority, the release manager
+When the only remaining dependency is human authority, the lead
 writes a reviewed dossier and closes the run as `completed_pending_human`.
 The console renders a single approval page containing:
 
@@ -84,7 +104,8 @@ devsession/agent-organizations/<run-id>/run-conclusion.md
 ```
 
 For normal completion, reviewed `completed_no_promotion`,
-`completed_pending_human`, round-limit, and stalled outcomes, RecCli gives the
+`completed_pending_human`, `completed_no_op`, round-limit, and stalled
+outcomes, RecCli gives the
 organization lead one final read-only
 synthesis pass outside the configured working-round and closeout budgets. The
 report separates accomplishments, conclusive findings, evidence, scientific or
@@ -124,7 +145,7 @@ When a project opts into the autonomous experiment loop, the console also
 renders its host-owned baseline and trial ledger: the single mutable file,
 immutable evaluator, kept and discarded challengers, gates or metrics,
 duration, bounded patch shape, same-host resource fingerprint, SHA-256 chain
-status, and manager-wake reason. This is distinct from agent chat and does not
+status, and supervisor-wake reason. This is distinct from agent chat and does not
 depend on a model summarizing its own progress.
 
 The runner also publishes `host-state.json`, a host-owned mechanical brief for
@@ -169,39 +190,31 @@ updated.
 
 ## Delegation and execution
 
-The hierarchy is an assignment dependency, not a ban on parallel execution:
+There is no management layer:
 
-1. The lead performs macro reconnaissance and delegates bounded outcomes to
-   managers.
-2. Managers refine those outcomes using their specialist context.
-3. A worker's first turn requires exactly one primary-manager goal with a named
-   `workItem`, observable problem-solving outcome, and risk.
-4. Once assigned, workers run in parallel on that goal and report only through
-   their primary manager.
-5. The lead wakes on manager research, manager-summarized worker progress,
-   promotion decisions, or operator steering.
+1. The lead performs macro reconnaissance in round one and assigns every
+   worker one falsifiable question directly, with a named `workItem`,
+   observable problem-solving outcome, and risk. Goal-carrying traffic to a
+   worker from anyone else is dropped rather than waking the worker.
+2. Once assigned, workers run in parallel on that one goal and hand exact
+   candidates back to the lead. RecCli rejects standby, monitoring-only, and
+   no-action worker goals rather than manufacturing paper work.
+3. The lead is event-driven: saying `state=working` does not schedule another
+   turn without a new inbox event. Workers may continue their one active goal.
+4. When a worker notices an unrelated issue or a contradiction between context
+   sources, it sends one `flag` without changing scope. The flag is `raised`
+   until the lead acts on it: a lead `decision`, or a goal rebind, adjudicates
+   it directly.
+5. Candidate review is assigned to the non-release auditor; the release
+   auditor holds the final veto and must clear the exact candidate before
+   finalization. Veto auditors wake only for an exact candidate or release
+   dossier, and release closeout stops early when its structural progress
+   fingerprint is unchanged. Only implementation candidates advance that
+   fingerprint; artifact-only reports cannot buy rounds.
 
-The runner verifies the complete lead-to-manager map after round one and the
-complete manager-to-worker map after round two. A lane with no implementation
-work remains management state; RecCli rejects standby, monitoring-only, and
-no-action worker goals rather than manufacturing paper work. Missing goals fail
-the run before parallel execution instead of leaving agents to invent
-overlapping scopes.
-
-After that gate, lead and manager roles are event-driven: saying
-`state=working` does not schedule another turn without a new inbox event.
-Workers may continue their one active goal. When a worker notices an unrelated
-issue or a contradiction between context sources, it sends one `flag` without
-changing scope. The primary manager asks exactly one peer manager for
-validation, waits for the answer, and only then keeps or replaces the worker
-goal. Veto auditors wake only for an exact candidate or release dossier, and
-release closeout stops early when its structural progress fingerprint is
-unchanged.
-
-Alternate managers consult the primary manager; they cannot directly activate
-or redirect a worker. `goal-state.json` records the visible active goals,
-history, flags, and consultations. In the console, a `plan` steering message to
-a worker is an explicit human goal replacement.
+`goal-state.json` records the visible active goals, history, and flags. In the
+console, a `plan` steering message to a worker is an explicit human goal
+replacement.
 
 ## Control protocol
 
