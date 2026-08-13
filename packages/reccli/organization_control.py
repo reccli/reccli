@@ -736,10 +736,22 @@ def list_organization_runs(
                     )
                 ),
             })
+    outcomes = None
+    if project_root is not None:
+        try:
+            from .organization_outcomes import summarize_outcomes
+
+            outcomes = summarize_outcomes(project_root)
+        except Exception:
+            outcomes = None
     return {
         "status": "ok",
         "project_root": str(project_root) if project_root else None,
         "runs": runs,
+        # The value plane: how many terminal runs produced anything a human
+        # merged or a successor consumed, and what the rest cost. None until
+        # the first post-ledger run records an outcome.
+        "outcomes": outcomes,
     }
 
 
@@ -1282,6 +1294,26 @@ def approve_organization_request(
             "completed_at": _utc_now(),
         })
         _atomic_write_json(execution_path, execution)
+        try:
+            from .organization_outcomes import record_outcome_event
+
+            if action == "fast_forward_local":
+                record_outcome_event(
+                    project_root, "promotion_applied", resolved_run_id,
+                    candidate=request.get("proposed_promotion_candidate"),
+                    applied_commit=effect.get("applied_commit"),
+                    decided_by=requested_by,
+                )
+            else:
+                record_outcome_event(
+                    project_root, "candidate_used", resolved_run_id,
+                    used_by=effect.get("successor_run_id"),
+                    report_candidate=request.get("report_candidate"),
+                    decided_by=requested_by,
+                )
+        except Exception:
+            # The ledger measures decisions; it must never undo one.
+            pass
         return {
             **execution,
             "approval_decision": decision,
@@ -1422,6 +1454,17 @@ def reject_organization_candidate(
     ).encode("utf-8")
     decision["decision_sha256"] = hashlib.sha256(canonical).hexdigest()
     _atomic_write_json(decision_path, decision)
+    try:
+        from .organization_outcomes import record_outcome_event
+
+        record_outcome_event(
+            project_root, "promotion_rejected", resolved_run_id,
+            candidate=exact_candidate,
+            reason=exact_reason,
+            decided_by=requested_by,
+        )
+    except Exception:
+        pass
     return {
         "status": "rejected",
         "run_id": resolved_run_id,

@@ -30,6 +30,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .organization_admission import render_admission_prompt, validate_admission
+from .organization_outcomes import record_outcome_event
 from .project.devproject import discover_project_root
 
 
@@ -3917,6 +3918,24 @@ class OrganizationRunner:
             "conclusion_markdown": str(self.run_dir / "run-conclusion.md"),
         }
         self._write_json("result.json", result)
+        try:
+            record_outcome_event(
+                self.project_root, "run_terminal", self.run_id,
+                terminal_status=status,
+                work_class=(self.admission or {}).get("work_class"),
+                consumer=(
+                    (self.admission or {}).get("consumer") or {}
+                ).get("name"),
+                usage=dict(self.usage),
+                candidate_counts=self._candidate_counts(),
+                completed_turns=self.completed_turns,
+                promotion_readiness=conclusion.get("promotion_readiness"),
+                verified_candidate=verified_candidate,
+                promotion_candidate=promotion_candidate,
+            )
+        except Exception as exc:
+            # The ledger measures the run; it must never fail it.
+            self._event("outcome.ledger_failed", rounds, error=str(exc))
         self._status(
             status,
             round_number=rounds,

@@ -145,6 +145,23 @@ def main() -> int:
         }
         _write_status(status_path, failure)
         (run_dir / "worker_traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        try:
+            from .organization_outcomes import record_outcome_event
+
+            admission = request.get("admission") or {}
+            record_outcome_event(
+                Path(request["project_root"]), "run_terminal",
+                str(request.get("run_id") or run_dir.name),
+                terminal_status="failed",
+                work_class=admission.get("work_class"),
+                consumer=(admission.get("consumer") or {}).get("name"),
+                usage=current.get("usage") or {},
+                completed_turns=int(current.get("completed_turns", 0) or 0),
+                promotion_readiness=conclusion.get("promotion_readiness"),
+            )
+        except Exception:
+            # The ledger must never mask the original failure.
+            pass
         return 1
 
 

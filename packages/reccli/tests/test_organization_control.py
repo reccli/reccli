@@ -218,6 +218,23 @@ class OrganizationControlTests(unittest.TestCase):
             )
             self.assertFalse(snapshot["approval_capabilities"]["approve"])
             self.assertFalse(snapshot["approval_capabilities"]["reject"])
+            from reccli.organization_outcomes import outcome_ledger_path
+
+            events = [
+                json.loads(line)
+                for line in outcome_ledger_path(root).read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            rejections = [
+                event for event in events
+                if event["event"] == "promotion_rejected"
+            ]
+            self.assertEqual(
+                len(rejections), 1,
+                "idempotent replay must not double-log the rejection",
+            )
+            self.assertEqual(rejections[0]["candidate"], candidate)
 
     def test_verified_promotion_approval_fast_forwards_only_local_branch(self):
         with tempfile.TemporaryDirectory() as td:
@@ -328,6 +345,21 @@ class OrganizationControlTests(unittest.TestCase):
                 ).stdout.strip(),
                 candidate,
             )
+            from reccli.organization_outcomes import outcome_ledger_path
+
+            events = [
+                json.loads(line)
+                for line in outcome_ledger_path(root).read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            applied = [
+                event for event in events
+                if event["event"] == "promotion_applied"
+            ]
+            self.assertEqual(len(applied), 1)
+            self.assertEqual(applied[0]["candidate"], candidate)
+            self.assertEqual(applied[0]["run_id"], "promotion-approval")
 
     def test_terminal_approval_starts_fresh_successor_from_exact_packet(self):
         with tempfile.TemporaryDirectory() as td:
