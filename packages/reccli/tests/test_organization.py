@@ -4367,6 +4367,46 @@ class NoOpDispositionTests(unittest.TestCase):
             self.assertIn("geometry-eval-v1", prompt)
             self.assertIn("cone-parameter-v1", prompt)
 
+    def test_finalization_attempt_stands_down_the_contract_deadline(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "deadline"
+            runner = OrganizationRunner(
+                root, "Close the cylinder gate.", "claude",
+                "flat", "deadline", run_dir,
+                max_rounds=6, max_experiments=2,
+            )
+            runner.experiment_policy = {"evaluators": {}}
+            deadline = runner._experiment_contract_deadline
+            self.assertTrue(
+                runner._experiment_contract_deadline_passed(deadline),
+            )
+            runner._finalization_attempted = True
+            self.assertFalse(
+                runner._experiment_contract_deadline_passed(deadline),
+                "a run attempting terminal closure is not a run with "
+                "nothing to execute",
+            )
+
+    def test_finalizer_prompt_teaches_the_dossier_mechanics(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "recipe"
+            runner = OrganizationRunner(
+                root, "Close the cylinder gate.", "claude",
+                "flat", "recipe", run_dir,
+            )
+            runner.workspaces["lead"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            prompt = runner._build_prompt(
+                runner.topology.agent("lead"), [], 1, True,
+            )
+            self.assertIn("author the dossier YOURSELF", prompt)
+            self.assertIn(runner.governance.release_reviewer_id, prompt)
+
     def test_probe_outputs_on_a_status_reply_defer_sealing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

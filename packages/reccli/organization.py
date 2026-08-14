@@ -3002,6 +3002,7 @@ class OrganizationRunner:
         self.sessions: Dict[str, SubscriptionSession] = {}
         self.turned: Set[str] = set()
         self._consecutive_turn_failures: Dict[str, int] = {}
+        self._finalization_attempted = False
         self.prompt_bootstrapped: Set[str] = set()
         self.model_prompt_state_by_agent: Dict[str, Dict[str, Any]] = {}
         self.usage = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
@@ -3354,6 +3355,7 @@ class OrganizationRunner:
                         )
                 if reply["final"]:
                     final_attempts.append(item)
+                    self._finalization_attempted = True
 
             # A lead no_op is adjudicated before the delegation barrier: a run
             # whose lead just declared the admission's done condition satisfied
@@ -3821,6 +3823,14 @@ class OrganizationRunner:
         if self._experiment_contract_deadline < first_worker_round + 1:
             return False
         if round_number < self._experiment_contract_deadline:
+            return False
+        # A run attempting terminal closure is not a run with nothing to
+        # execute. Run five reached a scorer-limited finding in one recon turn
+        # and was mid-way through staging its no_promotion dossier when this
+        # deadline killed it: the dossier survived only as loose artifacts,
+        # the release review never ran, and the terminal read as generic
+        # no-contract instead of the reviewed negative result it was.
+        if self._finalization_attempted:
             return False
         return not self.experiment_contracts
 
@@ -7163,7 +7173,16 @@ candidate needs them. The context box is read-only."""
             "You alone may propose a terminal disposition for an exact reviewed "
             "candidate or terminal dossier. Use final=true, risk=release, the "
             f"exact candidate marker `{HOST_CANDIDATE}`, and disposition=promote, "
-            "no_promotion, or pending_human. Canonical effects remain human-owned."
+            "no_promotion, or pending_human. For a no_promotion or "
+            "pending_human closure, author the dossier YOURSELF as a file "
+            f"under `{self.artifact_staging_prefix}/` in your own worktree "
+            "(worker findings arrive in messages; restate them in the "
+            "dossier), then in the same reply send a release-risk review "
+            "request for the exact candidate to "
+            f"{self.governance.release_reviewer_id or 'the release auditor'}, "
+            "whose NO_VETO on that exact candidate must be recorded before "
+            "your final reply can close the run. Canonical effects remain "
+            "human-owned."
             if agent.agent_id == self.topology.finalizer_id
             else
             "Set final=false, disposition=continue, and top-level candidate/risk "
