@@ -53,6 +53,7 @@ CONTEXT_PACK_SCHEMA = "reccli.organization-context-packs.v1"
 HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
 DEFAULT_CLOSEOUT_ROUNDS = 4
 ACTIVITY_SCHEMA = "reccli.organization-activity.v1"
+GATE_PROPOSAL_SCHEMA = "reccli.organization-gate-proposal.v1"
 HOST_STATE_SCHEMA = "reccli.organization-host-state.v1"
 GOAL_STATE_SCHEMA = "reccli.organization-goals.v1"
 EXPERIMENT_RECORD_SCHEMA = "reccli.organization-experiment-record.v1"
@@ -235,6 +236,15 @@ RUN_CONCLUSION_SCHEMA: Dict[str, Any] = {
         "limitations": {
             "type": "array", "items": {"type": "string", "minLength": 1},
         },
+        # The compounding seam: a terminal lead may propose the successor
+        # run's admission contract (consumer, work_class, done_condition,
+        # stop_conditions). The host validates it like any admission and the
+        # continuation uses it in place of carrying the parent's verbatim,
+        # so an autonomous chain can re-scope each link. Null when the parent
+        # contract should simply carry.
+        "proposed_successor_admission": {
+            "anyOf": [{"type": "object"}, {"type": "null"}],
+        },
     },
     "required": [
         "summary",
@@ -247,6 +257,7 @@ RUN_CONCLUSION_SCHEMA: Dict[str, Any] = {
         "promotion_readiness",
         "next_action",
         "limitations",
+        "proposed_successor_admission",
     ],
     "additionalProperties": False,
 }
@@ -1486,6 +1497,15 @@ def validate_run_conclusion(value: Any) -> Dict[str, Any]:
     )
     if value["promotion_readiness"] not in readiness:
         raise ValueError("invalid run conclusion promotion_readiness")
+    proposal = value.get("proposed_successor_admission")
+    if proposal is not None:
+        try:
+            value["proposed_successor_admission"] = validate_admission(proposal)
+        except ValueError:
+            # An invalid proposal must not invalidate the terminal record;
+            # the continuation simply falls back to carrying the parent
+            # contract, and the raw text survives in the conclusion prose.
+            value["proposed_successor_admission"] = None
     return value
 
 
@@ -4302,6 +4322,103 @@ class OrganizationRunner:
         self._write_json("promotion-request.json", request)
         return request
 
+    def _extract_gate_proposal(
+        self, candidate: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Read a staged gate proposal from the exact report candidate tree.
+
+        Returns None when the candidate stages no proposal, a dict with an
+        "error" key when it stages a malformed one (surfaced to the human
+        reviewer instead of silently dropped), and the normalized manifest
+        otherwise. Validation of targets happens again on the control side at
+        apply time; this pass exists so the approval packet is honest.
+        """
+        workspace = self.workspaces[self.topology.finalizer_id]
+        manifest_path = (
+            f"{self.artifact_staging_prefix}/gate-proposal/gate-proposal.json"
+        )
+        proc = subprocess.run(
+            ["git", "show", f"{candidate}:{manifest_path}"],
+            cwd=workspace.cwd, capture_output=True, check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        try:
+            manifest = json.loads(proc.stdout.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {
+                "error": "gate proposal manifest is not valid JSON",
+                "manifest_path": manifest_path,
+            }
+        problems: List[str] = []
+        if manifest.get("schema") != GATE_PROPOSAL_SCHEMA:
+            problems.append(f"schema must be {GATE_PROPOSAL_SCHEMA}")
+        for field_name in (
+            "predicate_id", "evaluator_id", "rationale", "baseline_command",
+        ):
+            value = manifest.get(field_name)
+            if not isinstance(value, str) or not value.strip():
+                problems.append(f"{field_name} must be a non-empty string")
+        if not isinstance(
+            manifest.get("proposed_tolerance"), (int, float),
+        ):
+            problems.append("proposed_tolerance must be a number")
+        if "measured_baseline" not in manifest:
+            problems.append("measured_baseline is required")
+        files = manifest.get("files")
+        prefix = f"{self.artifact_staging_prefix}/gate-proposal/files/"
+        normalized_files: List[Dict[str, str]] = []
+        if not isinstance(files, list) or not files:
+            problems.append("files must be a non-empty list of {path, target}")
+        else:
+            for index, entry in enumerate(files):
+                path = entry.get("path") if isinstance(entry, dict) else None
+                target = (
+                    entry.get("target") if isinstance(entry, dict) else None
+                )
+                if not isinstance(path, str) or not path.startswith(prefix):
+                    problems.append(
+                        f"files[{index}].path must live under {prefix}"
+                    )
+                    continue
+                if (
+                    not isinstance(target, str)
+                    or not target.strip()
+                    or PurePosixPath(target).is_absolute()
+                    or ".." in PurePosixPath(target).parts
+                ):
+                    problems.append(
+                        f"files[{index}].target must be a repo-relative path "
+                        "without traversal"
+                    )
+                    continue
+                exists = subprocess.run(
+                    ["git", "cat-file", "-e", f"{candidate}:{path}"],
+                    cwd=workspace.cwd, capture_output=True, check=False,
+                )
+                if exists.returncode != 0:
+                    problems.append(
+                        f"files[{index}].path is not in the candidate tree"
+                    )
+                    continue
+                normalized_files.append({"path": path, "target": target})
+        if problems:
+            return {
+                "error": "; ".join(problems),
+                "manifest_path": manifest_path,
+            }
+        return {
+            "schema": GATE_PROPOSAL_SCHEMA,
+            "predicate_id": manifest["predicate_id"].strip(),
+            "evaluator_id": manifest["evaluator_id"].strip(),
+            "rationale": manifest["rationale"].strip(),
+            "baseline_command": manifest["baseline_command"].strip(),
+            "measured_baseline": manifest["measured_baseline"],
+            "proposed_tolerance": manifest["proposed_tolerance"],
+            "files": normalized_files,
+            "manifest_path": manifest_path,
+        }
+
     def _write_pending_human_approval_request(
         self,
         report_candidate: str,
@@ -4397,6 +4514,13 @@ class OrganizationRunner:
                 )
             },
             "review_record": self.governance.snapshot(),
+            # The frontier seam: a run may stage a proposed capability gate
+            # (predicate, evaluator wiring, fixture files) under its artifact
+            # staging. The org can never apply it — the files target protected
+            # paths — but the human approval click can. None when the
+            # candidate stages no proposal; an "error" field when it staged a
+            # malformed one, so the reviewer sees why nothing will apply.
+            "gate_proposal": self._extract_gate_proposal(report_candidate),
             "action": {
                 "type": "start_successor",
                 "remote_push": False,
@@ -9054,6 +9178,7 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             ],
             "promotion_readiness": readiness,
             "next_action": next_action,
+            "proposed_successor_admission": None,
             "limitations": [
                 reason,
                 (
@@ -9116,7 +9241,14 @@ product blockers from infrastructure failures. Never describe an artifact-only
 or identity-only commit as an implementation candidate. Treat the host-supplied
 promotion readiness, exact candidate identities, turn counts, and artifact
 paths as authoritative. State uncertainty plainly and recommend exactly one
-smallest next action. Rounds and agent turns are different units: this run used
+smallest next action.
+
+If, and only if, this run's findings define a sharper next mission, set
+proposed_successor_admission to a complete admission block (consumer,
+work_class, done_condition, stop_conditions) scoped to that one next mission;
+the host validates it and an autonomous continuation will use it. Set it to
+null when the standing contract should simply carry. Do not propose work this
+run's evidence does not support. Rounds and agent turns are different units: this run used
 {digest['working_rounds']} working rounds and {digest['closeout_rounds']}
 closeout rounds, containing {digest['turn_counts']['completed']} completed agent
 turns. Never describe a round limit as a turn limit.

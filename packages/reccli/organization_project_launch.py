@@ -938,28 +938,40 @@ def _apply_terminal_continuation(
         )
     updated = dict(arguments)
     updated["mission"] = _continuation_mission(root, terminal, selection)
-    # The admission contract is mission-level authority and outlives the
-    # derived successor mission: same consumer, class, done and stop
-    # conditions. A contract-supplied admission wins; otherwise the parent's
-    # recorded admission carries. A parent that predates admission carries
-    # nothing, and the launch gate then demands one from the contract instead
-    # of fabricating consent.
+    # Successor admission resolution, in order of authority: an explicit
+    # contract-supplied admission wins; then a valid
+    # proposed_successor_admission from the terminal lead conclusion (the
+    # compounding seam that lets an autonomous chain re-scope each link);
+    # then the parent's recorded contract carries verbatim. A parent that
+    # predates admission carries nothing, and the launch gate then demands
+    # one from the contract instead of fabricating consent.
     if not updated.get("admission"):
-        parent_admission_path = (
-            root / "devsession" / "agent-organizations"
-            / terminal["run_id"] / "admission.json"
-        )
-        parent_admission = None
-        if parent_admission_path.is_file():
+        proposed = conclusion.get("proposed_successor_admission")
+        if isinstance(proposed, dict):
             try:
-                parent_admission = json.loads(
-                    parent_admission_path.read_text(encoding="utf-8")
+                carried = admission_for_continuation(
+                    proposed, terminal["run_id"],
                 )
-            except (OSError, json.JSONDecodeError):
-                parent_admission = None
-        carried = admission_for_continuation(
-            parent_admission, terminal["run_id"],
-        )
+            except ValueError:
+                carried = None
+        else:
+            carried = None
+        if carried is None:
+            parent_admission_path = (
+                root / "devsession" / "agent-organizations"
+                / terminal["run_id"] / "admission.json"
+            )
+            parent_admission = None
+            if parent_admission_path.is_file():
+                try:
+                    parent_admission = json.loads(
+                        parent_admission_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError):
+                    parent_admission = None
+            carried = admission_for_continuation(
+                parent_admission, terminal["run_id"],
+            )
         if carried is not None:
             updated["admission"] = carried
     updated["continuation_from_run_id"] = terminal["run_id"]

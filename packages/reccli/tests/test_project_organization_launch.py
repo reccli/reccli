@@ -11,6 +11,7 @@ from unittest.mock import patch
 from reccli.organization_project_launch import (
     PROJECT_LAUNCH_FILENAME,
     ProjectOrganizationLaunchError,
+    _apply_terminal_continuation,
     _continuation_mission,
     start_project_organization,
 )
@@ -147,6 +148,8 @@ def _write_terminal_run(
     status: str = "round_limit",
     readiness: str = "not_ready",
     generated_by: str = "lead",
+    proposed_admission: dict | None = None,
+    parent_admission: dict | None = None,
 ) -> Path:
     run_dir = root / "devsession" / "agent-organizations" / run_id
     run_dir.mkdir(parents=True)
@@ -220,7 +223,13 @@ def _write_terminal_run(
         "round_counts": {"total": 12, "working": 8, "closeout": 4},
         "experiment_budget": {"maximum": 3, "used": 1, "remaining": 2},
         "canonical_effects_applied": False,
+        "proposed_successor_admission": proposed_admission,
     }
+    if parent_admission is not None:
+        (run_dir / "admission.json").write_text(
+            json.dumps(parent_admission, indent=2) + "\n",
+            encoding="utf-8",
+        )
     (run_dir / "run-conclusion.json").write_text(
         json.dumps(conclusion, indent=2) + "\n",
         encoding="utf-8",
@@ -462,6 +471,79 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
             self.assertLessEqual(len(second), len(first) + 100)
             self.assertNotIn("historical recursive material", first)
             self.assertEqual(first.count("## Required final output"), 1)
+
+    def test_continuation_prefers_the_conclusions_proposed_admission(self):
+        parent = {
+            "consumer": {
+                "name": "will", "type": "human",
+                "intended_use": "review and merge the promotion this week",
+            },
+            "work_class": "deployable_artifact",
+            "done_condition": "the standing predicate passes from a clean checkout",
+            "stop_conditions": ["no improvement after two contracts"],
+        }
+        proposed = {
+            "consumer": {
+                "name": "will", "type": "human",
+                "intended_use": "ratify the proposed capability gate this week",
+            },
+            "work_class": "hypothesis_test",
+            "done_condition": (
+                "a ratifiable predicate exists with fixture, baseline, and "
+                "tolerance"
+            ),
+            "stop_conditions": ["the fixture cannot be derived from real scans"],
+        }
+        policy = {
+            "mode": "latest-terminal-conclusion",
+            "eligible_statuses": {"round_limit"},
+            "eligible_promotion_readiness": {"not_ready"},
+            "carry_experiment_budget": False,
+        }
+        def _commit_seed(root: Path) -> None:
+            (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "seed.txt"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "seed"], cwd=root, check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _commit_seed(root)
+            _write_terminal_run(
+                root,
+                proposed_admission=proposed,
+                parent_admission=parent,
+            )
+            updated, _ = _apply_terminal_continuation(
+                root,
+                {"working_directory": str(root)},
+                {"mission_id": "m", "state_fingerprint": "f"},
+                policy,
+            )
+            self.assertEqual(
+                updated["admission"]["work_class"], "hypothesis_test",
+                "a valid conclusion proposal must outrank the parent carry",
+            )
+            self.assertEqual(
+                updated["admission"]["carried_from_run_id"], "terminal-parent",
+            )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _commit_seed(root)
+            _write_terminal_run(root, parent_admission=parent)
+            updated, _ = _apply_terminal_continuation(
+                root,
+                {"working_directory": str(root)},
+                {"mission_id": "m", "state_fingerprint": "f"},
+                policy,
+            )
+            self.assertEqual(
+                updated["admission"]["work_class"], "deployable_artifact",
+                "without a proposal the parent contract carries",
+            )
 
     def test_terminal_continuation_carries_binding_human_rejection(self):
         with tempfile.TemporaryDirectory() as td:

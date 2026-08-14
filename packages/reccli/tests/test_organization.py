@@ -87,6 +87,7 @@ def _conclusion(summary="The bounded run produced a useful result."):
         "promotion_readiness": "not_ready",
         "next_action": "Review the exact failing receipt.",
         "limitations": ["No canonical effects were applied."],
+        "proposed_successor_admission": None,
     }
 
 
@@ -4232,6 +4233,109 @@ class DeadLaneReleaseTests(unittest.TestCase):
                 runner._consecutive_turn_failures["lead"], 2,
             )
             self.assertEqual(runner.inboxes["lead"], [])
+
+
+class GateProposalExtractionTests(unittest.TestCase):
+    def _runner_with_commit(self, root, manifest_text=None):
+        run_dir = root / "devsession" / "agent-organizations" / "gate"
+        runner = OrganizationRunner(
+            root, "Author the next gate.", "claude", "flat", "gate", run_dir,
+        )
+        runner.workspaces["lead"] = Workspace(root, "test", "test-main", root, [])
+        staging = root / runner.artifact_staging_prefix / "gate-proposal"
+        (staging / "files").mkdir(parents=True)
+        (staging / "files" / "predicate.json").write_text(
+            '{"id": "shell-detection-v1", "tolerance": 1e-3}\n',
+            encoding="utf-8",
+        )
+        if manifest_text is None:
+            manifest_text = json.dumps({
+                "schema": "reccli.organization-gate-proposal.v1",
+                "predicate_id": "shell-detection-v1",
+                "evaluator_id": "geometry-eval-v1",
+                "rationale": "Real-scan shell fixtures need a declared gate.",
+                "baseline_command": ".venv/bin/python scripts/score.py",
+                "measured_baseline": 0.42,
+                "proposed_tolerance": 0.001,
+                "files": [{
+                    "path": (
+                        f"{runner.artifact_staging_prefix}/gate-proposal/"
+                        "files/predicate.json"
+                    ),
+                    "target": "benchmarks/gates/shell-detection-v1.json",
+                }],
+            })
+        (staging / "gate-proposal.json").write_text(
+            manifest_text + "\n", encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "stage gate proposal"],
+            cwd=root, check=True,
+        )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return runner, head
+
+    def test_staged_proposal_is_extracted_and_normalized(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, head = self._runner_with_commit(root)
+            proposal = runner._extract_gate_proposal(head)
+            self.assertEqual(proposal["predicate_id"], "shell-detection-v1")
+            self.assertEqual(
+                proposal["files"][0]["target"],
+                "benchmarks/gates/shell-detection-v1.json",
+            )
+            self.assertNotIn("error", proposal)
+
+    def test_candidate_without_proposal_returns_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "gate"
+            runner = OrganizationRunner(
+                root, "Author the next gate.", "claude",
+                "flat", "gate", run_dir,
+            )
+            runner.workspaces["lead"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertIsNone(runner._extract_gate_proposal(head))
+
+    def test_traversal_target_is_reported_not_applied(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, head = self._runner_with_commit(
+                root,
+                manifest_text=json.dumps({
+                    "schema": "reccli.organization-gate-proposal.v1",
+                    "predicate_id": "shell-detection-v1",
+                    "evaluator_id": "geometry-eval-v1",
+                    "rationale": "Real-scan shell fixtures need a gate.",
+                    "baseline_command": ".venv/bin/python scripts/score.py",
+                    "measured_baseline": 0.42,
+                    "proposed_tolerance": 0.001,
+                    "files": [{
+                        "path": (
+                            ".reccli-org-artifacts/gate/gate-proposal/"
+                            "files/predicate.json"
+                        ),
+                        "target": "../outside/escape.json",
+                    }],
+                }),
+            )
+            proposal = runner._extract_gate_proposal(head)
+            self.assertIn("error", proposal)
+            self.assertIn("traversal", proposal["error"])
 
 
 class StrictSchemaConformanceTests(unittest.TestCase):

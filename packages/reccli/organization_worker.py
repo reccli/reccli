@@ -98,6 +98,7 @@ def main() -> int:
                 "repair the supervisor failure, and retry from a clean "
                 "checkpoint."
             ),
+            "proposed_successor_admission": None,
             "limitations": [
                 (
                     "This is a conservative host fallback; the lead could not "

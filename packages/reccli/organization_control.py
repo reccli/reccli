@@ -1036,6 +1036,63 @@ def _approval_decision(
     return decision
 
 
+def _apply_gate_proposal(
+    project_root: Path,
+    request: Dict[str, Any],
+    gate: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Apply a human-ratified gate proposal from the exact approved candidate.
+
+    The org stages proposed gate files (predicate policy edits, fixtures,
+    scorer wiring) under its artifact staging, where its write scope allows;
+    only this function, running on the human approval click, may place them
+    at their protected-path targets. Content comes from the approved
+    candidate's git tree byte-for-byte, never from the working directory.
+    """
+    candidate = str(request.get("report_candidate") or "")
+    applied: List[str] = []
+    for entry in gate.get("files") or []:
+        source = str(entry.get("path") or "")
+        target = str(entry.get("target") or "")
+        parts = Path(target).parts
+        if not target or Path(target).is_absolute() or ".." in parts:
+            raise RuntimeError(
+                f"gate proposal target escapes the repository: {target!r}"
+            )
+        blob = subprocess.run(
+            ["git", "cat-file", "-p", f"{candidate}:{source}"],
+            cwd=project_root, capture_output=True, check=False,
+        )
+        if blob.returncode != 0:
+            raise RuntimeError(
+                f"gate proposal file is not in the approved candidate: {source}"
+            )
+        destination = project_root / target
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(blob.stdout)
+        applied.append(target)
+    if not applied:
+        return {}
+    _git_text(project_root, ["add", "--", *applied])
+    _git_text(project_root, [
+        "-c", "user.name=reccli", "-c", "user.email=reccli@local",
+        "-c", "commit.gpgsign=false",
+        "commit", "--no-verify", "--no-gpg-sign", "-m",
+        (
+            f"reccli: ratify gate {gate.get('predicate_id')} "
+            f"from run {request.get('run_id')}"
+        ),
+    ])
+    return {
+        "gate_applied": True,
+        "gate_predicate_id": gate.get("predicate_id"),
+        "gate_applied_commit": _git_text(
+            project_root, ["rev-parse", "HEAD"],
+        ).strip(),
+        "gate_files": applied,
+    }
+
+
 def _start_approved_successor(
     project_root: Path,
     request: Dict[str, Any],
@@ -1052,6 +1109,19 @@ def _start_approved_successor(
     decision_sha = str(
         (_read_json(decision_path, {}) or {}).get("decision_sha256") or "",
     )
+    gate = request.get("gate_proposal")
+    gate_effect: Dict[str, Any] = {}
+    if isinstance(gate, dict) and not gate.get("error"):
+        gate_effect = _apply_gate_proposal(project_root, request, gate)
+    gate_note = (
+        (
+            "\nYour approval also ratified and locally applied the proposed "
+            f"gate `{gate_effect.get('gate_predicate_id')}` at commit "
+            f"`{gate_effect.get('gate_applied_commit')}`; the successor "
+            "works against it.\n"
+        )
+        if gate_effect.get("gate_applied") else ""
+    )
     mission = f"""# Human-approved continuation
 
 The operator approved the exact checkpoint request from predecessor run
@@ -1066,7 +1136,7 @@ Treat only that exact decision as approved. It does not authorize remote push,
 mutation of protected evidence, or scientific claims beyond the reviewed
 dossier. This is a fresh organization; do not attempt to resume the predecessor
 supervisor.
-
+{gate_note}
 # Original mission
 
 {original_mission}
@@ -1127,6 +1197,7 @@ supervisor.
         "successor_run_id": successor["run_id"],
         "successor_run_dir": successor["run_dir"],
         "successor_pid": launched["pid"],
+        **gate_effect,
     }
 
 
