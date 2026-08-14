@@ -3953,6 +3953,7 @@ class OrganizationRunner:
         """
         workspace = self.workspaces[agent.agent_id]
         sources: List[Tuple[str, Path]] = []
+        stale: List[str] = []
         seen: Set[Path] = set()
         for raw in reply["artifacts"]:
             if not isinstance(raw, str) or not raw.strip():
@@ -3967,7 +3968,14 @@ class OrganizationRunner:
                     f"generated artifact must be inside the agent worktree: {source}"
                 )
             if not source.exists():
-                raise RuntimeError(f"reported generated artifact does not exist: {source}")
+                # After a host discard-and-reset, the model's memory of its
+                # artifact paths is stale through no fault of its own, and
+                # raising here killed the corrective turn of the run that
+                # produced the first real candidate. A stale path is skipped
+                # and recorded; if it was load-bearing evidence, the sealed
+                # bundle will visibly lack it at review.
+                stale.append(str(supplied))
+                continue
             relative = source.relative_to(workspace.cwd.resolve()).as_posix()
             if self._artifact_path(relative):
                 # Native agents commonly cite their durable tracked report in
@@ -3982,6 +3990,13 @@ class OrganizationRunner:
             if source not in seen:
                 seen.add(source)
                 sources.append((relative, source))
+        if stale:
+            self._event(
+                "artifacts.stale_reported_paths",
+                round_number,
+                agent_id=agent.agent_id,
+                paths=stale,
+            )
         if not sources:
             return None
         handoffs = [
@@ -7120,7 +7135,23 @@ candidate needs them. The context box is read-only."""
                 f"Evaluator policy: `{self.experiment_policy_path}`. "
                 "Use an autonomous contract only after binding one existing "
                 "goal to one declared predicate; contract details and limits "
-                f"are durable in `{self.run_dir / 'run.json'}`."
+                f"are durable in `{self.run_dir / 'run.json'}`. "
+                # The exact ids, inline: a lead once bound the policy FILENAME
+                # as evaluatorId, the delegation was rejected, and the round
+                # was lost. Never make the model guess an identifier the host
+                # already knows.
+                "Declared ids (use these exact strings for evaluatorId and "
+                "predicateId): " + "; ".join(
+                    f"evaluator `{evaluator_id}` with predicates " + ", ".join(
+                        f"`{predicate_id}`" for predicate_id in sorted(
+                            profile.get("predicates") or {}
+                        )
+                    )
+                    for evaluator_id, profile in sorted(
+                        (self.experiment_policy or {})
+                        .get("evaluators", {}).items()
+                    )
+                )
             )
         web_note = (
             "External research is available. Use primary sources only for a "

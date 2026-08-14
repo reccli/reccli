@@ -4307,6 +4307,66 @@ class NoOpDispositionTests(unittest.TestCase):
         self.assertEqual(normalized["disposition"], "no_op")
         self.assertTrue(normalized["final"])
 
+    def test_stale_reported_paths_skip_sealing_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "stale"
+            runner = OrganizationRunner(
+                root, "Close the cone gate.", "claude",
+                "flat", "stale", run_dir,
+            )
+            runner.workspaces["worker-a"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            reply = _reply()
+            reply["artifacts"] = ["discarded-by-host-reset.json"]
+            bundle = runner._seal_reported_artifacts(
+                runner.topology.agent("worker-a"), reply, 4,
+            )
+            self.assertIsNone(
+                bundle,
+                "a stale path after host discard-and-reset must be skipped, "
+                "not fail the turn",
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "events.jsonl").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            self.assertTrue(any(
+                event["type"] == "artifacts.stale_reported_paths"
+                and event["paths"] == ["discarded-by-host-reset.json"]
+                for event in events
+            ))
+
+    def test_supervisor_experiment_note_names_the_declared_ids(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "ids"
+            runner = OrganizationRunner(
+                root, "Close the cone gate.", "claude",
+                "flat", "ids", run_dir,
+            )
+            runner.experiment_policy_path = "experiment-policy.json"
+            runner.experiment_policy = {
+                "evaluators": {
+                    "geometry-eval-v1": {
+                        "predicates": {"cone-parameter-v1": {}},
+                    },
+                },
+            }
+            runner.workspaces["lead"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            prompt = runner._build_prompt(
+                runner.topology.agent("lead"), [], 1, True,
+            )
+            self.assertIn("geometry-eval-v1", prompt)
+            self.assertIn("cone-parameter-v1", prompt)
+
     def test_probe_outputs_on_a_status_reply_defer_sealing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
