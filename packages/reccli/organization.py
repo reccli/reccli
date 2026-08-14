@@ -4365,6 +4365,65 @@ class OrganizationRunner:
             problems.append("proposed_tolerance must be a number")
         if "measured_baseline" not in manifest:
             problems.append("measured_baseline is required")
+        # Executable ratification: the owner must be able to judge "this gate
+        # discriminates" with one look and zero domain expertise. Every
+        # proposal ships a truth-exact case and a corrupted case with
+        # measured scores, and the host checks the arithmetic: truth-exact
+        # must score within the proposed tolerance, corrupted must not. The
+        # cylinder scorer — a ratified-wrong gate that measured tessellation
+        # fidelity while claiming to measure segmentation — would have failed
+        # this exact check: truth-exact input scored 61x its tolerance.
+        discrimination = manifest.get("discrimination")
+        tolerance = manifest.get("proposed_tolerance")
+        if not isinstance(discrimination, dict):
+            problems.append(
+                "discrimination proof is required: {truth_exact_command, "
+                "truth_exact_score, corrupted_command, corrupted_score}"
+            )
+        else:
+            for field_name in ("truth_exact_command", "corrupted_command"):
+                value = discrimination.get(field_name)
+                if not isinstance(value, str) or not value.strip():
+                    problems.append(
+                        f"discrimination.{field_name} must be a non-empty "
+                        "string"
+                    )
+            truth_score = discrimination.get("truth_exact_score")
+            corrupted_score = discrimination.get("corrupted_score")
+            if not isinstance(truth_score, (int, float)):
+                problems.append(
+                    "discrimination.truth_exact_score must be a number"
+                )
+            if not isinstance(corrupted_score, (int, float)):
+                problems.append(
+                    "discrimination.corrupted_score must be a number"
+                )
+            if (
+                isinstance(truth_score, (int, float))
+                and isinstance(tolerance, (int, float))
+                and truth_score > tolerance
+            ):
+                problems.append(
+                    "gate fails its own discrimination proof: truth-exact "
+                    f"input scores {truth_score}, above the proposed "
+                    f"tolerance {tolerance}"
+                )
+            if (
+                isinstance(corrupted_score, (int, float))
+                and isinstance(tolerance, (int, float))
+                and corrupted_score <= tolerance
+            ):
+                problems.append(
+                    "gate fails its own discrimination proof: the corrupted "
+                    f"case scores {corrupted_score}, within the proposed "
+                    f"tolerance {tolerance}, so the gate does not separate"
+                )
+        fools = manifest.get("what_fools_this_gate")
+        if not isinstance(fools, str) or len(fools.strip()) < 40:
+            problems.append(
+                "what_fools_this_gate must be a blind-spot analysis legible "
+                "to the owner (at least 40 characters)"
+            )
         files = manifest.get("files")
         prefix = f"{self.artifact_staging_prefix}/gate-proposal/files/"
         normalized_files: List[Dict[str, str]] = []
@@ -4415,6 +4474,17 @@ class OrganizationRunner:
             "baseline_command": manifest["baseline_command"].strip(),
             "measured_baseline": manifest["measured_baseline"],
             "proposed_tolerance": manifest["proposed_tolerance"],
+            "discrimination": {
+                "truth_exact_command": (
+                    discrimination["truth_exact_command"].strip()
+                ),
+                "truth_exact_score": discrimination["truth_exact_score"],
+                "corrupted_command": (
+                    discrimination["corrupted_command"].strip()
+                ),
+                "corrupted_score": discrimination["corrupted_score"],
+            },
+            "what_fools_this_gate": fools.strip(),
             "files": normalized_files,
             "manifest_path": manifest_path,
         }
@@ -9245,10 +9315,11 @@ smallest next action.
 
 If, and only if, this run's findings define a sharper next mission, set
 proposed_successor_admission to a complete admission block (consumer,
-work_class, done_condition, stop_conditions) scoped to that one next mission;
-the host validates it and an autonomous continuation will use it. Set it to
-null when the standing contract should simply carry. Do not propose work this
-run's evidence does not support. Rounds and agent turns are different units: this run used
+work_class, done_condition, stop_conditions) scoped to that one next mission
+in service of the same standing product goal; a proposal is a refinement,
+never a pivot. The host validates it and an autonomous continuation will use
+it. Set it to null when the standing contract should simply carry. Do not
+propose work this run's evidence does not support. Rounds and agent turns are different units: this run used
 {digest['working_rounds']} working rounds and {digest['closeout_rounds']}
 closeout rounds, containing {digest['turn_counts']['completed']} completed agent
 turns. Never describe a round limit as a turn limit.

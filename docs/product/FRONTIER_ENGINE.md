@@ -66,11 +66,33 @@ Manifest schema (`reccli.organization-gate-proposal.v1`):
   "baseline_command": "how the baseline was measured",
   "measured_baseline": 0.42,
   "proposed_tolerance": 0.001,
+  "discrimination": {
+    "truth_exact_command": "how the truth-exact case was scored",
+    "truth_exact_score": 0.0000004,
+    "corrupted_command": "how the corrupted case was scored",
+    "corrupted_score": 0.31
+  },
+  "what_fools_this_gate": "the proposal's own blind-spot analysis, legible to the owner",
   "files": [
     {"path": "<staging path>", "target": "<repo-relative protected path>"}
   ]
 }
 ```
+
+### Executable ratification
+
+The click is the only place law enters the system, so ratification must be
+judgeable without domain expertise. Every proposal ships a discrimination
+proof: a truth-exact case and a corrupted case with measured scores, and the
+host checks the arithmetic mechanically: truth-exact must score within the
+proposed tolerance, corrupted must not. A gate that fails its own proof is
+an error in the packet, not a judgment call for the owner. The cylinder
+scorer is the canonical example: a ratified-wrong gate that claimed to
+measure segmentation and actually measured tessellation fidelity would have
+failed this exact check (truth-exact input scored 61x its tolerance).
+`what_fools_this_gate` is the mandatory blind-spot analysis: if a gate
+cannot be explained to its owner in a page, that is a proposal defect, not
+an owner defect.
 
 The pending-human approval packet carries the extracted, validated manifest
 (malformed proposals surface an `error` field to the reviewer instead of
@@ -108,12 +130,31 @@ Ledger rule: a gate-authoring run is credited (`candidate_used`) when its
 gate is ratified; the ratifying click records it. The 2-of-3 adjudication
 bar applies to frontier chains the same as everything else.
 
+## Holds
+
+Two sequencing holds, mechanical where possible:
+
+1. **Attended first.** No overnight chains until one full loop (gate
+   ratified, implementation, promotion plane end to end, human approval)
+   has fired live and attended.
+2. **Chain cap.** The successor-admission seam bounds barrenness but not
+   drift: each link re-scopes the next, so a chain could walk away from the
+   product goal one plausible proposal at a time. An unattended chain ends
+   after three consecutive terminal-conclusion links and waits for a human
+   relaunch (`MAX_AUTONOMOUS_CHAIN_LINKS`). The conclusion prompt binds
+   proposals to the same standing product goal (a refinement, never a
+   pivot), and the cap holds the line until the ledger has data on real
+   chains.
+
 ## What this is not
 
 Not a bypass of human authority: protected paths still cannot be touched by
 any agent, ever; ratification applies them. Not unbounded autonomy: chains
-stop on barren decline, stop conditions, round budgets, and every
-`pending_human` seam. And not yet proven: the promotion plane has never
-executed end to end live. The first full loop closure is the next milestone,
-and until it happens, unattended trust remains revoked per the recorded
-usage rule.
+stop on barren decline, the chain cap, stop conditions, round budgets, and
+every `pending_human` seam. Not comprehension-free: ratification is
+executable precisely so the owner can judge evidence packets without
+knowing solver internals: the dossier layer is the comprehensible layer,
+and the machinery is obligated to produce evidence legible to its owner.
+And not yet proven: the promotion plane has never executed end to end live.
+The first full loop closure is the next milestone, and until it happens,
+unattended trust remains revoked per the recorded usage rule.

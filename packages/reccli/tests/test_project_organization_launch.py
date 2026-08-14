@@ -545,6 +545,47 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 "without a proposal the parent contract carries",
             )
 
+    def test_autonomous_chain_ends_at_the_link_cap(self):
+        policy = {
+            "mode": "latest-terminal-conclusion",
+            "eligible_statuses": {"round_limit"},
+            "eligible_promotion_readiness": {"not_ready"},
+            "carry_experiment_budget": False,
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "seed.txt"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "seed"], cwd=root, check=True,
+            )
+            # Three consecutive terminal-conclusion links: link-1 <- link-2
+            # <- link-3, with link-3 the latest terminal.
+            previous = None
+            for index in (1, 2, 3):
+                run_id = f"link-{index}"
+                run_dir = _write_terminal_run(root, run_id=run_id)
+                run_path = run_dir / "run.json"
+                record = json.loads(run_path.read_text(encoding="utf-8"))
+                record["mission_origin"] = "terminal-conclusion"
+                record["continuation_from_run_id"] = previous
+                run_path.write_text(
+                    json.dumps(record, indent=2) + "\n", encoding="utf-8",
+                )
+                previous = run_id
+                # Keep directory mtimes ordered so link-3 is the latest.
+                os.utime(run_dir, (1000000000 + index, 1000000000 + index))
+            updated, selection = _apply_terminal_continuation(
+                root,
+                {"working_directory": str(root)},
+                {"mission_id": "m", "state_fingerprint": "f"},
+                policy,
+            )
+            self.assertIn("continuation_declined", selection)
+            self.assertIn("human relaunch", selection["continuation_declined"])
+            self.assertNotIn("continuation_from_run_id", updated)
+
     def test_terminal_continuation_carries_binding_human_rejection(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

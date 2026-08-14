@@ -4257,6 +4257,16 @@ class GateProposalExtractionTests(unittest.TestCase):
                 "baseline_command": ".venv/bin/python scripts/score.py",
                 "measured_baseline": 0.42,
                 "proposed_tolerance": 0.001,
+                "discrimination": {
+                    "truth_exact_command": "scripts/score.py truth.stl",
+                    "truth_exact_score": 0.0000004,
+                    "corrupted_command": "scripts/score.py corrupted.stl",
+                    "corrupted_score": 0.31,
+                },
+                "what_fools_this_gate": (
+                    "A shell duplicated with zero offset scores identically; "
+                    "the thickness histogram cannot see coincident surfaces."
+                ),
                 "files": [{
                     "path": (
                         f"{runner.artifact_staging_prefix}/gate-proposal/"
@@ -4291,6 +4301,51 @@ class GateProposalExtractionTests(unittest.TestCase):
                 "benchmarks/gates/shell-detection-v1.json",
             )
             self.assertNotIn("error", proposal)
+            self.assertEqual(
+                proposal["discrimination"]["corrupted_score"], 0.31,
+            )
+            self.assertIn("coincident", proposal["what_fools_this_gate"])
+
+    def test_gate_that_fails_its_own_discrimination_is_rejected(self):
+        # The cylinder-scorer shape: truth-exact input scoring far above the
+        # proposed tolerance means the gate measures something other than
+        # what it claims. Ratification must see this as an error, not prose.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, head = self._runner_with_commit(
+                root,
+                manifest_text=json.dumps({
+                    "schema": "reccli.organization-gate-proposal.v1",
+                    "predicate_id": "shell-detection-v1",
+                    "evaluator_id": "geometry-eval-v1",
+                    "rationale": "Real-scan shells need a declared gate.",
+                    "baseline_command": "scripts/score.py",
+                    "measured_baseline": 0.42,
+                    "proposed_tolerance": 0.000001,
+                    "discrimination": {
+                        "truth_exact_command": "scripts/score.py truth.stl",
+                        "truth_exact_score": 0.000061,
+                        "corrupted_command": "scripts/score.py bad.stl",
+                        "corrupted_score": 0.31,
+                    },
+                    "what_fools_this_gate": (
+                        "Nothing we know of; the histogram separates shells "
+                        "from solids in every probe we ran this week."
+                    ),
+                    "files": [{
+                        "path": (
+                            ".reccli-org-artifacts/gate/gate-proposal/"
+                            "files/predicate.json"
+                        ),
+                        "target": "benchmarks/gates/shell-detection-v1.json",
+                    }],
+                }),
+            )
+            proposal = runner._extract_gate_proposal(head)
+            self.assertIn("error", proposal)
+            self.assertIn("discrimination proof", proposal["error"])
+            self.assertIn("truth-exact", proposal["error"])
 
     def test_candidate_without_proposal_returns_none(self):
         with tempfile.TemporaryDirectory() as td:
@@ -4324,6 +4379,16 @@ class GateProposalExtractionTests(unittest.TestCase):
                     "baseline_command": ".venv/bin/python scripts/score.py",
                     "measured_baseline": 0.42,
                     "proposed_tolerance": 0.001,
+                    "discrimination": {
+                        "truth_exact_command": "scripts/score.py truth.stl",
+                        "truth_exact_score": 0.0000004,
+                        "corrupted_command": "scripts/score.py corrupted.stl",
+                        "corrupted_score": 0.31,
+                    },
+                    "what_fools_this_gate": (
+                        "A shell duplicated with zero offset scores "
+                        "identically; coincident surfaces are invisible."
+                    ),
                     "files": [{
                         "path": (
                             ".reccli-org-artifacts/gate/gate-proposal/"

@@ -638,6 +638,12 @@ def _bounded_conclusion_view(conclusion: Dict[str, Any]) -> Dict[str, Any]:
 BARREN_TERMINAL_STATUSES = {
     "no_experiment_contract", "stalled", "completed_no_op",
 }
+# The successor-admission seam bounds barrenness but not drift: each link may
+# re-scope the next, so an autonomous chain could walk away from the product
+# goal one plausible proposal at a time. Until the outcome ledger has data on
+# real chains, an unattended chain ends after this many consecutive
+# terminal-conclusion links and waits for a human relaunch.
+MAX_AUTONOMOUS_CHAIN_LINKS = 3
 MAX_CONSECUTIVE_BARREN_CONTINUATIONS = 2
 
 
@@ -862,6 +868,40 @@ human decision if any, and the single next action. Never call a report-only
 commit an implementation candidate."""
 
 
+def _consecutive_continuation_links(
+    root: Path,
+    terminal: Dict[str, Any],
+) -> int:
+    """Count the unbroken chain of terminal-conclusion links ending here.
+
+    Walks continuation ancestry through run.json records. A run launched any
+    other way (direct, project emitter, human approval) breaks the chain.
+    """
+    organization_root = root / "devsession" / "agent-organizations"
+    links = 0
+    run_id = str(terminal.get("run_id") or "")
+    seen: set = set()
+    while run_id and run_id not in seen and links < 10:
+        seen.add(run_id)
+        run_record = None
+        for name in ("run.json", "request.json"):
+            candidate_path = organization_root / run_id / name
+            try:
+                run_record = json.loads(
+                    candidate_path.read_text(encoding="utf-8")
+                )
+                break
+            except (OSError, json.JSONDecodeError):
+                continue
+        if not isinstance(run_record, dict):
+            break
+        if str(run_record.get("mission_origin") or "") != "terminal-conclusion":
+            break
+        links += 1
+        run_id = str(run_record.get("continuation_from_run_id") or "")
+    return links
+
+
 def _apply_terminal_continuation(
     root: Path,
     arguments: Dict[str, Any],
@@ -904,6 +944,17 @@ def _apply_terminal_continuation(
                 f"{sorted(BARREN_TERMINAL_STATUSES)} without producing work; "
                 "starting from the project's own mission instead of continuing "
                 "the chain"
+            ),
+        }
+    chain_links = _consecutive_continuation_links(root, terminal)
+    if chain_links >= MAX_AUTONOMOUS_CHAIN_LINKS:
+        return arguments, {
+            **selection,
+            "skipped_retryable_run_ids": skipped_retryable_runs,
+            "continuation_declined": (
+                f"the autonomous chain has run {chain_links} consecutive "
+                "terminal-conclusion links; a human relaunch is required "
+                "before it may continue"
             ),
         }
     conclusion = terminal["conclusion"]
