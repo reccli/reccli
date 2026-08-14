@@ -4275,16 +4275,76 @@ class StrictSchemaConformanceTests(unittest.TestCase):
 
 
 class NoOpDispositionTests(unittest.TestCase):
-    def test_no_op_reply_requires_final_and_no_candidate(self):
+    def test_contradictory_dispositions_normalize_instead_of_failing_turns(self):
+        # Workers say "no_op" to mean "nothing this turn". Raising here failed
+        # whole turns with no feedback to the model across two live runs; the
+        # safe reading of every contradiction is an ordinary continue.
         reply = _reply()
         reply.update({"disposition": "no_op", "final": False})
-        with self.assertRaisesRegex(ValueError, "final=true"):
-            validate_agent_reply(reply)
-        reply.update({"final": True, "candidate": "abc123"})
-        with self.assertRaisesRegex(ValueError, "cannot carry a candidate"):
-            validate_agent_reply(reply)
-        reply.update({"candidate": None, "state": "done"})
-        self.assertEqual(validate_agent_reply(reply)["disposition"], "no_op")
+        normalized = validate_agent_reply(reply)
+        self.assertEqual(normalized["disposition"], "continue")
+        self.assertFalse(normalized["final"])
+
+        reply = _reply()
+        reply.update({
+            "disposition": "no_op", "final": True, "candidate": "abc123",
+        })
+        normalized = validate_agent_reply(reply)
+        self.assertEqual(normalized["disposition"], "continue")
+        self.assertFalse(normalized["final"])
+
+        reply = _reply()
+        reply.update({"disposition": "continue", "final": True})
+        self.assertFalse(validate_agent_reply(reply)["final"])
+
+        # The lead's intended terminal no_op passes through untouched.
+        reply = _reply()
+        reply.update({
+            "disposition": "no_op", "final": True, "candidate": None,
+            "state": "done",
+        })
+        normalized = validate_agent_reply(reply)
+        self.assertEqual(normalized["disposition"], "no_op")
+        self.assertTrue(normalized["final"])
+
+    def test_probe_outputs_on_a_status_reply_defer_sealing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "probe"
+            runner = OrganizationRunner(
+                root, "Close the cone gate.", "claude",
+                "flat", "probe", run_dir,
+            )
+            (root / "baseline-output.json").write_text(
+                '{"cone_parameter_error": 0.00027295462432978693}\n',
+                encoding="utf-8",
+            )
+            runner.workspaces["worker-a"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            reply = _reply()
+            reply["artifacts"] = ["baseline-output.json"]
+            bundle = runner._seal_reported_artifacts(
+                runner.topology.agent("worker-a"), reply, 2,
+            )
+            self.assertIsNone(
+                bundle,
+                "generated outputs on a status-only reply must defer "
+                "sealing, not fail the turn",
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "events.jsonl").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            self.assertTrue(any(
+                event["type"] == "artifacts.unsealed_probe_outputs"
+                and event["paths"] == ["baseline-output.json"]
+                for event in events
+            ))
+            self.assertEqual(runner._experiment_used(), 0)
 
     def test_lead_no_op_ends_run_as_successful_terminal(self):
         with tempfile.TemporaryDirectory() as td:

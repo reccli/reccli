@@ -1421,19 +1421,20 @@ def validate_agent_reply(value: Any) -> Dict[str, Any]:
         raise ValueError("invalid top-level risk")
     if value["disposition"] not in DISPOSITIONS:
         raise ValueError("invalid terminal disposition")
+    # Dispositional contradictions are normalized, never fatal. A failed turn
+    # gives the model no feedback about why, so a raise here consumed whole
+    # turns across two live runs while the model repeated the same shape:
+    # workers say "no_op" to mean "nothing this turn", and the safe reading of
+    # every contradiction is an ordinary continue. A lead that truly intends
+    # the terminal no_op sends final=true with no candidate, which passes
+    # through untouched.
+    if value["disposition"] == "no_op" and (
+        not value["final"] or value["candidate"] is not None
+    ):
+        value["disposition"] = "continue"
+        value["final"] = False
     if value["final"] and value["disposition"] == "continue":
-        raise ValueError(
-            "a final reply requires promote, no_promotion, pending_human, "
-            "or no_op disposition"
-        )
-    if value["disposition"] == "no_op":
-        if not value["final"]:
-            raise ValueError("a no_op disposition requires final=true")
-        if value["candidate"] is not None:
-            raise ValueError(
-                "a no_op disposition declares that no work was warranted and "
-                "cannot carry a candidate"
-            )
+        value["final"] = False
     for message in value["messages"]:
         if not isinstance(message, dict):
             raise ValueError("message must be an object")
@@ -3991,6 +3992,22 @@ class OrganizationRunner:
             (message["candidate"], message.get("workItem"), message.get("risk"))
             for message in handoffs
         }
+        if not handoffs:
+            # A worker legitimately generates outputs before its gates pass:
+            # a baseline probe, a failed experiment, a diagnostic run.
+            # Reporting them on a status-only reply is honesty, not a
+            # violation; sealing waits for the reply that hands off a
+            # candidate and re-reports them. The old rule failed the turn,
+            # which taught the mission author to instruct models to misreport
+            # their outputs, and both providers refused to. Two live runs
+            # died on it.
+            self._event(
+                "artifacts.unsealed_probe_outputs",
+                round_number,
+                agent_id=agent.agent_id,
+                paths=[relative for relative, _ in sources],
+            )
+            return None
         if len(identities) != 1:
             raise RuntimeError(
                 "reported generated artifacts require exactly one candidate handoff"
