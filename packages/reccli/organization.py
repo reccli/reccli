@@ -3723,6 +3723,24 @@ class OrganizationRunner:
                 pending_human_report,
                 conclusion,
             )
+        # No run ends with unstaged work. Five runs produced correct verified
+        # implementations and the host retained none of them: each ended with
+        # the candidate stranded in its object store and nothing on the
+        # owner's desk, so every delivery this week happened by hand. A
+        # candidate that survived write-scope validation, carries whatever
+        # evidence the run gathered, and holds no veto is staged for the
+        # ordinary approve click. Honest labeling does the work the ceremony
+        # was pretending to do: the packet states exactly what was measured
+        # and what was not.
+        if approval_request is None and promotion_request is None:
+            try:
+                approval_request = self._stage_terminal_work(
+                    status, conclusion, rounds,
+                )
+            except Exception as exc:
+                self._event(
+                    "promotion.terminal_staging_failed", rounds, error=str(exc),
+                )
         result = {
             "run_id": self.run_id, "status": status, "rounds": rounds,
             "working_rounds": min(rounds, self.max_rounds),
@@ -4687,6 +4705,175 @@ class OrganizationRunner:
             None,
             "routine",
         )
+
+    def _terminal_work_candidate(self) -> Optional[str]:
+        """The implementation candidate a terminal run should stage, if any.
+
+        Prefers the most-evidenced: a host-measured goal evaluation beats a
+        reviewed assignment beats a bare materialization. Vetoed candidates
+        are never staged, and neither is anything already integrated into a
+        promotion that went through the full path.
+        """
+        vetoed = set(self.governance.candidate_vetoes.values())
+        measured = {
+            str(record.get("candidate"))
+            for record in self.goal_candidate_evaluations
+            if record.get("verdict") == "keep"
+        }
+        reviewed = {
+            candidate
+            for candidate, assignment in self.governance.assignments.items()
+            if assignment.get("status") in {"reviewed", "approved"}
+        }
+        implementations = [
+            candidate
+            for candidate, record in self.candidate_kinds.items()
+            if record.get("kind") == "implementation"
+            and candidate not in vetoed
+        ]
+        if not implementations:
+            return None
+        return max(
+            implementations,
+            key=lambda candidate: (
+                candidate in measured,
+                candidate in reviewed,
+                candidate in self.integrated_candidates,
+            ),
+        )
+
+    def _stage_terminal_work(
+        self,
+        status: str,
+        conclusion: Dict[str, Any],
+        round_number: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Stage a terminal run's implementation work for the approve click."""
+        if status in {"cancelled", "completed_no_op"}:
+            return None
+        candidate = self._terminal_work_candidate()
+        if not candidate:
+            return None
+        workspace = self.workspaces[self.topology.finalizer_id]
+        base = self.caller_head or workspace.base_commit
+        if not base:
+            return None
+        if self._host_git(
+            workspace,
+            ["merge-base", "--is-ancestor", base, candidate],
+            check=False,
+        ).returncode != 0:
+            self._event(
+                "promotion.terminal_staging_skipped", round_number,
+                candidate=candidate,
+                reason="candidate is not descended from the frozen base",
+            )
+            return None
+        artifact_manifest = self._export_staged_artifacts(candidate)
+        promotion_candidate, promotion_branch = (
+            self._create_promotion_candidate(
+                candidate,
+                [entry["source"] for entry in artifact_manifest["files"]],
+                artifact_manifest["manifest_sha256"],
+            )
+        )
+        changed_paths = sorted(self._git_paths(
+            workspace,
+            [
+                "diff", "--name-only", "-z",
+                f"{base}..{promotion_candidate}",
+            ],
+        ))
+        if not changed_paths:
+            return None
+        measurements = [
+            record for record in self.goal_candidate_evaluations
+            if str(record.get("candidate")) == candidate
+        ]
+        assignment = self.governance.assignments.get(candidate) or {}
+        review_state = str(assignment.get("status") or "unreviewed")
+        if measurements and review_state in {"reviewed", "approved"}:
+            evidence_state = "host_measured_and_reviewed"
+        elif measurements:
+            evidence_state = "host_measured_without_review"
+        elif review_state in {"reviewed", "approved"}:
+            evidence_state = "reviewed_without_host_measurement"
+        else:
+            evidence_state = "unmeasured_and_unreviewed"
+        request: Dict[str, Any] = {
+            "schema": "reccli.organization-approval-request.v1",
+            "version": 1,
+            "created_at": _utc_now(),
+            "run_id": self.run_id,
+            "request_kind": "candidate_promotion",
+            "title": "Implementation work awaiting your merge decision",
+            "question": (
+                "Apply this candidate to your local branch? The run reached "
+                f"{status} holding implementation work; RecCli staged it "
+                "rather than stranding it."
+            ),
+            "status": "awaiting_human_authorization",
+            "canonical_effects_applied": False,
+            "staged_by": "host-terminal",
+            "terminal_status": status,
+            "base_commit": base,
+            "verified_candidate": candidate,
+            "proposed_promotion_candidate": promotion_candidate,
+            "proposed_promotion_branch": promotion_branch,
+            "changed_paths": changed_paths,
+            "evidence_state": evidence_state,
+            "goal_measurements": measurements,
+            "review": {
+                "status": review_state,
+                "reviewer": assignment.get("reviewerId"),
+                "decision": assignment.get("decision"),
+                "required_final_approvers": sorted(
+                    self.governance.required_final_approvers()
+                ),
+                "missing_final_approvers": (
+                    self.governance.missing_final_approvers(candidate)
+                ),
+            },
+            "artifact_manifest_sha256": artifact_manifest["manifest_sha256"],
+            "conclusion": {
+                key: conclusion.get(key)
+                for key in (
+                    "summary", "conclusive_findings", "evidence_and_tests",
+                    "unresolved", "next_action", "limitations",
+                )
+            },
+            "successor_admission": conclusion.get(
+                "proposed_successor_admission"
+            ),
+            "action": {
+                "type": "fast_forward_local",
+                "remote_push": False,
+                "effect": (
+                    "Re-verify the exact changed paths against this packet, "
+                    "then fast-forward only a clean local branch. RecCli "
+                    "never pushes a remote."
+                ),
+            },
+            "authorization_limits": [
+                "Approval applies only to the exact promotion candidate in "
+                "this request.",
+                f"Evidence state: {evidence_state}. Read the goal "
+                "measurements and review status before approving.",
+            ],
+        }
+        canonical = json.dumps(
+            request, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
+        self._write_json("approval-request.json", request)
+        self._event(
+            "promotion.terminal_staged", round_number,
+            candidate=candidate,
+            promotion_candidate=promotion_candidate,
+            evidence_state=evidence_state,
+            request_sha256=request["request_sha256"],
+        )
+        return request
 
     def _write_pending_human_approval_request(
         self,

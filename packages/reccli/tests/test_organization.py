@@ -4560,6 +4560,124 @@ class DispositionMarkerTests(unittest.TestCase):
             self.assertIsNone(disposition_marker(content), content)
 
 
+class TerminalWorkStagingTests(unittest.TestCase):
+    """No run ends with unstaged work.
+
+    Five live runs produced correct verified implementations and the host
+    retained none: each ended with the candidate stranded in its object
+    store and nothing on the owner's desk, so every delivery happened by
+    hand. A terminal run holding implementation work now stages the
+    ordinary promotion packet, honestly labeled with what was measured.
+    """
+
+    def _runner_with_candidate(self, root, run_id="stage"):
+        run_dir = root / "devsession" / "agent-organizations" / run_id
+        runner = OrganizationRunner(
+            root, "Close the envelope gate.", "claude", "flat", run_id,
+            run_dir, admission=dict(VALID_ADMISSION),
+        )
+        runner.caller_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        runner.workspaces["lead"] = Workspace(
+            root, "test", "test-main", root, [],
+        )
+        (root / "app.py").write_text(
+            "print('envelope capability')\n", encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "worker candidate"], cwd=root, check=True,
+        )
+        candidate = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        runner.candidate_kinds[candidate] = {
+            "candidate": candidate, "kind": "implementation",
+            "paths": ["app.py"], "base": runner.caller_head,
+        }
+        return runner, candidate
+
+    def test_round_limit_run_stages_its_implementation_work(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, candidate = self._runner_with_candidate(root)
+            runner.goal_candidate_evaluations.append({
+                "candidate": candidate, "verdict": "keep",
+                "predicate_id": "envelope-coverage-v1",
+                "baseline_value": 999.0, "candidate_value": 2.5709e-05,
+            })
+            request = runner._stage_terminal_work(
+                "round_limit", _conclusion(), 6,
+            )
+            self.assertIsNotNone(
+                request,
+                "a terminal run holding verified work must stage it",
+            )
+            self.assertEqual(request["request_kind"], "candidate_promotion")
+            self.assertEqual(request["verified_candidate"], candidate)
+            self.assertEqual(request["terminal_status"], "round_limit")
+            self.assertEqual(
+                request["evidence_state"], "host_measured_without_review",
+            )
+            self.assertIn("app.py", request["changed_paths"])
+            self.assertEqual(
+                request["action"]["type"], "fast_forward_local",
+            )
+            self.assertFalse(request["canonical_effects_applied"])
+            staged = json.loads(
+                (runner.run_dir / "approval-request.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(
+                staged["request_sha256"], request["request_sha256"],
+            )
+
+    def test_a_vetoed_candidate_is_never_staged(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, candidate = self._runner_with_candidate(root, "vetoed")
+            runner.governance.candidate_vetoes["auditor-a"] = candidate
+            self.assertIsNone(runner._terminal_work_candidate())
+            self.assertIsNone(
+                runner._stage_terminal_work("round_limit", _conclusion(), 6),
+            )
+
+    def test_a_no_op_run_stages_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, _ = self._runner_with_candidate(root, "noop")
+            self.assertIsNone(
+                runner._stage_terminal_work(
+                    "completed_no_op", _conclusion(), 2,
+                ),
+            )
+
+    def test_unmeasured_work_is_staged_but_labeled_honestly(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, candidate = self._runner_with_candidate(root, "bare")
+            request = runner._stage_terminal_work(
+                "stalled", _conclusion(), 3,
+            )
+            self.assertIsNotNone(request)
+            self.assertEqual(
+                request["evidence_state"], "unmeasured_and_unreviewed",
+                "the packet must say plainly what was not established",
+            )
+            self.assertIn(
+                "Evidence state: unmeasured_and_unreviewed",
+                " ".join(request["authorization_limits"]),
+            )
+
+
 class FinalLedgerUnificationTests(unittest.TestCase):
     def _governance(self, root):
         run_dir = root / "devsession" / "agent-organizations" / "ledger"
