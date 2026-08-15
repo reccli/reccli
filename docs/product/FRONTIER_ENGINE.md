@@ -146,6 +146,23 @@ Two sequencing holds, mechanical where possible:
    pivot), and the cap holds the line until the ledger has data on real
    chains.
 
+## Promotion stages in the authoring run
+
+Decided 2026-08-15 after the retention run (b1c806) proved
+retention-by-proxy structurally impossible: the goal evaluator requires the
+worker's worktree HEAD to equal the candidate, which a read-only adopting
+worker can never satisfy without forbidden git surgery. That invariant is
+kept deliberately: measurement binds to the exact worktree state that
+produced it, and relaxing it for adopted candidates would trade the
+system's strongest guarantee for a ceremony that only existed because
+authoring runs kept being killed before staging their own promotions. The
+killer is fixed (a materialized implementation stands the no-contract
+deadline down), so the rule is simply: the run that authors a candidate
+registers its contract, takes its review, and stages its promotion from
+its own closeout. A candidate that outlives its run without a staged
+promotion is merged by the human with recorded provenance, and the ledger
+credit is written by hand.
+
 ## What this is not
 
 Not a bypass of human authority: protected paths still cannot be touched by
