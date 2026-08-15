@@ -1093,6 +1093,50 @@ def _apply_gate_proposal(
     }
 
 
+def _resolve_successor_admission(
+    project_root: Path,
+    request: Dict[str, Any],
+    parent_run_id: str,
+    approver: str,
+) -> Dict[str, Any]:
+    """Resolve the admission the click's auto-launched successor runs under.
+
+    In order of authority: the packet's own successor_admission (a governance
+    run staging a gate proposes the implementation contract there); the
+    parent's terminal conclusion proposed_successor_admission (covers packets
+    staged by supervisors that predate the packet field); the parent's
+    recorded contract. Carrying a governance parent's own already-satisfied
+    contract is the last resort because it makes the successor's lead no_op
+    on arrival.
+    """
+    from .organization_admission import admission_for_approved_successor
+
+    parent_dir = (
+        project_root / "devsession" / "agent-organizations"
+        / _safe_name(parent_run_id)
+    )
+    for candidate_block in (
+        request.get("successor_admission"),
+        (
+            _read_json(parent_dir / "run-conclusion.json", {}) or {}
+        ).get("proposed_successor_admission"),
+    ):
+        if isinstance(candidate_block, dict):
+            try:
+                return admission_for_approved_successor(
+                    candidate_block, parent_run_id, approver,
+                )
+            except ValueError:
+                continue
+    parent_admission = (
+        _read_json(parent_dir / "admission.json", None)
+        if (parent_dir / "admission.json").is_file() else None
+    )
+    return admission_for_approved_successor(
+        parent_admission, parent_run_id, approver,
+    )
+
+
 def _start_approved_successor(
     project_root: Path,
     request: Dict[str, Any],
@@ -1150,34 +1194,9 @@ supervisor.
         or "human-operator"
     )
     parent_run_id = str(request.get("run_id") or "unknown")
-    # The packet may name the admission the successor should run under (a
-    # governance run staging a gate proposes the implementation contract
-    # there). Prefer it; carrying a governance parent's own already-satisfied
-    # contract would make the successor's lead no_op on arrival.
-    successor_admission = None
-    packet_admission = request.get("successor_admission")
-    if isinstance(packet_admission, dict):
-        try:
-            successor_admission = admission_for_approved_successor(
-                packet_admission, parent_run_id, approver,
-            )
-        except ValueError:
-            successor_admission = None
-    if successor_admission is None:
-        parent_admission_path = (
-            project_root / "devsession" / "agent-organizations"
-            / _safe_name(parent_run_id)
-            / "admission.json"
-        )
-        parent_admission = (
-            _read_json(parent_admission_path, None)
-            if parent_admission_path.is_file() else None
-        )
-        successor_admission = admission_for_approved_successor(
-            parent_admission,
-            parent_run_id,
-            approver,
-        )
+    successor_admission = _resolve_successor_admission(
+        project_root, request, parent_run_id, approver,
+    )
     successor = create_run_request(
         working_directory=str(project_root),
         mission=mission,

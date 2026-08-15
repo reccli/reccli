@@ -663,6 +663,64 @@ class OrganizationControlTests(unittest.TestCase):
                 porcelain, "", "the gate apply must leave a clean tracked tree",
             )
 
+    def test_successor_admission_resolution_order(self):
+        from reccli.organization_control import _resolve_successor_admission
+
+        proposal = {
+            "consumer": {
+                "name": "will", "type": "human",
+                "intended_use": "review and merge the envelope promotion",
+            },
+            "work_class": "deployable_artifact",
+            "done_condition": (
+                "the ratified envelope predicate passes from a clean checkout"
+            ),
+            "stop_conditions": ["no improvement after two contracts"],
+        }
+        parent_contract = {
+            "consumer": {
+                "name": "will", "type": "human",
+                "intended_use": "ratify the staged governance packet",
+            },
+            "work_class": "uncertainty_reduction",
+            "done_condition": "a validated gate packet is staged for review",
+            "stop_conditions": ["the proposal tree is unrecoverable"],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parent_dir = (
+                root / "devsession" / "agent-organizations" / "gov-run"
+            )
+            parent_dir.mkdir(parents=True)
+            (parent_dir / "admission.json").write_text(
+                json.dumps(parent_contract) + "\n", encoding="utf-8",
+            )
+            # No packet field, no conclusion: parent contract carries.
+            resolved = _resolve_successor_admission(
+                root, {}, "gov-run", "will",
+            )
+            self.assertEqual(resolved["work_class"], "uncertainty_reduction")
+            # Conclusion proposal outranks the parent carry (covers packets
+            # staged by supervisors that predate the packet field).
+            (parent_dir / "run-conclusion.json").write_text(
+                json.dumps({
+                    "proposed_successor_admission": proposal,
+                }) + "\n", encoding="utf-8",
+            )
+            resolved = _resolve_successor_admission(
+                root, {}, "gov-run", "will",
+            )
+            self.assertEqual(resolved["work_class"], "deployable_artifact")
+            # The packet field outranks everything.
+            packet_variant = dict(proposal)
+            packet_variant["work_class"] = "hypothesis_test"
+            resolved = _resolve_successor_admission(
+                root, {"successor_admission": packet_variant}, "gov-run",
+                "will",
+            )
+            self.assertEqual(resolved["work_class"], "hypothesis_test")
+            self.assertEqual(resolved["origin"], "approved-successor")
+
     def test_process_activity_tracks_actual_native_agent_not_logical_state(self):
         run_dir = Path("/tmp/control-run")
         process_listing = subprocess.CompletedProcess(
