@@ -7364,6 +7364,38 @@ Change only the mutable file above and write one trial intent under
             self._warn_invalid_gate_proposal(
                 agent, workspace, head, round_number,
             )
+            # Measure the work the moment it exists. Measurement used to fire
+            # only when a worker performed a correctly-formed handoff, so a
+            # run could hold a correct verified implementation and have the
+            # host know nothing about it: run 37e449 died exactly there, with
+            # the envelope capability built and unmeasured. Doing the work is
+            # what earns the measurement; the message protocol is not a
+            # prerequisite for the truth.
+            goal = self.worker_goals.get(agent.agent_id)
+            if (
+                is_implementation
+                and agent.agent_id in self.topology.worker_ids
+                and self._goal_is_active(goal)
+                and goal.get("predicate_id")
+                and not any(
+                    record.get("candidate") == head
+                    for record in self.goal_candidate_evaluations
+                )
+            ):
+                try:
+                    self._evaluate_bound_goal_candidate(
+                        worker_id=agent.agent_id,
+                        candidate=head,
+                        round_number=round_number,
+                    )
+                except Exception as exc:
+                    self._event(
+                        "worker.goal_candidate.unmeasured",
+                        round_number,
+                        worker_id=agent.agent_id,
+                        candidate=head,
+                        error=str(exc),
+                    )
             self._append_jsonl("candidates.jsonl", {
                 "runId": self.run_id,
                 "round": round_number,
