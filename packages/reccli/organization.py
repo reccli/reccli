@@ -3860,6 +3860,17 @@ class OrganizationRunner:
         """
         if self.experiment_policy is None or self.max_experiments <= 0:
             return False
+        # A gate-authoring or governance run never authors an experiment
+        # contract: there is nothing to experiment on, its measurability is
+        # the discrimination validator, and its exit is human ratification.
+        # This deadline was built to kill contract-less IMPLEMENTATION runs
+        # that drift into prose; category-blind, it executed three ceremony
+        # runs at round 4 with budget remaining. The admission declares the
+        # run's shape; believe it.
+        if (self.admission or {}).get("work_class") in {
+            "uncertainty_reduction", "hypothesis_test",
+        }:
+            return False
         # A run too short for workers to have acted at all cannot be said to have
         # failed to author a contract. Reporting no_experiment_contract there
         # would blame the run for a budget it was never given.
@@ -7643,6 +7654,19 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         resolved_goal_class = str(goal_class or "").strip()
         resolved_predicate = str(predicate_id or "").strip()
         resolved_evaluator = str(evaluator_id or "").strip()
+        # Under a gate-authoring admission, any delegation that does not
+        # explicitly request production_pipeline measurement binds unmeasured:
+        # its measurability is the gate-proposal discrimination validator and
+        # its exit is human ratification. This must run BEFORE profile
+        # resolution, or an unclassed ceremony goal can auto-bind (and
+        # single-owner-capture) a production predicate the run has no
+        # business measuring.
+        if (
+            (self.admission or {}).get("work_class")
+            in {"uncertainty_reduction", "hypothesis_test"}
+            and resolved_goal_class != "production_pipeline"
+        ):
+            return None, ""
         matches: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
         for evaluator in self.experiment_policy["evaluators"].values():
             if resolved_evaluator and evaluator["id"] != resolved_evaluator:
@@ -7675,10 +7699,6 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                     for predicate in evaluator.get("predicates", {}).values()
                 )
             ):
-                if (self.admission or {}).get("work_class") in {
-                    "uncertainty_reduction", "hypothesis_test",
-                }:
-                    return None, ""
                 return None, (
                     "the policy declares no evaluator_infrastructure "
                     "profile; unprofiled gate-authoring goals require an "

@@ -4695,6 +4695,55 @@ class GateAuthoringBindingTests(unittest.TestCase):
             self.assertEqual(error, "")
             self.assertIsNone(measurement)
 
+    def test_unclassed_delegation_binds_under_a_gate_authoring_admission(self):
+        # Round one of three consecutive ceremony runs died on the lead
+        # omitting goalClass; the admission already declares the run's shape.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            admission = dict(VALID_ADMISSION)
+            admission["work_class"] = "uncertainty_reduction"
+            runner = self._runner(root, admission=admission)
+            measurement, error = runner._resolve_goal_measurement(
+                goal_class=None, predicate_id=None, evaluator_id=None,
+            )
+            self.assertEqual(error, "")
+            self.assertIsNone(measurement)
+
+    def test_explicit_production_request_still_demands_measurement(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            admission = dict(VALID_ADMISSION)
+            admission["work_class"] = "uncertainty_reduction"
+            runner = self._runner(root, admission=admission)
+            measurement, error = runner._resolve_goal_measurement(
+                goal_class="production_pipeline",
+                predicate_id="no-such-predicate",
+                evaluator_id=None,
+            )
+            self.assertIn("unevaluable", error)
+            self.assertIsNone(measurement)
+
+    def test_ceremony_admission_stands_down_the_contract_deadline(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            admission = dict(VALID_ADMISSION)
+            admission["work_class"] = "uncertainty_reduction"
+            run_dir = root / "devsession" / "agent-organizations" / "cd"
+            runner = OrganizationRunner(
+                root, "Carry the packet.", "claude", "flat", "cd", run_dir,
+                max_rounds=6, max_experiments=2, admission=admission,
+            )
+            runner.experiment_policy = {"evaluators": {}}
+            deadline = runner._experiment_contract_deadline
+            self.assertFalse(
+                runner._experiment_contract_deadline_passed(deadline),
+                "a run whose admission declares no experiments cannot be "
+                "executed by the no-contract deadline",
+            )
+
     def test_deployable_admission_still_requires_a_profile(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
