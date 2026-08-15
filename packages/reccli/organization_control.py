@@ -1162,7 +1162,10 @@ def stage_approval_from_record(
             continue
         if str(record.get("candidate") or "").lower() != exact:
             continue
-        if record.get("tag") != "decision":
+        # The live host records auditor dispositions under both tags
+        # depending on whether normalization fired; the record's reader must
+        # accept everything the record's writer produced.
+        if record.get("tag") not in {"decision", "review"}:
             continue
         sender = str(record.get("from") or "")
         if (
@@ -1170,15 +1173,17 @@ def stage_approval_from_record(
             and sender not in topology.required_approvers
         ):
             continue
-        content = str(record.get("content") or "").lstrip().upper()
+        from .organization import disposition_marker
+
+        marker = disposition_marker(record.get("content"))
         entry = {
             "sender": sender,
             "round": record.get("round"),
             "content": record.get("content"),
         }
-        if content.startswith(("BLOCKED", "VETO")):
+        if marker in {"BLOCKED", "VETO"}:
             vetoes.append(entry)
-        elif content.startswith(("NO_VETO", "REVIEWED", "APPROVED")):
+        elif marker in {"NO_VETO", "REVIEWED", "APPROVED"}:
             approvals.append(entry)
     if vetoes:
         raise RuntimeError(

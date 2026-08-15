@@ -125,6 +125,34 @@ def verify_experiment_trial_records(
 
 _URL_TOKEN_RE = re.compile(r"(?i)([?&](?:token|key|secret|password)=)[^&\s]+")
 
+# One bounded label an auditor may politely prefix a disposition with. The
+# July forensics' first finding was governance parsed by string prefix; the
+# thirteenth-hour blocker was a NO_VETO rejected for starting with "FORMAL
+# DISPOSITION: ". One shared parser, one strip, startswith semantics kept so
+# "NOT NO_VETO" can never pass.
+_DISPOSITION_LABEL_RE = re.compile(
+    r"^(?:FORMAL\s+)?(?:DISPOSITION|DECISION|REVIEW|VERDICT)\s*:\s*",
+    re.IGNORECASE,
+)
+_DISPOSITION_MARKERS = ("NO_VETO", "REVIEWED", "APPROVED", "BLOCKED", "VETO")
+
+
+def disposition_marker(content: Any) -> Optional[str]:
+    """Parse one disposition marker from message content, or None.
+
+    Strips at most one bounded label prefix, then requires the marker at the
+    start. Every consumer of disposition semantics (live normalization, the
+    governance ledger, record derivation) must use this parser so the record
+    and its readers can never disagree about what an approval looks like.
+    """
+    text = str(content or "").lstrip()
+    text = _DISPOSITION_LABEL_RE.sub("", text, count=1).lstrip()
+    upper = text.upper()
+    for marker in _DISPOSITION_MARKERS:
+        if upper.startswith(marker):
+            return marker
+    return None
+
 AGENT_REPLY_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -693,17 +721,17 @@ class Governance:
     def record_decision(self, sender: str, message: Dict[str, Any]) -> None:
         if message.get("tag") != "decision" or not message.get("candidate"):
             return
-        content = str(message.get("content", "")).lstrip().upper()
+        marker = disposition_marker(message.get("content"))
         candidate = message["candidate"]
         assignment = self.assignments.get(candidate)
         if assignment and sender == assignment["reviewerId"]:
-            if self.topology.review_policy == "veto" and content.startswith(("NO_VETO", "REVIEWED", "APPROVED")):
+            if self.topology.review_policy == "veto" and marker in {"NO_VETO", "REVIEWED", "APPROVED"}:
                 assignment["status"] = "reviewed"
                 assignment["decision"] = message.get("content")
-            elif self.topology.review_policy != "veto" and content.startswith("APPROVED"):
+            elif self.topology.review_policy != "veto" and marker == "APPROVED":
                 assignment["status"] = "approved"
                 assignment["decision"] = message.get("content")
-            elif content.startswith(("BLOCKED", "VETO")):
+            elif marker in {"BLOCKED", "VETO"}:
                 assignment["status"] = "vetoed" if self.topology.review_policy == "veto" else "blocked"
                 assignment["decision"] = message.get("content")
         # The final ledger counts the whole reviewer pool, not one hash-picked
@@ -722,13 +750,13 @@ class Governance:
             )
         )
         if message.get("to") == self.topology.finalizer_id and eligible_final_voice:
-            if content.startswith(("BLOCKED", "VETO")):
+            if marker in {"BLOCKED", "VETO"}:
                 self.candidate_vetoes[sender] = candidate
                 self.candidate_approvals.pop(sender, None)
             elif (
                 self.topology.review_policy == "veto"
-                and content.startswith(("NO_VETO", "REVIEWED", "APPROVED"))
-            ) or content.startswith("APPROVED"):
+                and marker in {"NO_VETO", "REVIEWED", "APPROVED"}
+            ) or marker == "APPROVED":
                 self.candidate_approvals[sender] = candidate
                 self.candidate_vetoes.pop(sender, None)
 
@@ -8763,23 +8791,13 @@ off-goal finding; do not expand scope or substitute administrative prose."""
             and candidate
             and sender in self.topology.final_reviewer_pool
         ):
-            upper = content.lstrip().upper()
-            if self.topology.review_policy == "veto":
-                decision_marker = next(
-                    (
-                        marker for marker in ("NO_VETO", "BLOCKED", "VETO")
-                        if upper.startswith(marker)
-                    ),
-                    None,
-                )
-            else:
-                decision_marker = next(
-                    (
-                        marker for marker in ("APPROVED", "BLOCKED")
-                        if upper.startswith(marker)
-                    ),
-                    None,
-                )
+            parsed = disposition_marker(content)
+            allowed = (
+                ("NO_VETO", "REVIEWED", "BLOCKED", "VETO")
+                if self.topology.review_policy == "veto"
+                else ("APPROVED", "BLOCKED")
+            )
+            decision_marker = parsed if parsed in allowed else None
         if decision_marker:
             if str(candidate).lower() not in content.lower():
                 self.dropped_messages += 1

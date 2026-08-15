@@ -803,11 +803,15 @@ class OrganizationControlTests(unittest.TestCase):
                 },
             }) + "\n", encoding="utf-8")
             with (run_dir / "messages.jsonl").open("w") as handle:
+                # The live record holds dispositions under both tags and with
+                # polite labels; the reader must accept what the writer wrote.
                 handle.write(json.dumps({
                     "round": 9, "from": "auditor-a", "to": "lead",
-                    "tag": "decision", "candidate": candidate,
-                    "content": f"NO_VETO {candidate}: ratification dossier "
-                               "verified against the packet.",
+                    "tag": "review", "candidate": candidate,
+                    "content": (
+                        f"FORMAL DISPOSITION: NO_VETO {candidate}: "
+                        "ratification dossier verified against the packet."
+                    ),
                     "status": "delivered",
                 }) + "\n")
 

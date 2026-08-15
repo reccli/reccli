@@ -4529,6 +4529,37 @@ class GateProposalExtractionTests(unittest.TestCase):
             self.assertIn("traversal", proposal["error"])
 
 
+class DispositionMarkerTests(unittest.TestCase):
+    def test_bounded_labels_strip_and_markers_parse(self):
+        from reccli.organization import disposition_marker
+
+        cases = {
+            "NO_VETO abc123: verified.": "NO_VETO",
+            "FORMAL DISPOSITION: NO_VETO — candidate d2e314e1 verified":
+                "NO_VETO",
+            "Disposition: VETO abc123: discrimination fails": "VETO",
+            "verdict: APPROVED abc123": "APPROVED",
+            "REVIEW: REVIEWED abc123": "REVIEWED",
+        }
+        for content, expected in cases.items():
+            self.assertEqual(
+                disposition_marker(content), expected, content,
+            )
+
+    def test_negations_and_prose_fail_closed(self):
+        from reccli.organization import disposition_marker
+
+        for content in (
+            "NOT NO_VETO abc123",
+            "I would NO_VETO this if the probe passed",
+            "FORMAL DISPOSITION: pending further review",
+            "OPINION: NO_VETO seems right",
+            "",
+            None,
+        ):
+            self.assertIsNone(disposition_marker(content), content)
+
+
 class FinalLedgerUnificationTests(unittest.TestCase):
     def _governance(self, root):
         run_dir = root / "devsession" / "agent-organizations" / "ledger"
