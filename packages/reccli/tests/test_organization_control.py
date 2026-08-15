@@ -852,6 +852,102 @@ class OrganizationControlTests(unittest.TestCase):
             )
             self.assertEqual(replay["status"], "already_staged")
 
+    def test_derivation_refuses_a_silent_null_gate(self):
+        from reccli.organization_control import stage_approval_from_record
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "nullgate"
+            run_dir.mkdir(parents=True)
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "nullgate", "project_root": str(root),
+                "mission": "m", "topology": "flat",
+            }) + "\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "run_id": "nullgate", "status": "round_limit",
+            }) + "\n", encoding="utf-8")
+            (run_dir / "run-conclusion.json").write_text(
+                json.dumps({"summary": "s"}) + "\n", encoding="utf-8",
+            )
+            with (run_dir / "messages.jsonl").open("w") as handle:
+                handle.write(json.dumps({
+                    "round": 3, "from": "auditor-a", "to": "lead",
+                    "tag": "decision", "candidate": candidate,
+                    "content": f"NO_VETO {candidate}: verified.",
+                    "status": "delivered",
+                }) + "\n")
+            with self.assertRaisesRegex(
+                RuntimeError, "stages no gate proposal",
+            ):
+                stage_approval_from_record(
+                    str(root), "nullgate", report_candidate=candidate,
+                )
+            staged = stage_approval_from_record(
+                str(root), "nullgate", report_candidate=candidate,
+                allow_no_gate=True,
+            )
+            self.assertEqual(staged["status"], "staged")
+            self.assertIsNone(staged["gate_predicate_id"])
+
+    def test_gate_apply_reads_from_the_gate_source_candidate(self):
+        from reccli.organization_control import _apply_gate_proposal
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            staging = (
+                root / ".reccli-org-artifacts" / "packetrun" / "gate-proposal"
+            )
+            (staging / "files").mkdir(parents=True)
+            (staging / "files" / "predicate.json").write_text(
+                '{"id": "envelope-coverage-v1"}\n', encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "packet"], cwd=root, check=True,
+            )
+            gate_source = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            # A later dossier commit WITHOUT the gate files: the approved
+            # report candidate.
+            (root / "dossier.md").write_text("# dossier\n", encoding="utf-8")
+            subprocess.run(["git", "add", "dossier.md"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "dossier"], cwd=root, check=True,
+            )
+            report = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            effect = _apply_gate_proposal(root, {
+                "run_id": "packetrun",
+                "report_candidate": report,
+                "gate_source_candidate": gate_source,
+            }, {
+                "predicate_id": "envelope-coverage-v1",
+                "files": [{
+                    "path": (
+                        ".reccli-org-artifacts/packetrun/gate-proposal/"
+                        "files/predicate.json"
+                    ),
+                    "target": "benchmarks/gates/envelope-coverage-v1.json",
+                }],
+            })
+            self.assertTrue(effect["gate_applied"])
+            self.assertTrue(
+                (root / "benchmarks" / "gates" /
+                 "envelope-coverage-v1.json").is_file(),
+            )
+
     def test_stage_from_record_refuses_without_recorded_authority(self):
         from reccli.organization_control import stage_approval_from_record
 

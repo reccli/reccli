@@ -83,6 +83,8 @@ def _cmd_stage_from_record(args: argparse.Namespace) -> int:
         str(root),
         args.run_id,
         report_candidate=args.candidate,
+        gate_candidate=args.gate_candidate,
+        allow_no_gate=args.no_gate,
     )
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0 if payload.get("status") in {"staged", "already_staged"} else 1
@@ -197,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("--request-sha", required=True)
     approve_parser.add_argument("--idempotency-key", default=None)
     approve_parser.add_argument("--requested-by", default="human-operator")
+    approve_parser.add_argument("--project-root")
     approve_parser.set_defaults(func=_cmd_approve)
 
     stage_parser = subparsers.add_parser(
@@ -208,6 +211,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stage_parser.add_argument("run_id")
     stage_parser.add_argument("--candidate", required=True)
+    stage_parser.add_argument(
+        "--gate-candidate",
+        default=None,
+        help=(
+            "Commit whose tree carries the gate proposal, when it differs "
+            "from the approved report candidate"
+        ),
+    )
+    stage_parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="Deliberately stage a pure checkpoint packet with no gate",
+    )
     stage_parser.add_argument("--project-root")
     stage_parser.set_defaults(func=_cmd_stage_from_record)
 

@@ -1049,7 +1049,11 @@ def _apply_gate_proposal(
     at their protected-path targets. Content comes from the approved
     candidate's git tree byte-for-byte, never from the working directory.
     """
-    candidate = str(request.get("report_candidate") or "")
+    candidate = str(
+        request.get("gate_source_candidate")
+        or request.get("report_candidate")
+        or ""
+    )
     applied: List[str] = []
     for entry in gate.get("files") or []:
         source = str(entry.get("path") or "")
@@ -1098,6 +1102,8 @@ def stage_approval_from_record(
     run_id: str,
     *,
     report_candidate: str,
+    gate_candidate: Optional[str] = None,
+    allow_no_gate: bool = False,
 ) -> Dict[str, Any]:
     """Derive a pending-human approval packet from a terminal run's record.
 
@@ -1206,12 +1212,29 @@ def stage_approval_from_record(
         admission=run_record.get("admission"),
     )
     probe_workspace = Workspace(project_root, "derived", "derived", project_root, [])
+    # The gate proposal may live in a different candidate than the approved
+    # dossier (run thirteen's did). Extracting only from the report candidate
+    # silently degraded the packet to a pure checkpoint species, and the
+    # first click faithfully executed the wrong thing. A null gate is now a
+    # refusal unless deliberately requested.
+    exact_gate = str(gate_candidate or exact).strip().lower()
+    if len(exact_gate) != 40 or any(
+        c not in "0123456789abcdef" for c in exact_gate
+    ):
+        raise ValueError("gate_candidate must be one exact 40-hex commit")
+    _git_text(project_root, ["cat-file", "-e", f"{exact_gate}^{{commit}}"])
     gate_proposal = runner._extract_gate_proposal(
-        exact, workspace=probe_workspace,
+        exact_gate, workspace=probe_workspace,
     )
     if isinstance(gate_proposal, dict) and gate_proposal.get("error"):
         raise RuntimeError(
             f"the staged gate proposal fails validation: {gate_proposal['error']}"
+        )
+    if gate_proposal is None and not allow_no_gate:
+        raise RuntimeError(
+            f"candidate {exact_gate} stages no gate proposal; pass "
+            "gate_candidate naming the commit that carries it, or "
+            "allow_no_gate to deliberately stage a pure checkpoint packet"
         )
 
     base_commit = _git_text(project_root, ["rev-parse", "HEAD"]).strip()
@@ -1239,6 +1262,9 @@ def stage_approval_from_record(
             ),
         },
         "gate_proposal": gate_proposal,
+        "gate_source_candidate": (
+            exact_gate if gate_proposal is not None else None
+        ),
         "successor_admission": conclusion.get("proposed_successor_admission"),
         "conclusion": {
             key: conclusion.get(key)
