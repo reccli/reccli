@@ -3023,6 +3023,7 @@ class OrganizationRunner:
         self.turned: Set[str] = set()
         self._consecutive_turn_failures: Dict[str, int] = {}
         self._finalization_attempted = False
+        self._nudged_assignments: Set[str] = set()
         self.prompt_bootstrapped: Set[str] = set()
         self.model_prompt_state_by_agent: Dict[str, Dict[str, Any]] = {}
         self.usage = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
@@ -3250,6 +3251,11 @@ class OrganizationRunner:
                 self._select_closeout_agents()
                 if closeout else self._select_agents(round_number)
             )
+            if not scheduled and self._nudge_pending_reviews(round_number):
+                scheduled = (
+                    self._select_closeout_agents()
+                    if closeout else self._select_agents(round_number)
+                )
             if not scheduled:
                 if not closeout:
                     status = "stalled"
@@ -3451,6 +3457,24 @@ class OrganizationRunner:
                 if missing:
                     self.states[agent.agent_id] = "working"
                     self._event("finalization.rejected", round_number, agent_id=agent.agent_id, candidate=candidate, missing_approvers=missing, reason="candidate lacks required approvals")
+                    # An event is not feedback: the inbox-only finalizer is
+                    # never rescheduled by a silent rejection, so the run
+                    # winds down over the exact approval it is waiting for.
+                    self._system_message(
+                        agent.agent_id,
+                        "blocker",
+                        (
+                            f"Finalization of {candidate} is blocked on "
+                            f"missing release approvals from "
+                            f"{', '.join(missing)}. Request NO_VETO on this "
+                            "exact candidate from each, then re-submit your "
+                            "final reply."
+                        ),
+                        round_number,
+                        candidate,
+                        "final-release",
+                        "release",
+                    )
                     continue
                 if disposition in {"no_promotion", "pending_human"}:
                     report_record = self._candidate_record(
@@ -8782,21 +8806,42 @@ off-goal finding; do not expand scope or substitute administrative prose."""
                 candidate_record["kind"] in {"artifact-only", "identity-only"}
                 and not artifact_report_review
             ):
+                reason = (
+                    f"{candidate_record['kind']} commit {candidate} is a "
+                    "durable report identity, not an implementation "
+                    "candidate. Artifact reports may receive "
+                    "release-risk review/decision traffic, but they cannot "
+                    "be handed off as implementation candidates"
+                )
                 self.dropped_messages += 1
                 self._append_jsonl("messages.jsonl", {
                     "round": round_number,
                     "from": sender,
                     **message,
                     "status": "dropped",
-                    "reason": (
-                        f"{candidate_record['kind']} commit {candidate} is a "
-                        "durable report identity, not an implementation "
-                        "candidate. Artifact reports may receive "
-                        "release-risk review/decision traffic, but they cannot "
-                        "be handed off as implementation candidates"
-                    ),
+                    "reason": reason,
                     "ts": _utc_now(),
                 })
+                if tag in {"review", "decision"}:
+                    # A silently dropped review request strands the whole
+                    # release lane: run nine routed its dossier review, the
+                    # gate ate it, and the run concluded over the auditor's
+                    # never-scheduled turn. The sender must learn, in-band,
+                    # what to fix (a report review needs workItem AND
+                    # risk=release).
+                    self._system_message(
+                        sender,
+                        "blocker",
+                        (
+                            f"Your {tag} request to {recipient} was dropped: "
+                            f"{reason}. Re-send with a named workItem and "
+                            "risk=release to route a report review."
+                        ),
+                        round_number,
+                        str(candidate),
+                        message.get("workItem"),
+                        "release",
+                    )
                 return
             if (
                 candidate_record["kind"] == "implementation"
@@ -9787,6 +9832,52 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         # are sealed, so it must not silently starve an explicitly assigned
         # worker before the team has even evaluated the lane.
         return selected
+
+    def _nudge_pending_reviews(self, round_number: int) -> int:
+        """Re-route assigned-but-undisposed release reviews before winding down.
+
+        The mirror of the completed-goal wake, on the reviewer's side of the
+        table: a review that was routed but never taken does not count as
+        pending work anywhere the scheduler looks, so a run can conclude over
+        the exact disposition it is waiting for. Each undisposed assignment
+        gets one host re-route to its reviewer; a reviewer that ignores the
+        nudge lets the run end honestly.
+        """
+        nudged = 0
+        for assignment in self.governance.assignments.values():
+            if assignment.get("status") != "assigned":
+                continue
+            candidate = str(assignment.get("candidate") or "")
+            reviewer = str(assignment.get("reviewerId") or "")
+            if not candidate or not reviewer:
+                continue
+            if candidate in self.integrated_candidates:
+                continue
+            key = f"{candidate}:{reviewer}"
+            if key in self._nudged_assignments:
+                continue
+            self._nudged_assignments.add(key)
+            self._system_message(
+                reviewer,
+                "review",
+                (
+                    f"Assignment {assignment.get('workItem')} for exact "
+                    f"candidate {candidate} still awaits your recorded "
+                    "disposition. Reply with NO_VETO or a veto with "
+                    "reproducible grounds; the run cannot close over an "
+                    "untaken review."
+                ),
+                round_number,
+                candidate,
+                assignment.get("workItem"),
+                assignment.get("risk"),
+            )
+            nudged += 1
+        if nudged:
+            self._event(
+                "review.nudged", round_number, count=nudged,
+            )
+        return nudged
 
     def _select_closeout_agents(self) -> List[AgentSpec]:
         """Schedule only review, integration, and release traffic after cap.

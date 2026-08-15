@@ -4529,6 +4529,87 @@ class GateProposalExtractionTests(unittest.TestCase):
             self.assertIn("traversal", proposal["error"])
 
 
+class ReleaseLaneLivenessTests(unittest.TestCase):
+    def test_dropped_report_review_bounces_to_the_sender(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "bounce"
+            runner = OrganizationRunner(
+                root, "Route the dossier review.", "claude",
+                "flat", "bounce", run_dir,
+            )
+            runner.workspaces["lead"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            runner.caller_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            report = root / ".reccli-org-artifacts" / "bounce" / "dossier.md"
+            report.parent.mkdir(parents=True)
+            report.write_text("# Dossier\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "dossier"], cwd=root, check=True,
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            runner._deliver_message("lead", {
+                "to": "auditor-a", "tag": "review",
+                "content": "Review the staged ratification dossier.",
+                "candidate": head, "workItem": None, "risk": "release",
+            }, 2)
+            self.assertEqual(
+                runner.inboxes["auditor-a"], [],
+                "the malformed report review must not deliver",
+            )
+            bounces = [
+                message for message in runner.inboxes["lead"]
+                if message.get("tag") == "blocker"
+                and "was dropped" in message.get("content", "")
+                and "workItem" in message.get("content", "")
+            ]
+            self.assertEqual(
+                len(bounces), 1,
+                "a silently dropped review request strands the release lane",
+            )
+
+    def test_undisposed_assignment_is_nudged_exactly_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "nudge"
+            runner = OrganizationRunner(
+                root, "Route the dossier review.", "claude",
+                "flat", "nudge", run_dir,
+            )
+            runner.governance.assignments["c" * 40] = {
+                "candidate": "c" * 40,
+                "workItem": "packet-review",
+                "risk": "release",
+                "workerId": "worker-b",
+                "primaryManagerId": "lead",
+                "reviewerId": "auditor-a",
+                "status": "assigned",
+            }
+            self.assertEqual(runner._nudge_pending_reviews(3), 1)
+            reviews = [
+                message for message in runner.inboxes["auditor-a"]
+                if "awaits your recorded" in message.get("content", "")
+                and message.get("candidate") == "c" * 40
+            ]
+            self.assertEqual(len(reviews), 1)
+            self.assertEqual(
+                runner._nudge_pending_reviews(4), 0,
+                "a reviewer that ignores the nudge lets the run end honestly",
+            )
+
+
 class CompletedGoalWakesSupervisorTests(unittest.TestCase):
     def test_state_done_completion_wakes_the_lead(self):
         with tempfile.TemporaryDirectory() as td:
