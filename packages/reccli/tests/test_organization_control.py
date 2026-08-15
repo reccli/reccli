@@ -469,11 +469,22 @@ class OrganizationControlTests(unittest.TestCase):
             self.assertEqual(approved["status"], "applied")
             self.assertEqual(approved["action"], "start_successor")
             self.assertEqual(approved["successor_run_id"], "successor")
-            self.assertIn(
+            self.assertNotIn(
                 str((run_dir / "approval" / "decision.json").resolve()),
                 captured["evidence_paths"],
+                "the decision rides as identity in the mission, never as "
+                "mounted evidence: run output may not be cited as immutable "
+                "evidence, ratification records included",
             )
             self.assertIn("Human-approved continuation", captured["mission"])
+            decision_for_hash = json.loads(
+                (run_dir / "approval" / "decision.json").read_text(
+                    encoding="utf-8",
+                ),
+            )
+            self.assertIn(
+                decision_for_hash["decision_sha256"], captured["mission"],
+            )
             decision = json.loads(
                 (run_dir / "approval" / "decision.json").read_text(
                     encoding="utf-8",

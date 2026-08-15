@@ -1370,7 +1370,9 @@ The operator approved the exact checkpoint request from predecessor run
 - Approval request SHA-256: `{request.get('request_sha256')}`
 - Approval decision SHA-256: `{decision_sha}`
 - Reviewed report candidate: `{request.get('report_candidate')}`
-- Durable decision source: `{decision_path}`
+- Durable decision source: `{decision_path}` (identified above by hash;
+  intentionally not mounted as run evidence, because run output may never
+  be cited as immutable evidence, ratification records included)
 
 Treat only that exact decision as approved. It does not authorize remote push,
 mutation of protected evidence, or scientific claims beyond the reviewed
@@ -1381,8 +1383,12 @@ supervisor.
 
 {original_mission}
 """
+    # The successor consumes the decision's IDENTITY (the SHA in its
+    # mission), never the file: the decision record lives under the run tree,
+    # and the evidence-authority guard categorically refuses run output as
+    # immutable evidence. Mounting it made the first-ever ratification click
+    # veto itself on two individually-correct guards.
     evidence_paths = list(continuation.get("evidence_paths") or [])
-    evidence_paths.append(str(decision_path))
     decision_record = _read_json(decision_path, {}) or {}
     approver = str(
         decision_record.get("approved_by")
