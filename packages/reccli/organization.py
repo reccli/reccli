@@ -3732,15 +3732,24 @@ class OrganizationRunner:
         # ordinary approve click. Honest labeling does the work the ceremony
         # was pretending to do: the packet states exactly what was measured
         # and what was not.
+        host_merge: Optional[Dict[str, Any]] = None
         if approval_request is None and promotion_request is None:
             try:
-                approval_request = self._stage_terminal_work(
-                    status, conclusion, rounds,
-                )
+                host_merge = self._merge_verified_work(status, rounds)
             except Exception as exc:
                 self._event(
-                    "promotion.terminal_staging_failed", rounds, error=str(exc),
+                    "promotion.host_merge_failed", rounds, error=str(exc),
                 )
+            if host_merge is None:
+                try:
+                    approval_request = self._stage_terminal_work(
+                        status, conclusion, rounds,
+                    )
+                except Exception as exc:
+                    self._event(
+                        "promotion.terminal_staging_failed", rounds,
+                        error=str(exc),
+                    )
         result = {
             "run_id": self.run_id, "status": status, "rounds": rounds,
             "working_rounds": min(rounds, self.max_rounds),
@@ -3762,7 +3771,9 @@ class OrganizationRunner:
                 if approval_request else None
             ),
             "human_promotion_required": self.topology.human_promotion_required,
-            "canonical_effects_applied": False,
+            "host_merge": host_merge,
+            "canonical_effects_applied": bool(host_merge),
+            "merged_commit": (host_merge or {}).get("merged_commit"),
             "artifact_manifest": artifact_manifest,
             "final_reviewer_id": self.governance.release_reviewer_id,
             "blind_review": final_review, "usage": self.usage,
@@ -4705,6 +4716,101 @@ class OrganizationRunner:
             None,
             "routine",
         )
+
+    def _merge_verified_work(
+        self,
+        status: str,
+        round_number: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Merge host-measured improvement into the caller's branch.
+
+        The measurement is what makes work real, so the measurement is what
+        authorizes the merge. A human click at this seam judges what the
+        evaluator already judged better, and every packet, hash, disposition,
+        auditor and ceremony run in this system existed only to feed that
+        click. Removed.
+
+        What authorizes a merge, all mechanical, all necessary: the host ran
+        the project's own named evaluator command against the exact candidate
+        and recorded a keep verdict (target improved, declared floors held);
+        the candidate never touched a protected path (write-scope validation
+        already refused those turns, so the evaluator could not be gamed);
+        no veto stands; the candidate descends from the frozen base; and the
+        caller's tracked tree is still exactly as the run found it. The merge
+        is fast-forward only, into the local branch, never a remote. Every
+        effect is one revertible commit.
+
+        Unmeasured work is never merged. It stages for a human instead,
+        because nothing mechanical established that it works.
+        """
+        if status in {"cancelled", "completed_no_op"}:
+            return None
+        candidate = self._terminal_work_candidate()
+        if not candidate:
+            return None
+        measurements = [
+            record for record in self.goal_candidate_evaluations
+            if str(record.get("candidate")) == candidate
+            and record.get("verdict") == "keep"
+        ]
+        if not measurements:
+            return None
+        if candidate in set(self.governance.candidate_vetoes.values()):
+            return None
+        workspace = self.workspaces[self.topology.finalizer_id]
+        base = self.caller_head or workspace.base_commit
+        if not base or self._host_git(
+            workspace,
+            ["merge-base", "--is-ancestor", base, candidate],
+            check=False,
+        ).returncode != 0:
+            return None
+        self._verify_caller_repository_unchanged()
+        artifact_manifest = self._export_staged_artifacts(candidate)
+        promotion_candidate, promotion_branch = (
+            self._create_promotion_candidate(
+                candidate,
+                [entry["source"] for entry in artifact_manifest["files"]],
+                artifact_manifest["manifest_sha256"],
+            )
+        )
+        changed_paths = sorted(self._git_paths(
+            workspace,
+            ["diff", "--name-only", "-z", f"{base}..{promotion_candidate}"],
+        ))
+        if not changed_paths:
+            return None
+        _git(self.project_root, ["merge", "--ff-only", promotion_candidate])
+        merged_head = _git(
+            self.project_root, ["rev-parse", "HEAD"],
+        ).strip()
+        self.caller_head = merged_head
+        effect = {
+            "merged": True,
+            "candidate": candidate,
+            "promotion_candidate": promotion_candidate,
+            "promotion_branch": promotion_branch,
+            "merged_commit": merged_head,
+            "changed_paths": changed_paths,
+            "measurements": measurements,
+            "remote_push": False,
+        }
+        self._event(
+            "promotion.host_merged", round_number,
+            candidate=candidate,
+            merged_commit=merged_head,
+            changed_paths=changed_paths,
+        )
+        try:
+            record_outcome_event(
+                self.project_root, "promotion_applied", self.run_id,
+                candidate=candidate,
+                applied_commit=merged_head,
+                decided_by="host-measured",
+            )
+        except Exception:
+            pass
+        return effect
 
     def _terminal_work_candidate(self) -> Optional[str]:
         """The implementation candidate a terminal run should stage, if any.

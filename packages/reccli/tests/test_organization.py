@@ -4580,18 +4580,32 @@ class TerminalWorkStagingTests(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=root,
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        runner.workspaces["lead"] = Workspace(
-            root, "test", "test-main", root, [],
+        # Candidates live in the worker's isolated worktree, never in the
+        # caller repo: the caller's tree must stay exactly as the run found
+        # it, which is what makes the merge safe.
+        worktree = root / ".worktrees" / run_id
+        branch = f"reccli-test-{run_id}"
+        subprocess.run(
+            [
+                "git", "worktree", "add", "-q", "-b", branch,
+                str(worktree), runner.caller_head,
+            ],
+            cwd=root, check=True,
         )
-        (root / "app.py").write_text(
+        runner.workspaces["lead"] = Workspace(
+            worktree, branch, branch, worktree, [],
+        )
+        runner.workspaces["lead"].base_commit = runner.caller_head
+        (worktree / "app.py").write_text(
             "print('envelope capability')\n", encoding="utf-8",
         )
-        subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+        subprocess.run(["git", "add", "app.py"], cwd=worktree, check=True)
         subprocess.run(
-            ["git", "commit", "-qm", "worker candidate"], cwd=root, check=True,
+            ["git", "commit", "-qm", "worker candidate"],
+            cwd=worktree, check=True,
         )
         candidate = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root,
+            ["git", "rev-parse", "HEAD"], cwd=worktree,
             capture_output=True, text=True, check=True,
         ).stdout.strip()
         runner.candidate_kinds[candidate] = {
@@ -4636,6 +4650,71 @@ class TerminalWorkStagingTests(unittest.TestCase):
             self.assertEqual(
                 staged["request_sha256"], request["request_sha256"],
             )
+
+    def test_host_measured_work_merges_itself(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, candidate = self._runner_with_candidate(root, "merge")
+            runner.goal_candidate_evaluations.append({
+                "candidate": candidate, "verdict": "keep",
+                "predicate_id": "envelope-coverage-v1",
+                "baseline_value": 999.0, "candidate_value": 2.5709e-05,
+            })
+            before = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            effect = runner._merge_verified_work("round_limit", 6)
+            self.assertIsNotNone(
+                effect,
+                "host-measured improvement authorizes its own merge: the "
+                "measurement is what a click would have been judging",
+            )
+            self.assertTrue(effect["merged"])
+            self.assertFalse(effect["remote_push"])
+            self.assertIn("app.py", effect["changed_paths"])
+            after = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertNotEqual(after, before)
+            self.assertEqual(after, effect["merged_commit"])
+            self.assertEqual(
+                (root / "app.py").read_text(encoding="utf-8"),
+                "print('envelope capability')\n",
+                "the pipeline improvement is on the caller's branch",
+            )
+
+    def test_unmeasured_work_never_merges_itself(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, _ = self._runner_with_candidate(root, "unmeasured")
+            before = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertIsNone(
+                runner._merge_verified_work("round_limit", 6),
+                "nothing mechanical established that unmeasured work works",
+            )
+            after = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertEqual(after, before)
+
+    def test_a_vetoed_candidate_never_merges_itself(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, candidate = self._runner_with_candidate(root, "vetomerge")
+            runner.goal_candidate_evaluations.append({
+                "candidate": candidate, "verdict": "keep",
+            })
+            runner.governance.candidate_vetoes["auditor-a"] = candidate
+            self.assertIsNone(runner._merge_verified_work("round_limit", 6))
 
     def test_a_vetoed_candidate_is_never_staged(self):
         with tempfile.TemporaryDirectory() as td:
