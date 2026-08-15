@@ -3732,15 +3732,21 @@ class OrganizationRunner:
         # ordinary approve click. Honest labeling does the work the ceremony
         # was pretending to do: the packet states exactly what was measured
         # and what was not.
+        # The merge runs regardless of disposition. Gating it on
+        # `promotion_request is None` made it unreachable exactly when the run
+        # SUCCEEDED: a lead that correctly finalized `promote` caused a
+        # promotion request to be written, which suppressed the merge. Success
+        # was the one path that could not deliver. Measured improvement is the
+        # authorization; a promotion request is just a document.
         host_merge: Optional[Dict[str, Any]] = None
-        if approval_request is None and promotion_request is None:
+        if approval_request is None:
             try:
                 host_merge = self._merge_verified_work(status, rounds)
             except Exception as exc:
                 self._event(
                     "promotion.host_merge_failed", rounds, error=str(exc),
                 )
-            if host_merge is None:
+            if host_merge is None and promotion_request is None:
                 try:
                     approval_request = self._stage_terminal_work(
                         status, conclusion, rounds,
@@ -4780,6 +4786,46 @@ class OrganizationRunner:
         ))
         if not changed_paths:
             return None
+        # Merge only what the evaluator's own policy declares mutable. A
+        # recorded candidate carried 1806 files of a repo copy an agent left
+        # in its worktree, auto-committed by materialization and stripped by
+        # nothing: that tree is what a fast-forward would have taken into the
+        # caller's repo. The measurement authorizes a change to the source it
+        # measures, not to everything the worktree happened to contain.
+        mutable_roots = [
+            str(root).strip("/")
+            for root in (
+                (self.experiment_policy or {}).get("evaluators", {}).get(
+                    next(
+                        iter(
+                            (self.experiment_policy or {}).get("evaluators", {})
+                        ),
+                        "",
+                    ),
+                    {},
+                ).get("mutable_roots")
+                or []
+            )
+            if str(root).strip("/")
+        ]
+        if mutable_roots:
+            outside = sorted(
+                path for path in changed_paths
+                if not any(
+                    path == root or path.startswith(root + "/")
+                    for root in mutable_roots
+                )
+            )
+            if outside:
+                self._event(
+                    "promotion.host_merge_refused", round_number,
+                    candidate=candidate,
+                    reason="changed paths fall outside declared mutable roots",
+                    mutable_roots=mutable_roots,
+                    outside_paths=outside[:24],
+                    outside_count=len(outside),
+                )
+                return None
         _git(self.project_root, ["merge", "--ff-only", promotion_candidate])
         merged_head = _git(
             self.project_root, ["rev-parse", "HEAD"],
@@ -6223,13 +6269,23 @@ Change only the mutable file above and write one trial intent under
             trial["contract_sha256"] == contract["sha256"]
             for trial in self.experiment_trials
         )
+        # The measurement identity includes the exact candidate. The goal path
+        # never records an experiment trial, so `sequence` was permanently 001
+        # and the directory name was permanently `001-goal-candidate`: the
+        # SECOND measurement of any goal raised FileExistsError before running
+        # anything. Across 23 recorded runs this host produced exactly one
+        # goal-candidate measurement and zero `002-*` directories of any kind.
+        # Worse, the raise was wired to a destructor (handoff ran `git reset
+        # --hard candidate^` when no keep record existed) and a re-delegation
+        # collided on `001-goal-baseline`, which propagated out of run() and
+        # killed the whole run before any conclusion, staging, or merge.
         log_root = (
             self.experiment_loop_root
             / "logs"
             / contract["sha256"][:16]
-            / f"{sequence:03d}-{_safe_name(label)}"
+            / f"{sequence:03d}-{_safe_name(label)}-{_safe_name(candidate)[:12]}"
         )
-        log_root.mkdir(parents=True, exist_ok=False)
+        log_root.mkdir(parents=True, exist_ok=True)
         result_path = (
             log_root / "result.json"
             if evaluator["result_mode"] == "json_file"
@@ -8281,6 +8337,56 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                 "implementation goal is unevaluable: predicate "
                 f"{goal['predicate_id']} is already satisfied at baseline"
             )
+        # Refuse a goal whose verdict is already predetermined. The host used
+        # to bind these silently and spend the entire run's budget producing a
+        # discard it could have known about in round one: five of the last
+        # five recorded runs bound a predicate at or below its own tolerance
+        # (cube 0.0, sphere 0.0, cube-conversion 4.38e-15) or a baseline whose
+        # hard gates were all false, and every one was unwinnable at bind
+        # time. A goal that cannot register improvement is not a goal.
+        hard_gates = outcome.get("hard_gates") or {}
+        # The predicate's OWN gate is allowed to fail at baseline: that is the
+        # headroom the goal exists to close. Any OTHER failing gate makes
+        # retention arithmetically impossible, because retention requires all
+        # gates true.
+        predicate_source = predicate.get("source")
+        if predicate_source == "hard_gate":
+            own_gate = predicate.get("result_id")
+        elif predicate_source == "commands_pass":
+            own_gate = "commands_pass"
+        else:
+            own_gate = None
+        failed_gates = sorted(
+            gate for gate, passed in hard_gates.items()
+            if not passed and gate != own_gate
+        )
+        if failed_gates:
+            return False, (
+                "implementation goal is unevaluable: the baseline already "
+                f"fails required hard gates {failed_gates}, so no candidate "
+                "can be retained. Fix the evaluator inputs (an unset evidence "
+                "snapshot zeroes every gate) or bind a different predicate"
+            )
+        tolerance = next(
+            (
+                metric["tolerance"]
+                for metric in evaluator["metrics"]
+                if metric["id"] == predicate["result_id"]
+            ),
+            0.0,
+        )
+        if (
+            goal["comparison_rule_id"] == "minimize"
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and float(value) <= float(tolerance)
+        ):
+            return False, (
+                "implementation goal is unevaluable: predicate "
+                f"{goal['predicate_id']} is already at {value}, within its "
+                f"{tolerance} tolerance, so no improvement can be measured. "
+                "Bind a predicate with measured headroom"
+            )
         return True, ""
 
     def _evaluate_bound_goal_candidate(
@@ -9318,6 +9424,35 @@ off-goal finding; do not expand scope or substitute administrative prose."""
                     if evaluation_error:
                         reason += f"; evaluator error: {evaluation_error}"
                     workspace = self.workspaces[sender]
+                    if evaluation_error:
+                        # An infrastructure exception is not evidence of no
+                        # progress. Destroying the worktree here deleted
+                        # correct verified work whenever the evaluator merely
+                        # timed out or collided, leaving it unreferenced in
+                        # the object store. Keep the commit, say so plainly,
+                        # and let the worker re-hand it off.
+                        self._event(
+                            "candidate.retained_despite_evaluator_error",
+                            round_number,
+                            agent_id=sender,
+                            candidate=str(candidate),
+                            error=evaluation_error,
+                        )
+                        self._system_message(
+                            sender,
+                            "blocker",
+                            (
+                                "The host could not measure your candidate "
+                                f"({evaluation_error}). Your commit is intact; "
+                                "re-send the handoff so it can be measured "
+                                "again. Do not redo the work."
+                            ),
+                            round_number,
+                            str(candidate),
+                            message.get("workItem"),
+                            message.get("risk"),
+                        )
+                        return
                     parent = _git(
                         workspace.cwd,
                         ["rev-parse", f"{candidate}^"],
@@ -10150,6 +10285,21 @@ Approve only when the exact candidate meets observable acceptance criteria. A pl
         consecutive = self._consecutive_turn_failures.get(agent.agent_id, 0) + 1
         self._consecutive_turn_failures[agent.agent_id] = consecutive
         if agent.agent_id not in self.topology.worker_ids:
+            return
+        # Release on the SECOND consecutive failure, not the first. The count
+        # was computed and then used only in a log string, so a single
+        # provider timeout cancelled the goal permanently ("cancelled" is
+        # terminal), which killed the measurement gate for that worker for the
+        # rest of the run. Every recorded release fired at
+        # consecutive_failures: 1, and long compute turns time out routinely.
+        # One failure earns a retry; two earns a rebind.
+        if consecutive < 2:
+            self._event(
+                "worker.turn_failed_retrying",
+                round_number,
+                worker_id=agent.agent_id,
+                error=error[:200],
+            )
             return
         goal = self.worker_goals.get(agent.agent_id)
         if not self._goal_is_active(goal):

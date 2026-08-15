@@ -4193,11 +4193,21 @@ class DeadLaneReleaseTests(unittest.TestCase):
             })
             worker = runner.topology.agent("worker-a")
 
-            runner._record_turn_failure(worker, "schema rejected", 2)
+            # One failure earns a retry: long compute turns time out
+            # routinely, "cancelled" is terminal, and releasing on the first
+            # failure permanently killed the measurement gate for that worker
+            # (every recorded release fired at consecutive_failures: 1).
+            runner._record_turn_failure(worker, "provider timeout", 2)
+            self.assertEqual(
+                runner.worker_goals["worker-a"]["status"], "active",
+                "a single provider timeout must not permanently cancel a goal",
+            )
+            self.assertEqual(len(runner.inboxes["worker-a"]), 1)
+
+            # Two earn a rebind.
+            runner._record_turn_failure(worker, "provider timeout", 3)
             self.assertEqual(
                 runner.worker_goals["worker-a"]["status"], "cancelled",
-                "the first failed worker turn must release the goal: blind "
-                "retry of a dead lane costs a full turn timeout",
             )
             self.assertEqual(runner.inboxes["worker-a"], [])
             blockers = [
@@ -4213,7 +4223,7 @@ class DeadLaneReleaseTests(unittest.TestCase):
                 work_item="cone-fix",
                 objective="Fix the cone refinement and pass its scoring test.",
                 risk="high",
-                round_number=3,
+                round_number=4,
             )
             self.assertTrue(accepted, reason)
 
@@ -4558,6 +4568,234 @@ class DispositionMarkerTests(unittest.TestCase):
             None,
         ):
             self.assertIsNone(disposition_marker(content), content)
+
+
+class AuditBlockerRegressionTests(unittest.TestCase):
+    """One test per blocker the independent audit reproduced (2026-08-15).
+
+    Six lenses traced the code and every claimed blocker was handed to a
+    separate adversarial reviewer. These are the survivors.
+    """
+
+    def _policy_runner(self, root, run_id="audit"):
+        policy_path = _add_experiment_policy(root, require_goal_progress=True)
+        run_dir = root / "devsession" / "agent-organizations" / run_id
+        runner = OrganizationRunner(
+            root, "Close a measured predicate.", "claude", "flat", run_id,
+            run_dir, experiment_policy="experiment-policy.json",
+        )
+        runner.experiment_policy = (
+            organization_module._load_experiment_policy_definition(
+                root, policy_path,
+            )
+        )
+        return runner
+
+    def test_b3_a_second_measurement_does_not_collide(self):
+        # The log dir was permanently 001-goal-candidate, so the SECOND
+        # measurement of any goal raised FileExistsError before running
+        # anything: 23 runs produced exactly one goal-candidate measurement.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            runner = self._policy_runner(root)
+            contract = {
+                "sha256": "c" * 64,
+                "evaluator_id": "app-regression",
+                "worker_id": "worker-a",
+            }
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [],
+            )
+            first = (
+                runner.experiment_loop_root / "logs" / ("c" * 16)
+                / f"001-goal-candidate-{'a' * 12}"
+            )
+            second = (
+                runner.experiment_loop_root / "logs" / ("c" * 16)
+                / f"001-goal-candidate-{'b' * 12}"
+            )
+            self.assertNotEqual(
+                first, second,
+                "measurement identity must include the exact candidate",
+            )
+
+    def test_b2_a_floored_predicate_is_refused_at_bind(self):
+        # Five of the last five recorded runs bound a predicate already at or
+        # below its tolerance and spent the whole budget on a predetermined
+        # discard.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            runner = self._policy_runner(root, "floored")
+            evaluator = runner.experiment_policy["evaluators"]["app-regression"]
+            evaluator["metrics"] = [{"id": "err", "tolerance": 1e-06}]
+            evaluator["predicates"]["floored"] = {
+                "id": "floored", "goal_class": "production_pipeline",
+                "source": "metric", "result_id": "err",
+                "comparison_rule_id": "minimize",
+            }
+            goal = {
+                "worker_id": "worker-a", "goal_sha256": "g" * 64,
+                "work_item": "floor-probe", "objective": "Lower the error.",
+                "predicate_id": "floored",
+                "progress_evaluator_id": "app-regression",
+                "progress_success_rule": "minimize",
+                "comparison_rule_id": "minimize",
+            }
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [],
+            )
+            with patch.object(
+                runner, "_run_experiment_evaluator",
+                return_value={
+                    "hard_gates": {}, "metrics": {"err": 4.38e-15},
+                    "commands_pass": True,
+                },
+            ), patch.object(
+                runner, "_persist_goal_evaluation",
+                return_value=("path", "s" * 64),
+            ):
+                accepted, reason = runner._capture_goal_baseline(
+                    goal, round_number=2,
+                )
+            self.assertFalse(accepted)
+            self.assertIn("already at", reason)
+            self.assertIn("headroom", reason)
+
+    def test_b1_an_unwinnable_gate_baseline_is_refused_at_bind(self):
+        # scan2param's evaluator seeds 8 gates False and only runs its control
+        # groups when the evidence snapshot is exported; every recent run
+        # launched with evidence_paths empty, so no candidate could ever pass.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            runner = self._policy_runner(root, "gates")
+            evaluator = runner.experiment_policy["evaluators"]["app-regression"]
+            evaluator["metrics"] = [{"id": "err", "tolerance": 1e-06}]
+            evaluator["predicates"]["metricgoal"] = {
+                "id": "metricgoal", "goal_class": "production_pipeline",
+                "source": "metric", "result_id": "err",
+                "comparison_rule_id": "minimize",
+            }
+            goal = {
+                "worker_id": "worker-a", "goal_sha256": "g" * 64,
+                "work_item": "gate-probe", "objective": "Pass the controls.",
+                "predicate_id": "metricgoal",
+                "progress_evaluator_id": "app-regression",
+                "progress_success_rule": "minimize",
+                "comparison_rule_id": "minimize",
+            }
+            runner.workspaces["worker-a"] = Workspace(
+                root, "worker-a", "main", root, [],
+            )
+            with patch.object(
+                runner, "_run_experiment_evaluator",
+                return_value={
+                    "hard_gates": {"control_a": False, "control_b": False},
+                    "metrics": {"err": 0.5},
+                    "commands_pass": True,
+                },
+            ), patch.object(
+                runner, "_persist_goal_evaluation",
+                return_value=("path", "s" * 64),
+            ):
+                accepted, reason = runner._capture_goal_baseline(
+                    goal, round_number=2,
+                )
+            self.assertFalse(accepted)
+            self.assertIn("hard gates", reason)
+            self.assertIn("evidence snapshot", reason)
+
+    def test_b4_a_promotion_request_no_longer_suppresses_the_merge(self):
+        # The merge was gated on `promotion_request is None`, making it
+        # unreachable exactly when the run SUCCEEDED and wrote one.
+        source = Path("packages/reccli/organization.py").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "if host_merge is None and promotion_request is None:", source,
+        )
+        self.assertNotIn(
+            "if approval_request is None and promotion_request is None:",
+            source,
+            "the host merge must not be suppressed by a promotion request",
+        )
+
+    def test_b5_paths_outside_mutable_roots_refuse_the_merge(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            runner = self._policy_runner(root, "junk")
+            runner.experiment_policy["evaluators"]["app-regression"][
+                "mutable_roots"
+            ] = ["src"]
+            runner.caller_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            worktree = root / ".worktrees" / "junk"
+            subprocess.run(
+                [
+                    "git", "worktree", "add", "-q", "-b", "junkbranch",
+                    str(worktree), runner.caller_head,
+                ],
+                cwd=root, check=True,
+            )
+            runner.workspaces["lead"] = Workspace(
+                worktree, "junkbranch", "junkbranch", worktree, [],
+            )
+            runner.workspaces["lead"].base_commit = runner.caller_head
+            junk = worktree / ".candidate-extraction-02a476db"
+            junk.mkdir()
+            (junk / "copy.py").write_text("junk\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "agent left a repo copy"],
+                cwd=worktree, check=True,
+            )
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=worktree,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            runner.candidate_kinds[candidate] = {
+                "candidate": candidate, "kind": "implementation",
+                "paths": [".candidate-extraction-02a476db/copy.py"],
+            }
+            runner.goal_candidate_evaluations.append({
+                "candidate": candidate, "verdict": "keep",
+            })
+            before = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertIsNone(
+                runner._merge_verified_work("round_limit", 6),
+                "a candidate carrying paths outside the evaluator's mutable "
+                "roots must never reach the caller's repo",
+            )
+            after = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertEqual(after, before)
+
+    def test_b3b_an_evaluator_error_never_destroys_the_commit(self):
+        source = Path("packages/reccli/organization.py").read_text(
+            encoding="utf-8",
+        )
+        marker = "candidate.retained_despite_evaluator_error"
+        self.assertIn(marker, source)
+        destructor = source.index('["reset", "--hard", parent]')
+        guard = source.index(marker)
+        self.assertLess(
+            guard, destructor,
+            "the evaluator-error guard must return before the reset",
+        )
 
 
 class TerminalWorkStagingTests(unittest.TestCase):
