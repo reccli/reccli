@@ -88,6 +88,23 @@ def _cmd_stage_from_record(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") in {"staged", "already_staged"} else 1
 
 
+def _cmd_approve(args: argparse.Namespace) -> int:
+    from .organization_control import approve_organization_request
+
+    root = _project_root(args.project_root)
+    if root is None:
+        return 1
+    payload = approve_organization_request(
+        str(root),
+        args.run_id,
+        request_sha256=args.request_sha,
+        idempotency_key=args.idempotency_key,
+        requested_by=args.requested_by,
+    )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0 if payload.get("status") == "applied" else 1
+
+
 def _cmd_control(args: argparse.Namespace) -> int:
     from .organization_control import (
         cancel_organization_run,
@@ -168,6 +185,19 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--project-root")
     status_parser.add_argument("--recent", type=int, default=150)
     status_parser.set_defaults(func=_cmd_status)
+
+    approve_parser = subparsers.add_parser(
+        "approve",
+        help=(
+            "Execute a staged human approval (always runs current code, "
+            "unlike a long-lived console process)"
+        ),
+    )
+    approve_parser.add_argument("run_id")
+    approve_parser.add_argument("--request-sha", required=True)
+    approve_parser.add_argument("--idempotency-key", default=None)
+    approve_parser.add_argument("--requested-by", default="human-operator")
+    approve_parser.set_defaults(func=_cmd_approve)
 
     stage_parser = subparsers.add_parser(
         "stage-from-record",
