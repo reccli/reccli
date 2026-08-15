@@ -73,6 +73,21 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") != "not_found" else 1
 
 
+def _cmd_stage_from_record(args: argparse.Namespace) -> int:
+    from .organization_control import stage_approval_from_record
+
+    root = _project_root(args.project_root)
+    if root is None:
+        return 1
+    payload = stage_approval_from_record(
+        str(root),
+        args.run_id,
+        report_candidate=args.candidate,
+    )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0 if payload.get("status") in {"staged", "already_staged"} else 1
+
+
 def _cmd_control(args: argparse.Namespace) -> int:
     from .organization_control import (
         cancel_organization_run,
@@ -153,6 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--project-root")
     status_parser.add_argument("--recent", type=int, default=150)
     status_parser.set_defaults(func=_cmd_status)
+
+    stage_parser = subparsers.add_parser(
+        "stage-from-record",
+        help=(
+            "Derive a pending-human approval packet from a terminal run's "
+            "durable approval record"
+        ),
+    )
+    stage_parser.add_argument("run_id")
+    stage_parser.add_argument("--candidate", required=True)
+    stage_parser.add_argument("--project-root")
+    stage_parser.set_defaults(func=_cmd_stage_from_record)
 
     message_parser = subparsers.add_parser(
         "message",

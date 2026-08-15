@@ -721,6 +721,148 @@ class OrganizationControlTests(unittest.TestCase):
             self.assertEqual(resolved["work_class"], "hypothesis_test")
             self.assertEqual(resolved["origin"], "approved-successor")
 
+    def test_stage_approval_from_record_derives_the_packet(self):
+        from reccli.organization_control import stage_approval_from_record
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "derive"
+            run_dir.mkdir(parents=True)
+            staging = (
+                root / ".reccli-org-artifacts" / "derive" / "gate-proposal"
+            )
+            (staging / "files").mkdir(parents=True)
+            (staging / "files" / "predicate.json").write_text(
+                '{"id": "envelope-coverage-v1"}\n', encoding="utf-8",
+            )
+            (staging / "gate-proposal.json").write_text(json.dumps({
+                "schema": "reccli.organization-gate-proposal.v1",
+                "predicate_id": "envelope-coverage-v1",
+                "evaluator_id": "candidate-qualification-v1",
+                "rationale": "Derived from run thirteen's approved record.",
+                "baseline_command": "scripts/probe.py --timeout 120",
+                "measured_baseline": 999.0,
+                "proposed_tolerance": 0.005,
+                "discrimination": {
+                    "truth_exact_command": "scripts/probe.py truth.stl",
+                    "truth_exact_score": 0.0,
+                    "corrupted_command": "scripts/probe.py corrupted.stl",
+                    "corrupted_score": 0.735,
+                },
+                "what_fools_this_gate": (
+                    "Coverage counts supported area only; a support touching "
+                    "without bonding is invisible to this gate."
+                ),
+                "files": [{
+                    "path": (
+                        ".reccli-org-artifacts/derive/gate-proposal/"
+                        "files/predicate.json"
+                    ),
+                    "target": "benchmarks/gates/envelope-coverage-v1.json",
+                }],
+            }) + "\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "ratification dossier"],
+                cwd=root, check=True,
+            )
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "derive",
+                "project_root": str(root),
+                "mission": "Carry the packet to ratification.",
+                "topology": "flat",
+                "max_rounds": 6,
+                "max_experiments": 2,
+            }) + "\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "run_id": "derive", "status": "round_limit",
+            }) + "\n", encoding="utf-8")
+            (run_dir / "run-conclusion.json").write_text(json.dumps({
+                "summary": "Approved but never staged.",
+                "proposed_successor_admission": {
+                    "consumer": {
+                        "name": "will", "type": "human",
+                        "intended_use": (
+                            "review and merge the envelope implementation"
+                        ),
+                    },
+                    "work_class": "deployable_artifact",
+                    "done_condition": (
+                        "envelope-coverage-v1 passes from a clean checkout"
+                    ),
+                    "stop_conditions": [
+                        "no improvement over baseline after two contracts",
+                    ],
+                },
+            }) + "\n", encoding="utf-8")
+            with (run_dir / "messages.jsonl").open("w") as handle:
+                handle.write(json.dumps({
+                    "round": 9, "from": "auditor-a", "to": "lead",
+                    "tag": "decision", "candidate": candidate,
+                    "content": f"NO_VETO {candidate}: ratification dossier "
+                               "verified against the packet.",
+                    "status": "delivered",
+                }) + "\n")
+
+            staged = stage_approval_from_record(
+                str(root), "derive", report_candidate=candidate,
+            )
+            self.assertEqual(staged["status"], "staged")
+            self.assertEqual(
+                staged["gate_predicate_id"], "envelope-coverage-v1",
+            )
+            request = json.loads(
+                (run_dir / "approval-request.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(request["report_candidate"], candidate)
+            self.assertEqual(
+                request["derivation"]["approvals"][0]["sender"], "auditor-a",
+            )
+            self.assertEqual(
+                request["successor_admission"]["work_class"],
+                "deployable_artifact",
+            )
+            self.assertNotIn("error", request["gate_proposal"])
+            replay = stage_approval_from_record(
+                str(root), "derive", report_candidate=candidate,
+            )
+            self.assertEqual(replay["status"], "already_staged")
+
+    def test_stage_from_record_refuses_without_recorded_authority(self):
+        from reccli.organization_control import stage_approval_from_record
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "bare"
+            run_dir.mkdir(parents=True)
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "bare", "project_root": str(root),
+                "mission": "m", "topology": "flat",
+            }) + "\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "run_id": "bare", "status": "round_limit",
+            }) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                RuntimeError, "cannot manufacture authority",
+            ):
+                stage_approval_from_record(
+                    str(root), "bare", report_candidate=candidate,
+                )
+
     def test_process_activity_tracks_actual_native_agent_not_logical_state(self):
         run_dir = Path("/tmp/control-run")
         process_listing = subprocess.CompletedProcess(

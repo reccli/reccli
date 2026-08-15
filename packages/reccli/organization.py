@@ -706,23 +706,57 @@ class Governance:
             elif content.startswith(("BLOCKED", "VETO")):
                 assignment["status"] = "vetoed" if self.topology.review_policy == "veto" else "blocked"
                 assignment["decision"] = message.get("content")
-        if message.get("to") == self.topology.finalizer_id and sender in self.required_final_approvers():
+        # The final ledger counts the whole reviewer pool, not one hash-picked
+        # member. Counting only the release reviewer while assignment routing
+        # deliberately targets the OTHER auditor aimed the two mechanisms at
+        # different agents: run thirteen held three durable exact-candidate
+        # NO_VETOs and an empty approvals ledger, and the finalizer demanded
+        # an approval the system already possessed until the round limit.
+        # The same narrowness cut the safety direction: a non-release
+        # auditor's veto did not register as blocking.
+        eligible_final_voice = (
+            sender in self.required_final_approvers()
+            or (
+                self.topology.review_policy == "veto"
+                and sender in self.topology.final_reviewer_pool
+            )
+        )
+        if message.get("to") == self.topology.finalizer_id and eligible_final_voice:
             if content.startswith(("BLOCKED", "VETO")):
                 self.candidate_vetoes[sender] = candidate
                 self.candidate_approvals.pop(sender, None)
             elif (
                 self.topology.review_policy == "veto"
-                and sender == self.release_reviewer_id
                 and content.startswith(("NO_VETO", "REVIEWED", "APPROVED"))
-            ) or (
-                sender != self.release_reviewer_id and content.startswith("APPROVED")
-            ) or (
-                self.topology.review_policy != "veto" and content.startswith("APPROVED")
-            ):
+            ) or content.startswith("APPROVED"):
                 self.candidate_approvals[sender] = candidate
                 self.candidate_vetoes.pop(sender, None)
 
     def missing_final_approvers(self, candidate: str) -> List[str]:
+        if self.topology.review_policy == "veto" and self.topology.final_reviewer_pool:
+            # Veto policy: any pool member's standing veto on this exact
+            # candidate blocks; explicit required approvers must each clear
+            # it; beyond those, one pool member's exact-candidate NO_VETO
+            # satisfies (both auditors are independently veto-empowered, so
+            # privileging the hash-picked one adds no safety and starves the
+            # finalizer when routing chose the other).
+            if any(
+                vetoed == candidate for vetoed in self.candidate_vetoes.values()
+            ):
+                return sorted(self.required_final_approvers())
+            missing_required = sorted(
+                approver for approver in self.topology.required_approvers
+                if self.candidate_approvals.get(approver) != candidate
+            )
+            if missing_required:
+                return missing_required
+            pool_cleared = any(
+                self.candidate_approvals.get(member) == candidate
+                for member in self.topology.final_reviewer_pool
+            )
+            if pool_cleared:
+                return []
+            return sorted(self.required_final_approvers())
         return sorted(
             approver for approver in self.required_final_approvers()
             if self.candidate_approvals.get(approver) != candidate

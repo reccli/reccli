@@ -1093,6 +1093,197 @@ def _apply_gate_proposal(
     }
 
 
+def stage_approval_from_record(
+    working_directory: str,
+    run_id: str,
+    *,
+    report_candidate: str,
+) -> Dict[str, Any]:
+    """Derive a pending-human approval packet from a terminal run's record.
+
+    A host defect can leave a run's closure state lagging its recorded
+    approval chain (run thirteen held three durable exact-candidate NO_VETOs
+    and no staged packet). Re-performing a fully performed, formally approved
+    ceremony is waste; re-deriving the packet from the durable record is
+    bookkeeping. Authority is not assumed: the recorded decisions are
+    re-verified from messages.jsonl, the candidate from the object store, and
+    the gate proposal through the same validator a live run uses.
+    """
+    run_dir = _resolve_run(working_directory, run_id)
+    if run_dir is None:
+        return {"status": "not_found", "run_id": run_id}
+    existing = _read_json(run_dir / "approval-request.json", None)
+    if isinstance(existing, dict) and existing.get("request_sha256"):
+        return {
+            "status": "already_staged",
+            "run_id": run_id,
+            "request_sha256": existing["request_sha256"],
+        }
+    status = _read_json(run_dir / "status.json", {}) or {}
+    if status.get("status") not in TERMINAL_STATUSES:
+        raise RuntimeError(
+            "derivation is available only for terminal runs"
+        )
+    run_record = (
+        _read_json(run_dir / "run.json", None)
+        or _read_json(run_dir / "request.json", None)
+        or {}
+    )
+    conclusion = _read_json(run_dir / "run-conclusion.json", {}) or {}
+    project_root = Path(
+        run_record.get("project_root") or working_directory,
+    ).expanduser().resolve()
+    exact = str(report_candidate or "").strip().lower()
+    if len(exact) != 40 or any(c not in "0123456789abcdef" for c in exact):
+        raise ValueError("report_candidate must be one exact 40-hex commit")
+    _git_text(project_root, ["cat-file", "-e", f"{exact}^{{commit}}"])
+    if _git_text(
+        project_root, ["status", "--porcelain", "--untracked-files=no"],
+    ).strip():
+        raise RuntimeError(
+            "derivation requires a clean tracked checkout"
+        )
+
+    from .organization import OrganizationRunner, Workspace, get_topology
+
+    topology = get_topology(str(run_record.get("topology") or "flat"))
+    approvals: List[Dict[str, Any]] = []
+    vetoes: List[Dict[str, Any]] = []
+    messages_path = run_dir / "messages.jsonl"
+    for line in (
+        messages_path.read_text(encoding="utf-8").splitlines()
+        if messages_path.is_file() else []
+    ):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("status") != "delivered":
+            continue
+        if str(record.get("candidate") or "").lower() != exact:
+            continue
+        if record.get("tag") != "decision":
+            continue
+        sender = str(record.get("from") or "")
+        if (
+            sender not in topology.final_reviewer_pool
+            and sender not in topology.required_approvers
+        ):
+            continue
+        content = str(record.get("content") or "").lstrip().upper()
+        entry = {
+            "sender": sender,
+            "round": record.get("round"),
+            "content": record.get("content"),
+        }
+        if content.startswith(("BLOCKED", "VETO")):
+            vetoes.append(entry)
+        elif content.startswith(("NO_VETO", "REVIEWED", "APPROVED")):
+            approvals.append(entry)
+    if vetoes:
+        raise RuntimeError(
+            "the durable record holds a standing veto on this exact "
+            f"candidate: {vetoes[-1]['sender']} round {vetoes[-1]['round']}"
+        )
+    if not approvals:
+        raise RuntimeError(
+            "the durable record holds no exact-candidate release approval "
+            "from the reviewer pool; derivation cannot manufacture authority"
+        )
+
+    runner = OrganizationRunner(
+        project_root,
+        str(run_record.get("mission") or "derived"),
+        "claude",
+        topology.topology_id,
+        str(run_record.get("run_id") or run_id),
+        run_dir,
+        admission=run_record.get("admission"),
+    )
+    probe_workspace = Workspace(project_root, "derived", "derived", project_root, [])
+    gate_proposal = runner._extract_gate_proposal(
+        exact, workspace=probe_workspace,
+    )
+    if isinstance(gate_proposal, dict) and gate_proposal.get("error"):
+        raise RuntimeError(
+            f"the staged gate proposal fails validation: {gate_proposal['error']}"
+        )
+
+    base_commit = _git_text(project_root, ["rev-parse", "HEAD"]).strip()
+    request: Dict[str, Any] = {
+        "schema": APPROVAL_REQUEST_SCHEMA,
+        "version": 1,
+        "created_at": _utc_now(),
+        "run_id": str(run_record.get("run_id") or run_id),
+        "request_kind": "checkpoint_continuation",
+        "title": "Derived checkpoint awaiting your decision",
+        "question": (
+            "Ratify the exact recorded approval chain and continue the "
+            "mission in a fresh run?"
+        ),
+        "status": "awaiting_human_authorization",
+        "canonical_effects_applied": False,
+        "base_commit": base_commit,
+        "report_candidate": exact,
+        "derivation": {
+            "staged_by": "host-derivation",
+            "approvals": approvals,
+            "reason": (
+                "closure state lagged the recorded approval chain; packet "
+                "re-derived from the durable record"
+            ),
+        },
+        "gate_proposal": gate_proposal,
+        "successor_admission": conclusion.get("proposed_successor_admission"),
+        "conclusion": {
+            key: conclusion.get(key)
+            for key in (
+                "summary", "conclusive_findings", "evidence_and_tests",
+                "unresolved", "next_action", "limitations",
+            )
+        },
+        "action": {"type": "start_successor", "remote_push": False},
+        "continuation": {
+            "provider": run_record.get("provider_requested")
+            or run_record.get("provider") or "auto",
+            "topology": topology.topology_id,
+            "max_rounds": int(run_record.get("max_rounds") or 6),
+            "max_concurrency": int(run_record.get("max_concurrency") or 5),
+            "turn_timeout_seconds": int(
+                run_record.get("turn_timeout_seconds") or 2400,
+            ),
+            "model": run_record.get("model") or "auto",
+            "evidence_paths": list(run_record.get("evidence_paths") or []),
+            "protected_paths": list(run_record.get("protected_paths") or []),
+            "context_manifest": run_record.get("context_manifest"),
+            "experiment_policy": run_record.get("experiment_policy"),
+            "max_experiments": int(run_record.get("max_experiments") or 0),
+        },
+        "original_mission": str(run_record.get("mission") or ""),
+        "authorization_limits": [
+            "Approval applies only to the exact report candidate and "
+            "recorded approval chain in this request.",
+            "Approval does not authorize remote push or mutation of "
+            "protected evidence beyond the ratified gate files.",
+        ],
+    }
+    canonical = json.dumps(
+        request, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
+    _atomic_write_json(run_dir / "approval-request.json", request)
+    return {
+        "status": "staged",
+        "run_id": request["run_id"],
+        "request_sha256": request["request_sha256"],
+        "approvals": approvals,
+        "gate_predicate_id": (
+            gate_proposal.get("predicate_id")
+            if isinstance(gate_proposal, dict) else None
+        ),
+    }
+
+
 def _resolve_successor_admission(
     project_root: Path,
     request: Dict[str, Any],

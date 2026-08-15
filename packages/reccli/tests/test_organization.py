@@ -4529,6 +4529,68 @@ class GateProposalExtractionTests(unittest.TestCase):
             self.assertIn("traversal", proposal["error"])
 
 
+class FinalLedgerUnificationTests(unittest.TestCase):
+    def _governance(self, root):
+        run_dir = root / "devsession" / "agent-organizations" / "ledger"
+        runner = OrganizationRunner(
+            root, "Close the packet.", "claude", "flat", "ledger", run_dir,
+        )
+        return runner.governance
+
+    def test_either_auditors_no_veto_satisfies_final_approval(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            governance = self._governance(root)
+            release = governance.release_reviewer_id
+            other = next(
+                auditor
+                for auditor in governance.topology.final_reviewer_pool
+                if auditor != release
+            )
+            candidate = "a" * 40
+            governance.record_decision(other, {
+                "tag": "decision", "to": "lead",
+                "candidate": candidate,
+                "content": f"NO_VETO {candidate}: closure fidelity verified.",
+            })
+            self.assertEqual(
+                governance.missing_final_approvers(candidate), [],
+                "run thirteen held three durable NO_VETOs against an empty "
+                "approvals ledger because only the hash-picked reviewer "
+                "counted",
+            )
+
+    def test_any_auditors_veto_blocks_regardless_of_hash_pick(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            governance = self._governance(root)
+            release = governance.release_reviewer_id
+            other = next(
+                auditor
+                for auditor in governance.topology.final_reviewer_pool
+                if auditor != release
+            )
+            candidate = "b" * 40
+            governance.record_decision(release, {
+                "tag": "decision", "to": "lead",
+                "candidate": candidate,
+                "content": f"NO_VETO {candidate}: packet verified.",
+            })
+            governance.record_decision(other, {
+                "tag": "decision", "to": "lead",
+                "candidate": candidate,
+                "content": f"VETO {candidate}: discrimination claim fails "
+                           "under re-execution.",
+            })
+            self.assertNotEqual(
+                governance.missing_final_approvers(candidate), [],
+                "a veto auditor's veto must block whichever auditor the "
+                "hash picked",
+            )
+
+
 class ReleaseLaneLivenessTests(unittest.TestCase):
     def test_dropped_report_review_bounces_to_the_sender(self):
         with tempfile.TemporaryDirectory() as td:
