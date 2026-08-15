@@ -4818,6 +4818,31 @@ class GateAuthoringBindingTests(unittest.TestCase):
             self.assertIn("unevaluable", error)
             self.assertIsNone(measurement)
 
+    def test_a_materialized_implementation_stands_down_the_deadline(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "impl"
+            runner = OrganizationRunner(
+                root, "Close the envelope gate.", "claude", "flat", "impl",
+                run_dir, max_rounds=6, max_experiments=2,
+                admission=dict(VALID_ADMISSION),
+            )
+            runner.experiment_policy = {"evaluators": {}}
+            deadline = runner._experiment_contract_deadline
+            self.assertTrue(
+                runner._experiment_contract_deadline_passed(deadline),
+            )
+            runner.candidate_kinds["c" * 40] = {
+                "candidate": "c" * 40, "kind": "implementation",
+                "paths": ["src/scan2param/segmentation/convert.py"],
+            }
+            self.assertFalse(
+                runner._experiment_contract_deadline_passed(deadline),
+                "a materialized implementation candidate IS the executed "
+                "thing this deadline detects the absence of",
+            )
+
     def test_ceremony_admission_stands_down_the_contract_deadline(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

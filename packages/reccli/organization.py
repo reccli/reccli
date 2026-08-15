@@ -3949,6 +3949,17 @@ class OrganizationRunner:
         # no-contract instead of the reviewed negative result it was.
         if self._finalization_attempted:
             return False
+        # A materialized implementation candidate IS the executed thing this
+        # deadline exists to detect the absence of. Run 37e449's worker built
+        # and was verifying the envelope capability (194x inside tolerance)
+        # when the deadline executed the run at round 4 for not yet having
+        # spent a contract: it punished exactly the verify-before-committing
+        # discipline the contract-first lesson taught.
+        if any(
+            record.get("kind") == "implementation"
+            for record in self.candidate_kinds.values()
+        ):
+            return False
         return not self.experiment_contracts
 
 
