@@ -4306,6 +4306,44 @@ class GateProposalExtractionTests(unittest.TestCase):
             )
             self.assertIn("coincident", proposal["what_fools_this_gate"])
 
+    def test_invalid_staged_proposal_warns_the_author_at_materialization(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner, head = self._runner_with_commit(
+                root,
+                manifest_text=json.dumps({
+                    "schema": "reccli.organization-gate-proposal.v1",
+                    "predicate_id": None,
+                    "evaluator_id": None,
+                    "rationale": "substance lives in the dossier",
+                    "baseline_command": None,
+                    "measured_baseline": None,
+                    "proposed_tolerance": 0.005,
+                    "files": [],
+                }),
+            )
+            worker = runner.topology.agent("worker-a")
+            runner._warn_invalid_gate_proposal(
+                worker, runner.workspaces["lead"], head, 2,
+            )
+            blockers = [
+                message for message in runner.inboxes["worker-a"]
+                if message.get("tag") == "blocker"
+                and "cannot be ratified as-is" in message.get("content", "")
+            ]
+            self.assertEqual(len(blockers), 1)
+            events = [
+                json.loads(line)
+                for line in (
+                    runner.run_dir / "events.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(any(
+                event["type"] == "gate_proposal.invalid"
+                for event in events
+            ))
+
     def test_gate_that_fails_its_own_discrimination_is_rejected(self):
         # The cylinder-scorer shape: truth-exact input scoring far above the
         # proposed tolerance means the gate measures something other than
@@ -4401,6 +4439,76 @@ class GateProposalExtractionTests(unittest.TestCase):
             proposal = runner._extract_gate_proposal(head)
             self.assertIn("error", proposal)
             self.assertIn("traversal", proposal["error"])
+
+
+class GateAuthoringBindingTests(unittest.TestCase):
+    def _runner(self, root, admission=None):
+        run_dir = root / "devsession" / "agent-organizations" / "bind"
+        runner = OrganizationRunner(
+            root, "Author the envelope gate.", "claude",
+            "flat", "bind", run_dir, admission=admission,
+        )
+        runner.experiment_policy = {
+            "promotion_requires_goal_progress": True,
+            "evaluators": {
+                "geometry-eval-v1": {
+                    "id": "geometry-eval-v1",
+                    "profile_sha256": "p" * 64,
+                    "immutable_ground_truth_sha256": "g" * 64,
+                    "predicates": {
+                        "cone-parameter-v1": {
+                            "id": "cone-parameter-v1",
+                            "goal_class": "production_pipeline",
+                            "comparison_rule_id": "minimize",
+                        },
+                    },
+                },
+            },
+        }
+        return runner
+
+    def test_gate_authoring_admission_binds_without_a_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            admission = dict(VALID_ADMISSION)
+            admission["work_class"] = "uncertainty_reduction"
+            runner = self._runner(root, admission=admission)
+            measurement, error = runner._resolve_goal_measurement(
+                goal_class="evaluator_infrastructure",
+                predicate_id=None,
+                evaluator_id=None,
+            )
+            self.assertEqual(error, "")
+            self.assertIsNone(measurement)
+
+    def test_deployable_admission_still_requires_a_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root, admission=dict(VALID_ADMISSION))
+            measurement, error = runner._resolve_goal_measurement(
+                goal_class="evaluator_infrastructure",
+                predicate_id=None,
+                evaluator_id=None,
+            )
+            self.assertIn("gate-authoring", error)
+            self.assertIsNone(measurement)
+
+    def test_production_binding_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runner = self._runner(root)
+            measurement, error = runner._resolve_goal_measurement(
+                goal_class="production_pipeline",
+                predicate_id="cone-parameter-v1",
+                evaluator_id="geometry-eval-v1",
+            )
+            self.assertEqual(error, "")
+            self.assertEqual(
+                measurement["predicate_id"], "cone-parameter-v1",
+            )
 
 
 class StrictSchemaConformanceTests(unittest.TestCase):

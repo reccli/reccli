@@ -4323,7 +4323,9 @@ class OrganizationRunner:
         return request
 
     def _extract_gate_proposal(
-        self, candidate: str,
+        self,
+        candidate: str,
+        workspace: Optional[Workspace] = None,
     ) -> Optional[Dict[str, Any]]:
         """Read a staged gate proposal from the exact report candidate tree.
 
@@ -4333,7 +4335,8 @@ class OrganizationRunner:
         otherwise. Validation of targets happens again on the control side at
         apply time; this pass exists so the approval packet is honest.
         """
-        workspace = self.workspaces[self.topology.finalizer_id]
+        if workspace is None:
+            workspace = self.workspaces[self.topology.finalizer_id]
         manifest_path = (
             f"{self.artifact_staging_prefix}/gate-proposal/gate-proposal.json"
         )
@@ -4488,6 +4491,45 @@ class OrganizationRunner:
             "files": normalized_files,
             "manifest_path": manifest_path,
         }
+
+    def _warn_invalid_gate_proposal(
+        self,
+        agent: AgentSpec,
+        workspace: Workspace,
+        candidate: str,
+        round_number: int,
+    ) -> None:
+        """Tell the author about a broken gate proposal while it can still fix it.
+
+        Run six staged its gate substance in prose and left the manifest's
+        machine fields null; nothing said so until the terminal packet, when
+        no agent could act. Validation feedback belongs at materialization,
+        rounds earlier.
+        """
+        proposal = self._extract_gate_proposal(candidate, workspace=workspace)
+        if not proposal or not proposal.get("error"):
+            return
+        self._event(
+            "gate_proposal.invalid",
+            round_number,
+            agent_id=agent.agent_id,
+            candidate=candidate,
+            error=proposal["error"],
+        )
+        self._system_message(
+            agent.agent_id,
+            "blocker",
+            (
+                f"The gate proposal staged in candidate {candidate} is "
+                f"invalid and cannot be ratified as-is: {proposal['error']}. "
+                "Complete the manifest's machine-readable fields before "
+                "handoff; the dossier prose does not substitute for them."
+            ),
+            round_number,
+            None,
+            None,
+            "routine",
+        )
 
     def _write_pending_human_approval_request(
         self,
@@ -6848,6 +6890,9 @@ Change only the mutable file above and write one trial intent under
                 changed_paths=candidate_record["paths"],
                 experiment_paths=experiment_paths,
             )
+            self._warn_invalid_gate_proposal(
+                agent, workspace, head, round_number,
+            )
             self._append_jsonl("candidates.jsonl", {
                 "runId": self.run_id,
                 "round": round_number,
@@ -7534,6 +7579,33 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                     continue
                 matches.append((evaluator, predicate))
         if len(matches) != 1:
+            # A gate-authoring goal's purpose is to create a predicate that
+            # does not exist yet, so requiring it to bind an existing one is
+            # a category error: run six burned half its rounds on exactly
+            # this. When the policy declares no evaluator_infrastructure
+            # profile and the run's admission is a gate-authoring class, the
+            # goal binds unmeasured; its measurability comes from the
+            # gate-proposal validator (the discrimination proof), and its
+            # exit is pending_human ratification, not promote.
+            if (
+                resolved_goal_class == "evaluator_infrastructure"
+                and not any(
+                    predicate.get("goal_class") == "evaluator_infrastructure"
+                    for evaluator in self.experiment_policy[
+                        "evaluators"
+                    ].values()
+                    for predicate in evaluator.get("predicates", {}).values()
+                )
+            ):
+                if (self.admission or {}).get("work_class") in {
+                    "uncertainty_reduction", "hypothesis_test",
+                }:
+                    return None, ""
+                return None, (
+                    "the policy declares no evaluator_infrastructure "
+                    "profile; unprofiled gate-authoring goals require an "
+                    "uncertainty_reduction or hypothesis_test admission"
+                )
             return None, (
                 "implementation goal is unevaluable: select exactly one "
                 "project-declared goalClass, predicateId, and evaluatorId; "
