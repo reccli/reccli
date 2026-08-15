@@ -4441,6 +4441,50 @@ class GateProposalExtractionTests(unittest.TestCase):
             self.assertIn("traversal", proposal["error"])
 
 
+class CompletedGoalWakesSupervisorTests(unittest.TestCase):
+    def test_state_done_completion_wakes_the_lead(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "wake"
+            runner = OrganizationRunner(
+                root, "Stage the governance packet.", "claude",
+                "flat", "wake", run_dir,
+            )
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-b",
+                manager_id="lead",
+                work_item="packet-close",
+                objective=(
+                    "Complete the gate packet manifest and reproduce the "
+                    "discrimination probe."
+                ),
+                risk="high",
+                round_number=1,
+            )
+            self.assertTrue(accepted, reason)
+            reply = _reply()
+            reply.update({"state": "done", "candidate": None})
+            runner._update_worker_goal_after_reply("worker-b", reply, 2)
+            self.assertEqual(
+                runner.worker_goals["worker-b"]["status"], "completed",
+            )
+            wakes = [
+                message for message in runner.inboxes["lead"]
+                if "completed goal 'packet-close'" in message.get("content", "")
+            ]
+            self.assertEqual(
+                len(wakes), 1,
+                "completed work must schedule its supervisor once; the "
+                "close-out run stalled over finished work in exactly this "
+                "silence",
+            )
+            scheduled = {
+                agent.agent_id for agent in runner._select_agents(3)
+            }
+            self.assertIn("lead", scheduled)
+
+
 class GateAuthoringBindingTests(unittest.TestCase):
     def _runner(self, root, admission=None):
         run_dir = root / "devsession" / "agent-organizations" / "bind"

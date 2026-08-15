@@ -8257,6 +8257,7 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
             ),
             None,
         )
+        wake_supervisor = False
         if handoff:
             goal["status"] = "candidate_ready"
             goal["candidate"] = handoff.get("candidate")
@@ -8264,6 +8265,14 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         elif reply.get("state") == "done":
             goal["status"] = "completed"
             goal["completed_round"] = round_number
+            # A candidate_ready transition rides a handoff already sitting in
+            # the supervisor's inbox; a completed transition has no inbox
+            # event anywhere, so nothing ever schedules the supervisor to
+            # route review or close. The governance close-out run finished
+            # all its packet work and then stalled over it in exactly this
+            # silence: worker done at 05:36:18, no event of any kind until
+            # the conclusion. Completed work must wake its supervisor once.
+            wake_supervisor = True
         elif any(message.get("tag") == "blocker" for message in matching):
             goal["status"] = "blocked"
             goal["updated_round"] = round_number
@@ -8278,6 +8287,22 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
             status=goal["status"],
             candidate=goal.get("candidate"),
         )
+        if wake_supervisor and primary:
+            self._system_message(
+                primary,
+                "status",
+                (
+                    f"{worker_id} completed goal '{goal.get('work_item')}' "
+                    "with state=done. Its latest candidate is "
+                    f"{reply.get('candidate') or 'none'}. Route the release "
+                    "review or close the outcome; completed work does not "
+                    "schedule anyone by itself."
+                ),
+                round_number,
+                reply.get("candidate"),
+                goal.get("work_item"),
+                goal.get("risk"),
+            )
 
     def _goal_prompt(self, agent_id: str) -> str:
         if agent_id in self.topology.worker_ids:
