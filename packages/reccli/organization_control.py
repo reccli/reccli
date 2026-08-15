@@ -1144,20 +1144,40 @@ supervisor.
     evidence_paths = list(continuation.get("evidence_paths") or [])
     evidence_paths.append(str(decision_path))
     decision_record = _read_json(decision_path, {}) or {}
-    parent_admission_path = (
-        project_root / "devsession" / "agent-organizations"
-        / _safe_name(str(request.get("run_id") or "unknown"))
-        / "admission.json"
+    approver = str(
+        decision_record.get("approved_by")
+        or decision_record.get("approver")
+        or "human-operator"
     )
-    parent_admission = (
-        _read_json(parent_admission_path, None)
-        if parent_admission_path.is_file() else None
-    )
-    successor_admission = admission_for_approved_successor(
-        parent_admission,
-        str(request.get("run_id") or "unknown"),
-        str(decision_record.get("approved_by") or decision_record.get("approver") or "human-operator"),
-    )
+    parent_run_id = str(request.get("run_id") or "unknown")
+    # The packet may name the admission the successor should run under (a
+    # governance run staging a gate proposes the implementation contract
+    # there). Prefer it; carrying a governance parent's own already-satisfied
+    # contract would make the successor's lead no_op on arrival.
+    successor_admission = None
+    packet_admission = request.get("successor_admission")
+    if isinstance(packet_admission, dict):
+        try:
+            successor_admission = admission_for_approved_successor(
+                packet_admission, parent_run_id, approver,
+            )
+        except ValueError:
+            successor_admission = None
+    if successor_admission is None:
+        parent_admission_path = (
+            project_root / "devsession" / "agent-organizations"
+            / _safe_name(parent_run_id)
+            / "admission.json"
+        )
+        parent_admission = (
+            _read_json(parent_admission_path, None)
+            if parent_admission_path.is_file() else None
+        )
+        successor_admission = admission_for_approved_successor(
+            parent_admission,
+            parent_run_id,
+            approver,
+        )
     successor = create_run_request(
         working_directory=str(project_root),
         mission=mission,

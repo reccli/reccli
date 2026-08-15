@@ -4626,6 +4626,15 @@ class OrganizationRunner:
                 )
             },
             "review_record": self.governance.snapshot(),
+            # The admission the click's auto-launched successor should run
+            # under. A governance run staging a gate packet proposes the
+            # implementation admission here (via its conclusion); the approve
+            # path prefers it over carrying the parent's contract, which for
+            # a governance parent is already satisfied and would make the
+            # successor's lead no_op on arrival.
+            "successor_admission": conclusion.get(
+                "proposed_successor_admission"
+            ),
             # The frontier seam: a run may stage a proposed capability gate
             # (predicate, evaluator wiring, fixture files) under its artifact
             # staging. The org can never apply it — the files target protected

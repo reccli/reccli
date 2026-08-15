@@ -551,6 +551,22 @@ class OrganizationControlTests(unittest.TestCase):
                         "gate-proposal.json"
                     ),
                 },
+                "successor_admission": {
+                    "consumer": {
+                        "name": "will", "type": "human",
+                        "intended_use": (
+                            "review and merge the envelope-coverage promotion"
+                        ),
+                    },
+                    "work_class": "deployable_artifact",
+                    "done_condition": (
+                        "the ratified envelope-coverage predicate passes from "
+                        "a clean checkout"
+                    ),
+                    "stop_conditions": [
+                        "no improvement over baseline after two contracts",
+                    ],
+                },
                 "action": {"type": "start_successor", "remote_push": False},
                 "continuation": {
                     "provider": "claude",
@@ -631,6 +647,14 @@ class OrganizationControlTests(unittest.TestCase):
                 ).stdout.strip(),
             )
             self.assertIn("ratified and locally applied", captured["mission"])
+            self.assertEqual(
+                captured["admission"]["work_class"], "deployable_artifact",
+                "the click must launch the successor under the packet's "
+                "implementation admission, not the governance parent's",
+            )
+            self.assertEqual(
+                captured["admission"]["origin"], "approved-successor",
+            )
             porcelain = subprocess.run(
                 ["git", "status", "--porcelain", "--untracked-files=no"],
                 cwd=root, capture_output=True, text=True, check=True,
