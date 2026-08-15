@@ -1120,11 +1120,33 @@ def stage_approval_from_record(
         return {"status": "not_found", "run_id": run_id}
     existing = _read_json(run_dir / "approval-request.json", None)
     if isinstance(existing, dict) and existing.get("request_sha256"):
-        return {
-            "status": "already_staged",
-            "run_id": run_id,
-            "request_sha256": existing["request_sha256"],
-        }
+        execution = _read_json(run_dir / "approval" / "execution.json", None)
+        consumed = (
+            isinstance(execution, dict)
+            and execution.get("request_sha256") == existing["request_sha256"]
+            and execution.get("status") == "applied"
+        )
+        if not consumed:
+            # A pending or failed request resumes on re-click; only an
+            # APPLIED request is spent. Existence is not the same as
+            # pendingness: the first re-stage needed hand surgery because
+            # this guard could not tell the two apart.
+            return {
+                "status": "already_staged",
+                "run_id": run_id,
+                "request_sha256": existing["request_sha256"],
+            }
+        suffix = f".consumed-{existing['request_sha256'][:8]}"
+        for name in (
+            "approval-request.json",
+            "approval/decision.json",
+            "approval/execution.json",
+        ):
+            spent = run_dir / name
+            if spent.is_file():
+                spent.rename(
+                    spent.with_name(spent.name + suffix)
+                )
     status = _read_json(run_dir / "status.json", {}) or {}
     if status.get("status") not in TERMINAL_STATUSES:
         raise RuntimeError(
@@ -1265,7 +1287,13 @@ def stage_approval_from_record(
         "gate_source_candidate": (
             exact_gate if gate_proposal is not None else None
         ),
-        "successor_admission": conclusion.get("proposed_successor_admission"),
+        # The ratified gate's own successor admission (the law's first
+        # enforcement mission) outranks the conclusion's proposal, which for
+        # a governance run is honestly another ceremony.
+        "successor_admission": (
+            (gate_proposal or {}).get("successor_admission")
+            or conclusion.get("proposed_successor_admission")
+        ),
         "conclusion": {
             key: conclusion.get(key)
             for key in (

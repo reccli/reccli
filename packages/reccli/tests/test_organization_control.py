@@ -765,6 +765,22 @@ class OrganizationControlTests(unittest.TestCase):
                     "Coverage counts supported area only; a support touching "
                     "without bonding is invisible to this gate."
                 ),
+                "successor_admission": {
+                    "consumer": {
+                        "name": "will", "type": "human",
+                        "intended_use": (
+                            "review and merge the envelope implementation"
+                        ),
+                    },
+                    "work_class": "deployable_artifact",
+                    "done_condition": (
+                        "the ratified envelope-coverage predicate passes "
+                        "from a clean checkout"
+                    ),
+                    "stop_conditions": [
+                        "no improvement over baseline after two contracts",
+                    ],
+                },
                 "files": [{
                     "path": (
                         ".reccli-org-artifacts/derive/gate-proposal/"
@@ -797,19 +813,21 @@ class OrganizationControlTests(unittest.TestCase):
             }) + "\n", encoding="utf-8")
             (run_dir / "run-conclusion.json").write_text(json.dumps({
                 "summary": "Approved but never staged.",
+                # A governance conclusion honestly proposes another ceremony;
+                # the gate's own successor admission must outrank it.
                 "proposed_successor_admission": {
                     "consumer": {
                         "name": "will", "type": "human",
                         "intended_use": (
-                            "review and merge the envelope implementation"
+                            "ratify the re-staged governance packet"
                         ),
                     },
-                    "work_class": "deployable_artifact",
+                    "work_class": "uncertainty_reduction",
                     "done_condition": (
-                        "envelope-coverage-v1 passes from a clean checkout"
+                        "a validated packet is staged for ratification"
                     ),
                     "stop_conditions": [
-                        "no improvement over baseline after two contracts",
+                        "the proposal tree is unrecoverable",
                     ],
                 },
             }) + "\n", encoding="utf-8")
@@ -845,12 +863,76 @@ class OrganizationControlTests(unittest.TestCase):
             self.assertEqual(
                 request["successor_admission"]["work_class"],
                 "deployable_artifact",
+                "the gate's own successor admission (the law's first "
+                "enforcement mission) must outrank the governance "
+                "conclusion's ceremony proposal",
             )
             self.assertNotIn("error", request["gate_proposal"])
             replay = stage_approval_from_record(
                 str(root), "derive", report_candidate=candidate,
             )
             self.assertEqual(replay["status"], "already_staged")
+
+    def test_an_applied_request_archives_and_restages(self):
+        from reccli.organization_control import stage_approval_from_record
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "spent"
+            run_dir.mkdir(parents=True)
+            candidate = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            (run_dir / "run.json").write_text(json.dumps({
+                "run_id": "spent", "project_root": str(root),
+                "mission": "m", "topology": "flat",
+            }) + "\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "run_id": "spent", "status": "round_limit",
+            }) + "\n", encoding="utf-8")
+            (run_dir / "run-conclusion.json").write_text(
+                json.dumps({"summary": "s"}) + "\n", encoding="utf-8",
+            )
+            with (run_dir / "messages.jsonl").open("w") as handle:
+                handle.write(json.dumps({
+                    "round": 3, "from": "auditor-a", "to": "lead",
+                    "tag": "decision", "candidate": candidate,
+                    "content": f"NO_VETO {candidate}: verified.",
+                    "status": "delivered",
+                }) + "\n")
+            first = stage_approval_from_record(
+                str(root), "spent", report_candidate=candidate,
+                allow_no_gate=True,
+            )
+            self.assertEqual(first["status"], "staged")
+            # Pending: re-stage returns already_staged.
+            again = stage_approval_from_record(
+                str(root), "spent", report_candidate=candidate,
+                allow_no_gate=True,
+            )
+            self.assertEqual(again["status"], "already_staged")
+            # Mark it consumed and re-stage: archives, stages fresh.
+            (run_dir / "approval").mkdir()
+            (run_dir / "approval" / "execution.json").write_text(
+                json.dumps({
+                    "request_sha256": first["request_sha256"],
+                    "status": "applied",
+                }) + "\n", encoding="utf-8",
+            )
+            fresh = stage_approval_from_record(
+                str(root), "spent", report_candidate=candidate,
+                allow_no_gate=True,
+            )
+            self.assertEqual(fresh["status"], "staged")
+            suffix = f".consumed-{first['request_sha256'][:8]}"
+            self.assertTrue(
+                (run_dir / f"approval-request.json{suffix}").is_file(),
+            )
+            self.assertTrue(
+                (run_dir / "approval" / f"execution.json{suffix}").is_file(),
+            )
 
     def test_derivation_refuses_a_silent_null_gate(self):
         from reccli.organization_control import stage_approval_from_record

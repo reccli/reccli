@@ -4556,6 +4556,21 @@ class OrganizationRunner:
                 "what_fools_this_gate must be a blind-spot analysis legible "
                 "to the owner (at least 40 characters)"
             )
+        # The law travels with its first enforcement mission: a gate proposal
+        # may carry the successor admission for the run that closes it.
+        # Without this, ratification packets inherit whatever the terminal
+        # conclusion proposed, which for a governance run is honestly another
+        # ceremony: the fifteenth gap launched ceremony three on the first
+        # real click.
+        gate_successor = manifest.get("successor_admission")
+        normalized_gate_successor = None
+        if gate_successor is not None:
+            try:
+                normalized_gate_successor = validate_admission(gate_successor)
+            except ValueError as exc:
+                problems.append(
+                    f"successor_admission is invalid: {exc}"
+                )
         files = manifest.get("files")
         # Proposal files live beside their manifest, whichever run authored it.
         prefix = manifest_path[: -len("gate-proposal.json")] + "files/"
@@ -4618,6 +4633,7 @@ class OrganizationRunner:
                 "corrupted_score": discrimination["corrupted_score"],
             },
             "what_fools_this_gate": fools.strip(),
+            "successor_admission": normalized_gate_successor,
             "files": normalized_files,
             "manifest_path": manifest_path,
         }
@@ -4702,6 +4718,7 @@ class OrganizationRunner:
         source_request = json.loads(
             (self.run_dir / "request.json").read_text(encoding="utf-8"),
         )
+        gate_proposal_block = self._extract_gate_proposal(report_candidate)
         continuation = {
             "provider": source_request.get("provider_requested", self.provider),
             "topology": source_request.get(
@@ -4757,13 +4774,12 @@ class OrganizationRunner:
             },
             "review_record": self.governance.snapshot(),
             # The admission the click's auto-launched successor should run
-            # under. A governance run staging a gate packet proposes the
-            # implementation admission here (via its conclusion); the approve
-            # path prefers it over carrying the parent's contract, which for
-            # a governance parent is already satisfied and would make the
-            # successor's lead no_op on arrival.
-            "successor_admission": conclusion.get(
-                "proposed_successor_admission"
+            # under. A ratified gate's own successor admission (the law's
+            # first enforcement mission) outranks the conclusion's proposal,
+            # which for a governance run is honestly another ceremony.
+            "successor_admission": (
+                (gate_proposal_block or {}).get("successor_admission")
+                or conclusion.get("proposed_successor_admission")
             ),
             # The frontier seam: a run may stage a proposed capability gate
             # (predicate, evaluator wiring, fixture files) under its artifact
@@ -4771,7 +4787,7 @@ class OrganizationRunner:
             # paths — but the human approval click can. None when the
             # candidate stages no proposal; an "error" field when it staged a
             # malformed one, so the reviewer sees why nothing will apply.
-            "gate_proposal": self._extract_gate_proposal(report_candidate),
+            "gate_proposal": gate_proposal_block,
             "action": {
                 "type": "start_successor",
                 "remote_push": False,
