@@ -3737,7 +3737,7 @@ class OrganizationRunner:
         proc = subprocess.run(
             [
                 "git", "ls-tree", "-r", "-z", candidate, "--",
-                self.artifact_staging_prefix,
+                ARTIFACT_STAGING_ROOT,
             ],
             cwd=workspace.cwd, capture_output=True, check=False,
         )
@@ -4337,9 +4337,41 @@ class OrganizationRunner:
         """
         if workspace is None:
             workspace = self.workspaces[self.topology.finalizer_id]
-        manifest_path = (
+        # A chain-adopted packet lives under the AUTHORING run's prefix (its
+        # identity is pinned to that tree), so discovery scans the whole
+        # staging root rather than assuming this run authored the proposal.
+        listing = subprocess.run(
+            [
+                "git", "ls-tree", "-r", "--name-only", candidate, "--",
+                ARTIFACT_STAGING_ROOT,
+            ],
+            cwd=workspace.cwd, capture_output=True, check=False,
+        )
+        if listing.returncode != 0:
+            return None
+        manifest_candidates = [
+            path for path in listing.stdout.decode(
+                "utf-8", errors="replace",
+            ).splitlines()
+            if path.endswith("/gate-proposal/gate-proposal.json")
+        ]
+        own_manifest = (
             f"{self.artifact_staging_prefix}/gate-proposal/gate-proposal.json"
         )
+        if own_manifest in manifest_candidates:
+            manifest_path = own_manifest
+        elif len(manifest_candidates) == 1:
+            manifest_path = manifest_candidates[0]
+        elif not manifest_candidates:
+            return None
+        else:
+            return {
+                "error": (
+                    "the candidate stages multiple gate proposals; exactly "
+                    f"one is ratifiable: {sorted(manifest_candidates)}"
+                ),
+                "manifest_path": None,
+            }
         proc = subprocess.run(
             ["git", "show", f"{candidate}:{manifest_path}"],
             cwd=workspace.cwd, capture_output=True, check=False,
@@ -4428,7 +4460,8 @@ class OrganizationRunner:
                 "to the owner (at least 40 characters)"
             )
         files = manifest.get("files")
-        prefix = f"{self.artifact_staging_prefix}/gate-proposal/files/"
+        # Proposal files live beside their manifest, whichever run authored it.
+        prefix = manifest_path[: -len("gate-proposal.json")] + "files/"
         normalized_files: List[Dict[str, str]] = []
         if not isinstance(files, list) or not files:
             problems.append("files must be a non-empty list of {path, target}")
@@ -4740,8 +4773,20 @@ class OrganizationRunner:
         }
 
     def _artifact_path(self, path: str) -> bool:
-        return path == self.artifact_staging_prefix or path.startswith(
-            self.artifact_staging_prefix + "/"
+        """True for run-artifact paths, this run's or any predecessor's.
+
+        Matching only this run's prefix made chain adoption structurally
+        impossible: a successor adopting a packet pinned to the authoring
+        run's tree had its untracked files silently filtered at candidate
+        capture, and the handoff materialized identity-only. Worse, had
+        capture worked, the same run-scoped predicate would have classified
+        the adopted packet as an implementation and failed the worker's
+        artifacts write scope. Any path under the staging root is a run
+        artifact; the authoring run's prefix is the packet's identity, not a
+        trespass.
+        """
+        return path == ARTIFACT_STAGING_ROOT or path.startswith(
+            ARTIFACT_STAGING_ROOT + "/"
         )
 
     def _commit_patch_id(self, workspace: Workspace, commit: str) -> Optional[str]:

@@ -4344,6 +4344,94 @@ class GateProposalExtractionTests(unittest.TestCase):
                 for event in events
             ))
 
+    def test_foreign_run_prefix_is_a_run_artifact_and_adoptable(self):
+        # Chain adoption: a successor consumes a packet pinned under the
+        # AUTHORING run's prefix. Run-scoped matching silently filtered those
+        # files at capture and would have misclassified them as an
+        # implementation; both must treat any staging-root path as artifact.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "adopt"
+            runner = OrganizationRunner(
+                root, "Carry the packet to ratification.", "claude",
+                "flat", "adopt", run_dir,
+            )
+            self.assertTrue(runner._artifact_path(
+                ".reccli-org-artifacts/adopt/report.md",
+            ))
+            self.assertTrue(runner._artifact_path(
+                ".reccli-org-artifacts/authoring-run/gate-proposal/x.json",
+            ))
+            self.assertFalse(runner._artifact_path("src/app.py"))
+
+    def test_adopted_foreign_prefix_proposal_is_discovered(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = root / "devsession" / "agent-organizations" / "adopt"
+            runner = OrganizationRunner(
+                root, "Carry the packet to ratification.", "claude",
+                "flat", "adopt", run_dir,
+            )
+            runner.workspaces["lead"] = Workspace(
+                root, "test", "test-main", root, [],
+            )
+            staging = (
+                root / ".reccli-org-artifacts" / "authoring-run"
+                / "gate-proposal"
+            )
+            (staging / "files").mkdir(parents=True)
+            (staging / "files" / "predicate.json").write_text(
+                '{"id": "envelope-coverage-v1"}\n', encoding="utf-8",
+            )
+            (staging / "gate-proposal.json").write_text(json.dumps({
+                "schema": "reccli.organization-gate-proposal.v1",
+                "predicate_id": "envelope-coverage-v1",
+                "evaluator_id": "candidate-qualification-v1",
+                "rationale": "Adopted byte-identical from the authoring run.",
+                "baseline_command": "scripts/probe.py --timeout 120",
+                "measured_baseline": 999.0,
+                "proposed_tolerance": 0.005,
+                "discrimination": {
+                    "truth_exact_command": "scripts/probe.py truth.stl",
+                    "truth_exact_score": 0.0,
+                    "corrupted_command": "scripts/probe.py corrupted.stl",
+                    "corrupted_score": 0.735,
+                },
+                "what_fools_this_gate": (
+                    "Coverage counts supported area only; a support that "
+                    "touches without bonding is invisible to this gate."
+                ),
+                "files": [{
+                    "path": (
+                        ".reccli-org-artifacts/authoring-run/gate-proposal/"
+                        "files/predicate.json"
+                    ),
+                    "target": "benchmarks/gates/envelope-coverage-v1.json",
+                }],
+            }) + "\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "adopt packet"], cwd=root, check=True,
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            proposal = runner._extract_gate_proposal(head)
+            self.assertIsNotNone(proposal)
+            self.assertNotIn("error", proposal)
+            self.assertEqual(
+                proposal["predicate_id"], "envelope-coverage-v1",
+            )
+            self.assertEqual(
+                proposal["files"][0]["target"],
+                "benchmarks/gates/envelope-coverage-v1.json",
+            )
+
     def test_gate_that_fails_its_own_discrimination_is_rejected(self):
         # The cylinder-scorer shape: truth-exact input scoring far above the
         # proposed tolerance means the gate measures something other than
