@@ -558,6 +558,29 @@ class OrganizationControlTests(unittest.TestCase):
             self.assertEqual(resolved["work_class"], "hypothesis_test")
             self.assertEqual(resolved["origin"], "approved-successor")
 
+    def test_cancellation_leaves_a_durable_conclusion(self):
+        from reccli.organization_control import cancel_organization_run
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = _make_run(root, run_id="to-cancel")
+            self.assertFalse((run_dir / "run-conclusion.json").exists())
+            result = cancel_organization_run(
+                str(root), "to-cancel",
+                idempotency_key="cancel-1",
+                requested_by="will",
+                process_group_liveness=lambda pid, run: False,
+            )
+            self.assertEqual(result["status"], "cancelled")
+            conclusion = json.loads(
+                (run_dir / "run-conclusion.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(conclusion["terminal_status"], "cancelled")
+            self.assertEqual(conclusion["generated_by"], "host-fallback")
+            self.assertIn("will", conclusion["summary"])
+            self.assertIsNone(conclusion["proposed_successor_admission"])
+
     def test_non_run_directories_are_not_runs(self):
         # The runs root also holds RecCli's own tombstones/ and whatever a
         # project archives beside it. Enumerating those as runs made the

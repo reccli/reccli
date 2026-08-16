@@ -1786,6 +1786,52 @@ def cancel_organization_run(
             "process_group_signalled": signalled,
         })
         _atomic_write_json(status_path, status)
+        # Cancellation SIGTERMs the supervisor before it can write its own
+        # terminal conclusion, so the run would otherwise leave a hole where
+        # its durable record belongs. Write a conservative host-fallback
+        # conclusion here, the same shape the crash handler writes, so the
+        # record is complete and honest about who ended the run.
+        conclusion_path = run_dir / "run-conclusion.json"
+        if not conclusion_path.is_file():
+            try:
+                from .organization import _write_run_conclusion_files
+
+                _write_run_conclusion_files(run_dir, {
+                    "schema": "reccli.organization-run-conclusion.v1",
+                    "run_id": status.get("run_id", run_id),
+                    "terminal_status": "cancelled",
+                    "generated_at": _utc_now(),
+                    "generated_by": "host-fallback",
+                    "summary": (
+                        f"The operator cancelled this run ({requested_by}). "
+                        "The supervisor was terminated before it could write "
+                        "a lead conclusion."
+                    ),
+                    "accomplishments": [],
+                    "conclusive_findings": [],
+                    "evidence_and_tests": [],
+                    "scientific_or_product_blockers": [],
+                    "infrastructure_failures": [],
+                    "unresolved": [
+                        "Whatever this run was doing when cancelled is "
+                        "unfinished; inspect its durable record before "
+                        "relaunching.",
+                    ],
+                    "promotion_readiness": "cancelled",
+                    "next_action": (
+                        "Relaunch from the project's own mission; a cancelled "
+                        "run is not a continuation source."
+                    ),
+                    "limitations": [
+                        "Host fallback: no lead synthesis was possible.",
+                    ],
+                    "proposed_successor_admission": None,
+                    "canonical_effects_applied": False,
+                })
+            except Exception:
+                # A missing conclusion no longer blocks anything; never let
+                # bookkeeping fail a cancellation.
+                pass
     return {
         "status": status.get("status") if was_terminal else "cancelled",
         "run_id": status.get("run_id", run_id),

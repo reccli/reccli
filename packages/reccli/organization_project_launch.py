@@ -529,6 +529,15 @@ def _latest_terminal_record(
         run_dir / "run.json",
         label="latest terminal run metadata",
     )
+    if not (run_dir / "run-conclusion.json").is_file():
+        # A terminal run with no conclusion is not a continuation source, and
+        # must never be a launch blocker. Cancellation SIGTERMs the
+        # supervisor before it can write one, so every operator cancellation
+        # used to wedge project-mode launch permanently: three legitimate
+        # cancellations in one evening left the project unable to launch at
+        # all. Same principle as unidentifiable run directories, one layer
+        # up: unreadable debris cannot own the project's future.
+        return None
     conclusion, conclusion_bytes = _read_json_object(
         run_dir / "run-conclusion.json",
         label="latest terminal run conclusion",

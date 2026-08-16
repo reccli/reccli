@@ -586,6 +586,43 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
             self.assertIn("human relaunch", selection["continuation_declined"])
             self.assertNotIn("continuation_from_run_id", updated)
 
+    def test_a_cancelled_run_never_wedges_project_launch(self):
+        # Cancellation SIGTERMs the supervisor before it writes a
+        # conclusion. Reading that file unconditionally meant every operator
+        # cancellation permanently blocked project-mode launch: three
+        # legitimate cancellations in one evening left the project unable to
+        # launch at all.
+        from reccli.organization_project_launch import _latest_terminal_record
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            run_dir = (
+                root / "devsession" / "agent-organizations" / "cancelled-run"
+            )
+            run_dir.mkdir(parents=True)
+            record = {
+                "run_id": "cancelled-run",
+                "project_root": str(root),
+                "mission": "Do the bounded work.",
+                "topology": "flat",
+            }
+            (run_dir / "run.json").write_text(
+                json.dumps(record, indent=2) + "\n", encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps({
+                    **record, "status": "cancelled",
+                }, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            self.assertFalse((run_dir / "run-conclusion.json").exists())
+            self.assertIsNone(
+                _latest_terminal_record(root),
+                "a terminal run with no conclusion is not a continuation "
+                "source and must never block a launch",
+            )
+
     def test_terminal_continuation_carries_binding_human_rejection(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
