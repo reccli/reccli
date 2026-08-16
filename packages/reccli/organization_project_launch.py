@@ -1068,6 +1068,12 @@ def _blocking_run(root: Path) -> Optional[Dict[str, Any]]:
         status = str(run.get("status") or "unknown")
         if run.get("approval_pending") or status == "completed_pending_human":
             return {**run, "blocker": "human_approval_required"}
+        if status == "unknown" and run.get("process_live") is not True:
+            # Second guard, defence in depth: a run whose status cannot be
+            # read and whose process is not alive is not an active
+            # organization, and treating it as one blocks every future
+            # launch on unreadable debris forever.
+            continue
         if status not in TERMINAL_STATUSES or run.get("process_live") is True:
             return {**run, "blocker": "organization_already_active"}
     return None

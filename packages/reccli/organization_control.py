@@ -659,8 +659,23 @@ def list_organization_runs(
     )
     runs: List[Dict[str, Any]] = []
     if root.is_dir():
+        # A directory is a run only if it carries run metadata. The runs root
+        # also holds RecCli's own bookkeeping (tombstones/) and whatever a
+        # project archives beside it, and enumerating those as runs made the
+        # duplicate-launch guard block on a directory it could not even
+        # identify: status "unknown", no process, no created_at, blocking
+        # anyway. Custom-mode launches skip that guard, which is why six
+        # custom launches succeeded while the first project-contract launch
+        # was refused immediately.
         paths = sorted(
-            (path for path in root.iterdir() if path.is_dir()),
+            (
+                path for path in root.iterdir()
+                if path.is_dir()
+                and any(
+                    (path / name).is_file()
+                    for name in ("status.json", "run.json", "request.json")
+                )
+            ),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )

@@ -558,6 +558,46 @@ class OrganizationControlTests(unittest.TestCase):
             self.assertEqual(resolved["work_class"], "hypothesis_test")
             self.assertEqual(resolved["origin"], "approved-successor")
 
+    def test_non_run_directories_are_not_runs(self):
+        # The runs root also holds RecCli's own tombstones/ and whatever a
+        # project archives beside it. Enumerating those as runs made the
+        # duplicate-launch guard block a project-contract launch on a
+        # directory it could not identify.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            _make_run(root, run_id="real-run")
+            runs_root = root / "devsession" / "agent-organizations"
+            (runs_root / "tombstones").mkdir()
+            (runs_root / "tombstones" / "old.json").write_text(
+                "{}\n", encoding="utf-8",
+            )
+            archive = runs_root / "preserved-unique"
+            archive.mkdir()
+            (archive / "README.md").write_text("archive\n", encoding="utf-8")
+            (archive / "20260717T000000Z_org_old").mkdir()
+
+            listed = list_organization_runs(str(root))
+            ids = [run["run_id"] for run in listed["runs"]]
+            self.assertEqual(ids, ["real-run"])
+
+    def test_unidentifiable_debris_never_blocks_a_launch(self):
+        from reccli.organization_project_launch import _blocking_run
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _init_project(root)
+            runs_root = root / "devsession" / "agent-organizations"
+            runs_root.mkdir(parents=True)
+            debris = runs_root / "half-written"
+            debris.mkdir()
+            (debris / "status.json").write_text("{}\n", encoding="utf-8")
+            self.assertIsNone(
+                _blocking_run(root),
+                "a run with unreadable status and no live process is not an "
+                "active organization",
+            )
+
     def test_stage_approval_from_record_derives_the_packet(self):
         from reccli.organization_control import stage_approval_from_record
 
