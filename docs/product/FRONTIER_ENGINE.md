@@ -1,5 +1,22 @@
 # The Frontier Engine
 
+> **SUPERSEDED 2026-08-15.** Gate authoring is native work by structure, not
+> org work: an organization is graded by an evaluator it cannot edit
+> (protected paths), so it cannot build the measurement that grades it
+> without either hitting write-scope refusal or being free to write an
+> evaluator that always passes. Everything upstream of a measurement -
+> fixtures, metrics, evaluator wiring, and the diagnosis that reveals what
+> is worth measuring - is native. Orgs close *declared* gates.
+>
+> The gate-proposal subsystem this document describes (staged proposals,
+> discrimination manifests, ratification apply) has been deleted. What
+> survives: a run names the gate it exists to close in its admission
+> (`target_predicate`), the host refuses to launch when that gate is not
+> declared and refuses to bind any other predicate, and host-measured
+> improvement merges itself. See ORGANIZATION_PLANE_AUDIT.md for the
+> forensics and the audit that forced this.
+
+
 **Status:** Implemented 2026-08-14. The machinery that lets organizations do
 frontier work autonomously: manufacture the next falsifiable gate, chain
 between human authority seams, and land protected-path changes through

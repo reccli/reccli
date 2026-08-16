@@ -1036,74 +1036,11 @@ def _approval_decision(
     return decision
 
 
-def _apply_gate_proposal(
-    project_root: Path,
-    request: Dict[str, Any],
-    gate: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Apply a human-ratified gate proposal from the exact approved candidate.
-
-    The org stages proposed gate files (predicate policy edits, fixtures,
-    scorer wiring) under its artifact staging, where its write scope allows;
-    only this function, running on the human approval click, may place them
-    at their protected-path targets. Content comes from the approved
-    candidate's git tree byte-for-byte, never from the working directory.
-    """
-    candidate = str(
-        request.get("gate_source_candidate")
-        or request.get("report_candidate")
-        or ""
-    )
-    applied: List[str] = []
-    for entry in gate.get("files") or []:
-        source = str(entry.get("path") or "")
-        target = str(entry.get("target") or "")
-        parts = Path(target).parts
-        if not target or Path(target).is_absolute() or ".." in parts:
-            raise RuntimeError(
-                f"gate proposal target escapes the repository: {target!r}"
-            )
-        blob = subprocess.run(
-            ["git", "cat-file", "-p", f"{candidate}:{source}"],
-            cwd=project_root, capture_output=True, check=False,
-        )
-        if blob.returncode != 0:
-            raise RuntimeError(
-                f"gate proposal file is not in the approved candidate: {source}"
-            )
-        destination = project_root / target
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(blob.stdout)
-        applied.append(target)
-    if not applied:
-        return {}
-    _git_text(project_root, ["add", "--", *applied])
-    _git_text(project_root, [
-        "-c", "user.name=reccli", "-c", "user.email=reccli@local",
-        "-c", "commit.gpgsign=false",
-        "commit", "--no-verify", "--no-gpg-sign", "-m",
-        (
-            f"reccli: ratify gate {gate.get('predicate_id')} "
-            f"from run {request.get('run_id')}"
-        ),
-    ])
-    return {
-        "gate_applied": True,
-        "gate_predicate_id": gate.get("predicate_id"),
-        "gate_applied_commit": _git_text(
-            project_root, ["rev-parse", "HEAD"],
-        ).strip(),
-        "gate_files": applied,
-    }
-
-
 def stage_approval_from_record(
     working_directory: str,
     run_id: str,
     *,
     report_candidate: str,
-    gate_candidate: Optional[str] = None,
-    allow_no_gate: bool = False,
 ) -> Dict[str, Any]:
     """Derive a pending-human approval packet from a terminal run's record.
 
@@ -1172,7 +1109,7 @@ def stage_approval_from_record(
             "derivation requires a clean tracked checkout"
         )
 
-    from .organization import OrganizationRunner, Workspace, get_topology
+    from .organization import get_topology
 
     topology = get_topology(str(run_record.get("topology") or "flat"))
     approvals: List[Dict[str, Any]] = []
@@ -1224,41 +1161,6 @@ def stage_approval_from_record(
             "from the reviewer pool; derivation cannot manufacture authority"
         )
 
-    runner = OrganizationRunner(
-        project_root,
-        str(run_record.get("mission") or "derived"),
-        "claude",
-        topology.topology_id,
-        str(run_record.get("run_id") or run_id),
-        run_dir,
-        admission=run_record.get("admission"),
-    )
-    probe_workspace = Workspace(project_root, "derived", "derived", project_root, [])
-    # The gate proposal may live in a different candidate than the approved
-    # dossier (run thirteen's did). Extracting only from the report candidate
-    # silently degraded the packet to a pure checkpoint species, and the
-    # first click faithfully executed the wrong thing. A null gate is now a
-    # refusal unless deliberately requested.
-    exact_gate = str(gate_candidate or exact).strip().lower()
-    if len(exact_gate) != 40 or any(
-        c not in "0123456789abcdef" for c in exact_gate
-    ):
-        raise ValueError("gate_candidate must be one exact 40-hex commit")
-    _git_text(project_root, ["cat-file", "-e", f"{exact_gate}^{{commit}}"])
-    gate_proposal = runner._extract_gate_proposal(
-        exact_gate, workspace=probe_workspace,
-    )
-    if isinstance(gate_proposal, dict) and gate_proposal.get("error"):
-        raise RuntimeError(
-            f"the staged gate proposal fails validation: {gate_proposal['error']}"
-        )
-    if gate_proposal is None and not allow_no_gate:
-        raise RuntimeError(
-            f"candidate {exact_gate} stages no gate proposal; pass "
-            "gate_candidate naming the commit that carries it, or "
-            "allow_no_gate to deliberately stage a pure checkpoint packet"
-        )
-
     base_commit = _git_text(project_root, ["rev-parse", "HEAD"]).strip()
     request: Dict[str, Any] = {
         "schema": APPROVAL_REQUEST_SCHEMA,
@@ -1283,16 +1185,8 @@ def stage_approval_from_record(
                 "re-derived from the durable record"
             ),
         },
-        "gate_proposal": gate_proposal,
-        "gate_source_candidate": (
-            exact_gate if gate_proposal is not None else None
-        ),
-        # The ratified gate's own successor admission (the law's first
-        # enforcement mission) outranks the conclusion's proposal, which for
-        # a governance run is honestly another ceremony.
-        "successor_admission": (
-            (gate_proposal or {}).get("successor_admission")
-            or conclusion.get("proposed_successor_admission")
+        "successor_admission": conclusion.get(
+            "proposed_successor_admission"
         ),
         "conclusion": {
             key: conclusion.get(key)
@@ -1336,10 +1230,6 @@ def stage_approval_from_record(
         "run_id": request["run_id"],
         "request_sha256": request["request_sha256"],
         "approvals": approvals,
-        "gate_predicate_id": (
-            gate_proposal.get("predicate_id")
-            if isinstance(gate_proposal, dict) else None
-        ),
     }
 
 
@@ -1403,19 +1293,7 @@ def _start_approved_successor(
     decision_sha = str(
         (_read_json(decision_path, {}) or {}).get("decision_sha256") or "",
     )
-    gate = request.get("gate_proposal")
-    gate_effect: Dict[str, Any] = {}
-    if isinstance(gate, dict) and not gate.get("error"):
-        gate_effect = _apply_gate_proposal(project_root, request, gate)
-    gate_note = (
-        (
-            "\nYour approval also ratified and locally applied the proposed "
-            f"gate `{gate_effect.get('gate_predicate_id')}` at commit "
-            f"`{gate_effect.get('gate_applied_commit')}`; the successor "
-            "works against it.\n"
-        )
-        if gate_effect.get("gate_applied") else ""
-    )
+    gate_note = ""
     mission = f"""# Human-approved continuation
 
 The operator approved the exact checkpoint request from predecessor run
@@ -1492,7 +1370,6 @@ supervisor.
         "successor_run_id": successor["run_id"],
         "successor_run_dir": successor["run_dir"],
         "successor_pid": launched["pid"],
-        **gate_effect,
     }
 
 

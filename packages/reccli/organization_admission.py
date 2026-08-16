@@ -135,11 +135,24 @@ def validate_admission(admission: Any) -> Dict[str, Any]:
             else:
                 normalized_stops.append(condition.strip())
 
+    # The gate this run exists to close. Orgs can only do work an existing
+    # measurement grades, so the measurement is named up front rather than
+    # left to a lead to guess: five of five recorded runs bound a predicate
+    # that could not move (three already at their floor, two unmeasured),
+    # and nothing told them which one was the driver.
+    target_predicate = admission.get("target_predicate")
+    if target_predicate is not None and not _is_nonempty_str(target_predicate):
+        problems.append(
+            "target_predicate must be the declared predicate id this run "
+            "will close, or omitted"
+        )
+
     unknown = sorted(
         set(admission)
         - {
             "schema", "consumer", "work_class", "done_condition",
             "stop_conditions", "origin", "carried_from_run_id",
+            "target_predicate",
         }
     )
     if unknown:
@@ -164,6 +177,8 @@ def validate_admission(admission: Any) -> Dict[str, Any]:
         normalized["carried_from_run_id"] = str(
             admission["carried_from_run_id"]
         ).strip()
+    if target_predicate:
+        normalized["target_predicate"] = target_predicate.strip()
     return normalized
 
 
@@ -234,7 +249,13 @@ def render_admission_prompt(admission: Dict[str, Any]) -> str:
     """
     consumer = admission["consumer"]
     stops = "\n".join(f"- {condition}" for condition in admission["stop_conditions"])
+    target = admission.get("target_predicate")
+    gate_line = (
+        f"Gate to close (bind exactly this predicate): {target}\n"
+        if target else ""
+    )
     return (
+        gate_line +
         f"Downstream consumer: {consumer['name']} ({consumer['type']}): "
         f"{consumer['intended_use']}\n"
         f"Meaningful-work class: {admission['work_class']}\n"

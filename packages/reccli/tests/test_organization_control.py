@@ -500,180 +500,6 @@ class OrganizationControlTests(unittest.TestCase):
             )
             self.assertEqual(successor_request["parent_run_id"], "approval-run")
 
-    def test_approval_applies_a_staged_gate_proposal_before_the_successor(self):
-        from unittest import mock
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            run_dir = _make_run(root, run_id="gate-run")
-            staging = root / ".reccli-org-artifacts" / "gate-run" / "gate-proposal"
-            (staging / "files").mkdir(parents=True)
-            (staging / "files" / "predicate.json").write_text(
-                '{"id": "shell-detection-v1", "tolerance": 0.001}\n',
-                encoding="utf-8",
-            )
-            subprocess.run(
-                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-qm", "stage gate proposal"],
-                cwd=root, check=True,
-            )
-            head = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=root,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            status_path = run_dir / "status.json"
-            status = json.loads(status_path.read_text(encoding="utf-8"))
-            status["status"] = "completed_pending_human"
-            status_path.write_text(
-                json.dumps(status, indent=2) + "\n", encoding="utf-8",
-            )
-            request = {
-                "schema": "reccli.organization-approval-request.v1",
-                "version": 1,
-                "created_at": "2026-08-14T00:00:00Z",
-                "run_id": "gate-run",
-                "request_kind": "checkpoint_continuation",
-                "title": "Gate ratification",
-                "question": "Ratify the proposed gate and continue?",
-                "status": "awaiting_human_authorization",
-                "canonical_effects_applied": False,
-                "base_commit": head,
-                "report_candidate": head,
-                "gate_proposal": {
-                    "schema": "reccli.organization-gate-proposal.v1",
-                    "predicate_id": "shell-detection-v1",
-                    "evaluator_id": "geometry-eval-v1",
-                    "rationale": "Real-scan shells need a declared gate.",
-                    "baseline_command": "score.py",
-                    "measured_baseline": 0.42,
-                    "proposed_tolerance": 0.001,
-                    "files": [{
-                        "path": (
-                            ".reccli-org-artifacts/gate-run/gate-proposal/"
-                            "files/predicate.json"
-                        ),
-                        "target": "benchmarks/gates/shell-detection-v1.json",
-                    }],
-                    "manifest_path": (
-                        ".reccli-org-artifacts/gate-run/gate-proposal/"
-                        "gate-proposal.json"
-                    ),
-                },
-                "successor_admission": {
-                    "consumer": {
-                        "name": "will", "type": "human",
-                        "intended_use": (
-                            "review and merge the envelope-coverage promotion"
-                        ),
-                    },
-                    "work_class": "deployable_artifact",
-                    "done_condition": (
-                        "the ratified envelope-coverage predicate passes from "
-                        "a clean checkout"
-                    ),
-                    "stop_conditions": [
-                        "no improvement over baseline after two contracts",
-                    ],
-                },
-                "action": {"type": "start_successor", "remote_push": False},
-                "continuation": {
-                    "provider": "claude",
-                    "topology": "flat",
-                    "max_rounds": 6,
-                    "max_concurrency": 5,
-                    "turn_timeout_seconds": 2400,
-                    "model": "auto",
-                    "evidence_paths": [],
-                    "protected_paths": [],
-                    "context_manifest": None,
-                    "max_experiments": 2,
-                },
-                "original_mission": "Author and close the next gate.",
-                "authorization_limits": ["Exact request only."],
-            }
-            canonical = json.dumps(
-                request, sort_keys=True, separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
-            request["request_sha256"] = hashlib.sha256(canonical).hexdigest()
-            (run_dir / "approval-request.json").write_text(
-                json.dumps(request, indent=2) + "\n", encoding="utf-8",
-            )
-            successor_dir = (
-                root / "devsession" / "agent-organizations" / "gate-successor"
-            )
-            captured = {}
-
-            def fake_create_run_request(**kwargs):
-                captured.update(kwargs)
-                successor_dir.mkdir(parents=True)
-                result = {
-                    "run_id": "gate-successor",
-                    "run_dir": str(successor_dir),
-                    "project_root": str(root),
-                    "created_at": "2026-08-14T00:01:00Z",
-                }
-                (successor_dir / "status.json").write_text(
-                    json.dumps({"status": "starting"}) + "\n",
-                    encoding="utf-8",
-                )
-                return result
-
-            with (
-                mock.patch(
-                    "reccli.organization.create_run_request",
-                    side_effect=fake_create_run_request,
-                ),
-                mock.patch(
-                    "reccli.organization_launch.launch_organization_worker",
-                    return_value={"pid": 5150},
-                ),
-            ):
-                approved = approve_organization_request(
-                    str(root),
-                    "gate-run",
-                    request_sha256=request["request_sha256"],
-                    idempotency_key="gate-click-1",
-                    requested_by="test-human",
-                )
-
-            self.assertEqual(approved["status"], "applied")
-            self.assertTrue(approved["gate_applied"])
-            target = root / "benchmarks" / "gates" / "shell-detection-v1.json"
-            self.assertTrue(target.is_file())
-            self.assertIn("shell-detection-v1", target.read_text())
-            log = subprocess.run(
-                ["git", "log", "-1", "--format=%s"], cwd=root,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            self.assertIn("ratify gate shell-detection-v1", log)
-            self.assertEqual(
-                approved["gate_applied_commit"],
-                subprocess.run(
-                    ["git", "rev-parse", "HEAD"], cwd=root,
-                    capture_output=True, text=True, check=True,
-                ).stdout.strip(),
-            )
-            self.assertIn("ratified and locally applied", captured["mission"])
-            self.assertEqual(
-                captured["admission"]["work_class"], "deployable_artifact",
-                "the click must launch the successor under the packet's "
-                "implementation admission, not the governance parent's",
-            )
-            self.assertEqual(
-                captured["admission"]["origin"], "approved-successor",
-            )
-            porcelain = subprocess.run(
-                ["git", "status", "--porcelain", "--untracked-files=no"],
-                cwd=root, capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            self.assertEqual(
-                porcelain, "", "the gate apply must leave a clean tracked tree",
-            )
-
     def test_successor_admission_resolution_order(self):
         from reccli.organization_control import _resolve_successor_admission
 
@@ -740,62 +566,6 @@ class OrganizationControlTests(unittest.TestCase):
             _init_project(root)
             run_dir = root / "devsession" / "agent-organizations" / "derive"
             run_dir.mkdir(parents=True)
-            staging = (
-                root / ".reccli-org-artifacts" / "derive" / "gate-proposal"
-            )
-            (staging / "files").mkdir(parents=True)
-            (staging / "files" / "predicate.json").write_text(
-                '{"id": "envelope-coverage-v1"}\n', encoding="utf-8",
-            )
-            (staging / "gate-proposal.json").write_text(json.dumps({
-                "schema": "reccli.organization-gate-proposal.v1",
-                "predicate_id": "envelope-coverage-v1",
-                "evaluator_id": "candidate-qualification-v1",
-                "rationale": "Derived from run thirteen's approved record.",
-                "baseline_command": "scripts/probe.py --timeout 120",
-                "measured_baseline": 999.0,
-                "proposed_tolerance": 0.005,
-                "discrimination": {
-                    "truth_exact_command": "scripts/probe.py truth.stl",
-                    "truth_exact_score": 0.0,
-                    "corrupted_command": "scripts/probe.py corrupted.stl",
-                    "corrupted_score": 0.735,
-                },
-                "what_fools_this_gate": (
-                    "Coverage counts supported area only; a support touching "
-                    "without bonding is invisible to this gate."
-                ),
-                "successor_admission": {
-                    "consumer": {
-                        "name": "will", "type": "human",
-                        "intended_use": (
-                            "review and merge the envelope implementation"
-                        ),
-                    },
-                    "work_class": "deployable_artifact",
-                    "done_condition": (
-                        "the ratified envelope-coverage predicate passes "
-                        "from a clean checkout"
-                    ),
-                    "stop_conditions": [
-                        "no improvement over baseline after two contracts",
-                    ],
-                },
-                "files": [{
-                    "path": (
-                        ".reccli-org-artifacts/derive/gate-proposal/"
-                        "files/predicate.json"
-                    ),
-                    "target": "benchmarks/gates/envelope-coverage-v1.json",
-                }],
-            }) + "\n", encoding="utf-8")
-            subprocess.run(
-                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-qm", "ratification dossier"],
-                cwd=root, check=True,
-            )
             candidate = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=root,
                 capture_output=True, text=True, check=True,
@@ -848,9 +618,6 @@ class OrganizationControlTests(unittest.TestCase):
                 str(root), "derive", report_candidate=candidate,
             )
             self.assertEqual(staged["status"], "staged")
-            self.assertEqual(
-                staged["gate_predicate_id"], "envelope-coverage-v1",
-            )
             request = json.loads(
                 (run_dir / "approval-request.json").read_text(
                     encoding="utf-8",
@@ -862,12 +629,10 @@ class OrganizationControlTests(unittest.TestCase):
             )
             self.assertEqual(
                 request["successor_admission"]["work_class"],
-                "deployable_artifact",
-                "the gate's own successor admission (the law's first "
-                "enforcement mission) must outrank the governance "
-                "conclusion's ceremony proposal",
+                "uncertainty_reduction",
+                "the conclusion's proposal is now the only successor source: "
+                "gate authoring is native work, so gate proposals are gone",
             )
-            self.assertNotIn("error", request["gate_proposal"])
             replay = stage_approval_from_record(
                 str(root), "derive", report_candidate=candidate,
             )
@@ -904,13 +669,11 @@ class OrganizationControlTests(unittest.TestCase):
                 }) + "\n")
             first = stage_approval_from_record(
                 str(root), "spent", report_candidate=candidate,
-                allow_no_gate=True,
             )
             self.assertEqual(first["status"], "staged")
             # Pending: re-stage returns already_staged.
             again = stage_approval_from_record(
                 str(root), "spent", report_candidate=candidate,
-                allow_no_gate=True,
             )
             self.assertEqual(again["status"], "already_staged")
             # Mark it consumed and re-stage: archives, stages fresh.
@@ -923,7 +686,6 @@ class OrganizationControlTests(unittest.TestCase):
             )
             fresh = stage_approval_from_record(
                 str(root), "spent", report_candidate=candidate,
-                allow_no_gate=True,
             )
             self.assertEqual(fresh["status"], "staged")
             suffix = f".consumed-{first['request_sha256'][:8]}"
@@ -932,102 +694,6 @@ class OrganizationControlTests(unittest.TestCase):
             )
             self.assertTrue(
                 (run_dir / "approval" / f"execution.json{suffix}").is_file(),
-            )
-
-    def test_derivation_refuses_a_silent_null_gate(self):
-        from reccli.organization_control import stage_approval_from_record
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            run_dir = root / "devsession" / "agent-organizations" / "nullgate"
-            run_dir.mkdir(parents=True)
-            candidate = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=root,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            (run_dir / "run.json").write_text(json.dumps({
-                "run_id": "nullgate", "project_root": str(root),
-                "mission": "m", "topology": "flat",
-            }) + "\n", encoding="utf-8")
-            (run_dir / "status.json").write_text(json.dumps({
-                "run_id": "nullgate", "status": "round_limit",
-            }) + "\n", encoding="utf-8")
-            (run_dir / "run-conclusion.json").write_text(
-                json.dumps({"summary": "s"}) + "\n", encoding="utf-8",
-            )
-            with (run_dir / "messages.jsonl").open("w") as handle:
-                handle.write(json.dumps({
-                    "round": 3, "from": "auditor-a", "to": "lead",
-                    "tag": "decision", "candidate": candidate,
-                    "content": f"NO_VETO {candidate}: verified.",
-                    "status": "delivered",
-                }) + "\n")
-            with self.assertRaisesRegex(
-                RuntimeError, "stages no gate proposal",
-            ):
-                stage_approval_from_record(
-                    str(root), "nullgate", report_candidate=candidate,
-                )
-            staged = stage_approval_from_record(
-                str(root), "nullgate", report_candidate=candidate,
-                allow_no_gate=True,
-            )
-            self.assertEqual(staged["status"], "staged")
-            self.assertIsNone(staged["gate_predicate_id"])
-
-    def test_gate_apply_reads_from_the_gate_source_candidate(self):
-        from reccli.organization_control import _apply_gate_proposal
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            _init_project(root)
-            staging = (
-                root / ".reccli-org-artifacts" / "packetrun" / "gate-proposal"
-            )
-            (staging / "files").mkdir(parents=True)
-            (staging / "files" / "predicate.json").write_text(
-                '{"id": "envelope-coverage-v1"}\n', encoding="utf-8",
-            )
-            subprocess.run(
-                ["git", "add", ".reccli-org-artifacts"], cwd=root, check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-qm", "packet"], cwd=root, check=True,
-            )
-            gate_source = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=root,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            # A later dossier commit WITHOUT the gate files: the approved
-            # report candidate.
-            (root / "dossier.md").write_text("# dossier\n", encoding="utf-8")
-            subprocess.run(["git", "add", "dossier.md"], cwd=root, check=True)
-            subprocess.run(
-                ["git", "commit", "-qm", "dossier"], cwd=root, check=True,
-            )
-            report = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=root,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            effect = _apply_gate_proposal(root, {
-                "run_id": "packetrun",
-                "report_candidate": report,
-                "gate_source_candidate": gate_source,
-            }, {
-                "predicate_id": "envelope-coverage-v1",
-                "files": [{
-                    "path": (
-                        ".reccli-org-artifacts/packetrun/gate-proposal/"
-                        "files/predicate.json"
-                    ),
-                    "target": "benchmarks/gates/envelope-coverage-v1.json",
-                }],
-            })
-            self.assertTrue(effect["gate_applied"])
-            self.assertTrue(
-                (root / "benchmarks" / "gates" /
-                 "envelope-coverage-v1.json").is_file(),
             )
 
     def test_stage_from_record_refuses_without_recorded_authority(self):

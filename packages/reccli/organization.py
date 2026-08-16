@@ -53,7 +53,6 @@ CONTEXT_PACK_SCHEMA = "reccli.organization-context-packs.v1"
 HOST_CANDIDATE = "RECCLI_HOST_CANDIDATE"
 DEFAULT_CLOSEOUT_ROUNDS = 4
 ACTIVITY_SCHEMA = "reccli.organization-activity.v1"
-GATE_PROPOSAL_SCHEMA = "reccli.organization-gate-proposal.v1"
 HOST_STATE_SCHEMA = "reccli.organization-host-state.v1"
 GOAL_STATE_SCHEMA = "reccli.organization-goals.v1"
 EXPERIMENT_RECORD_SCHEMA = "reccli.organization-experiment-record.v1"
@@ -4465,264 +4464,6 @@ class OrganizationRunner:
         self._write_json("promotion-request.json", request)
         return request
 
-    def _extract_gate_proposal(
-        self,
-        candidate: str,
-        workspace: Optional[Workspace] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Read a staged gate proposal from the exact report candidate tree.
-
-        Returns None when the candidate stages no proposal, a dict with an
-        "error" key when it stages a malformed one (surfaced to the human
-        reviewer instead of silently dropped), and the normalized manifest
-        otherwise. Validation of targets happens again on the control side at
-        apply time; this pass exists so the approval packet is honest.
-        """
-        if workspace is None:
-            workspace = self.workspaces[self.topology.finalizer_id]
-        # A chain-adopted packet lives under the AUTHORING run's prefix (its
-        # identity is pinned to that tree), so discovery scans the whole
-        # staging root rather than assuming this run authored the proposal.
-        listing = subprocess.run(
-            [
-                "git", "ls-tree", "-r", "--name-only", candidate, "--",
-                ARTIFACT_STAGING_ROOT,
-            ],
-            cwd=workspace.cwd, capture_output=True, check=False,
-        )
-        if listing.returncode != 0:
-            return None
-        manifest_candidates = [
-            path for path in listing.stdout.decode(
-                "utf-8", errors="replace",
-            ).splitlines()
-            if path.endswith("/gate-proposal/gate-proposal.json")
-        ]
-        own_manifest = (
-            f"{self.artifact_staging_prefix}/gate-proposal/gate-proposal.json"
-        )
-        if own_manifest in manifest_candidates:
-            manifest_path = own_manifest
-        elif len(manifest_candidates) == 1:
-            manifest_path = manifest_candidates[0]
-        elif not manifest_candidates:
-            return None
-        else:
-            return {
-                "error": (
-                    "the candidate stages multiple gate proposals; exactly "
-                    f"one is ratifiable: {sorted(manifest_candidates)}"
-                ),
-                "manifest_path": None,
-            }
-        proc = subprocess.run(
-            ["git", "show", f"{candidate}:{manifest_path}"],
-            cwd=workspace.cwd, capture_output=True, check=False,
-        )
-        if proc.returncode != 0:
-            return None
-        try:
-            manifest = json.loads(proc.stdout.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return {
-                "error": "gate proposal manifest is not valid JSON",
-                "manifest_path": manifest_path,
-            }
-        problems: List[str] = []
-        if manifest.get("schema") != GATE_PROPOSAL_SCHEMA:
-            problems.append(f"schema must be {GATE_PROPOSAL_SCHEMA}")
-        for field_name in (
-            "predicate_id", "evaluator_id", "rationale", "baseline_command",
-        ):
-            value = manifest.get(field_name)
-            if not isinstance(value, str) or not value.strip():
-                problems.append(f"{field_name} must be a non-empty string")
-        if not isinstance(
-            manifest.get("proposed_tolerance"), (int, float),
-        ):
-            problems.append("proposed_tolerance must be a number")
-        if "measured_baseline" not in manifest:
-            problems.append("measured_baseline is required")
-        # Executable ratification: the owner must be able to judge "this gate
-        # discriminates" with one look and zero domain expertise. Every
-        # proposal ships a truth-exact case and a corrupted case with
-        # measured scores, and the host checks the arithmetic: truth-exact
-        # must score within the proposed tolerance, corrupted must not. The
-        # cylinder scorer — a ratified-wrong gate that measured tessellation
-        # fidelity while claiming to measure segmentation — would have failed
-        # this exact check: truth-exact input scored 61x its tolerance.
-        discrimination = manifest.get("discrimination")
-        tolerance = manifest.get("proposed_tolerance")
-        if not isinstance(discrimination, dict):
-            problems.append(
-                "discrimination proof is required: {truth_exact_command, "
-                "truth_exact_score, corrupted_command, corrupted_score}"
-            )
-        else:
-            for field_name in ("truth_exact_command", "corrupted_command"):
-                value = discrimination.get(field_name)
-                if not isinstance(value, str) or not value.strip():
-                    problems.append(
-                        f"discrimination.{field_name} must be a non-empty "
-                        "string"
-                    )
-            truth_score = discrimination.get("truth_exact_score")
-            corrupted_score = discrimination.get("corrupted_score")
-            if not isinstance(truth_score, (int, float)):
-                problems.append(
-                    "discrimination.truth_exact_score must be a number"
-                )
-            if not isinstance(corrupted_score, (int, float)):
-                problems.append(
-                    "discrimination.corrupted_score must be a number"
-                )
-            if (
-                isinstance(truth_score, (int, float))
-                and isinstance(tolerance, (int, float))
-                and truth_score > tolerance
-            ):
-                problems.append(
-                    "gate fails its own discrimination proof: truth-exact "
-                    f"input scores {truth_score}, above the proposed "
-                    f"tolerance {tolerance}"
-                )
-            if (
-                isinstance(corrupted_score, (int, float))
-                and isinstance(tolerance, (int, float))
-                and corrupted_score <= tolerance
-            ):
-                problems.append(
-                    "gate fails its own discrimination proof: the corrupted "
-                    f"case scores {corrupted_score}, within the proposed "
-                    f"tolerance {tolerance}, so the gate does not separate"
-                )
-        fools = manifest.get("what_fools_this_gate")
-        if not isinstance(fools, str) or len(fools.strip()) < 40:
-            problems.append(
-                "what_fools_this_gate must be a blind-spot analysis legible "
-                "to the owner (at least 40 characters)"
-            )
-        # The law travels with its first enforcement mission: a gate proposal
-        # may carry the successor admission for the run that closes it.
-        # Without this, ratification packets inherit whatever the terminal
-        # conclusion proposed, which for a governance run is honestly another
-        # ceremony: the fifteenth gap launched ceremony three on the first
-        # real click.
-        gate_successor = manifest.get("successor_admission")
-        normalized_gate_successor = None
-        if gate_successor is not None:
-            try:
-                normalized_gate_successor = validate_admission(gate_successor)
-            except ValueError as exc:
-                problems.append(
-                    f"successor_admission is invalid: {exc}"
-                )
-        files = manifest.get("files")
-        # Proposal files live beside their manifest, whichever run authored it.
-        prefix = manifest_path[: -len("gate-proposal.json")] + "files/"
-        normalized_files: List[Dict[str, str]] = []
-        if not isinstance(files, list) or not files:
-            problems.append("files must be a non-empty list of {path, target}")
-        else:
-            for index, entry in enumerate(files):
-                path = entry.get("path") if isinstance(entry, dict) else None
-                target = (
-                    entry.get("target") if isinstance(entry, dict) else None
-                )
-                if not isinstance(path, str) or not path.startswith(prefix):
-                    problems.append(
-                        f"files[{index}].path must live under {prefix}"
-                    )
-                    continue
-                if (
-                    not isinstance(target, str)
-                    or not target.strip()
-                    or PurePosixPath(target).is_absolute()
-                    or ".." in PurePosixPath(target).parts
-                ):
-                    problems.append(
-                        f"files[{index}].target must be a repo-relative path "
-                        "without traversal"
-                    )
-                    continue
-                exists = subprocess.run(
-                    ["git", "cat-file", "-e", f"{candidate}:{path}"],
-                    cwd=workspace.cwd, capture_output=True, check=False,
-                )
-                if exists.returncode != 0:
-                    problems.append(
-                        f"files[{index}].path is not in the candidate tree"
-                    )
-                    continue
-                normalized_files.append({"path": path, "target": target})
-        if problems:
-            return {
-                "error": "; ".join(problems),
-                "manifest_path": manifest_path,
-            }
-        return {
-            "schema": GATE_PROPOSAL_SCHEMA,
-            "predicate_id": manifest["predicate_id"].strip(),
-            "evaluator_id": manifest["evaluator_id"].strip(),
-            "rationale": manifest["rationale"].strip(),
-            "baseline_command": manifest["baseline_command"].strip(),
-            "measured_baseline": manifest["measured_baseline"],
-            "proposed_tolerance": manifest["proposed_tolerance"],
-            "discrimination": {
-                "truth_exact_command": (
-                    discrimination["truth_exact_command"].strip()
-                ),
-                "truth_exact_score": discrimination["truth_exact_score"],
-                "corrupted_command": (
-                    discrimination["corrupted_command"].strip()
-                ),
-                "corrupted_score": discrimination["corrupted_score"],
-            },
-            "what_fools_this_gate": fools.strip(),
-            "successor_admission": normalized_gate_successor,
-            "files": normalized_files,
-            "manifest_path": manifest_path,
-        }
-
-    def _warn_invalid_gate_proposal(
-        self,
-        agent: AgentSpec,
-        workspace: Workspace,
-        candidate: str,
-        round_number: int,
-    ) -> None:
-        """Tell the author about a broken gate proposal while it can still fix it.
-
-        Run six staged its gate substance in prose and left the manifest's
-        machine fields null; nothing said so until the terminal packet, when
-        no agent could act. Validation feedback belongs at materialization,
-        rounds earlier.
-        """
-        proposal = self._extract_gate_proposal(candidate, workspace=workspace)
-        if not proposal or not proposal.get("error"):
-            return
-        self._event(
-            "gate_proposal.invalid",
-            round_number,
-            agent_id=agent.agent_id,
-            candidate=candidate,
-            error=proposal["error"],
-        )
-        self._system_message(
-            agent.agent_id,
-            "blocker",
-            (
-                f"The gate proposal staged in candidate {candidate} is "
-                f"invalid and cannot be ratified as-is: {proposal['error']}. "
-                "Complete the manifest's machine-readable fields before "
-                "handoff; the dossier prose does not substitute for them."
-            ),
-            round_number,
-            None,
-            None,
-            "routine",
-        )
-
     def _merge_verified_work(
         self,
         status: str,
@@ -5068,7 +4809,6 @@ class OrganizationRunner:
         source_request = json.loads(
             (self.run_dir / "request.json").read_text(encoding="utf-8"),
         )
-        gate_proposal_block = self._extract_gate_proposal(report_candidate)
         continuation = {
             "provider": source_request.get("provider_requested", self.provider),
             "topology": source_request.get(
@@ -5127,17 +4867,9 @@ class OrganizationRunner:
             # under. A ratified gate's own successor admission (the law's
             # first enforcement mission) outranks the conclusion's proposal,
             # which for a governance run is honestly another ceremony.
-            "successor_admission": (
-                (gate_proposal_block or {}).get("successor_admission")
-                or conclusion.get("proposed_successor_admission")
+            "successor_admission": conclusion.get(
+                "proposed_successor_admission"
             ),
-            # The frontier seam: a run may stage a proposed capability gate
-            # (predicate, evaluator wiring, fixture files) under its artifact
-            # staging. The org can never apply it — the files target protected
-            # paths — but the human approval click can. None when the
-            # candidate stages no proposal; an "error" field when it staged a
-            # malformed one, so the reviewer sees why nothing will apply.
-            "gate_proposal": gate_proposal_block,
             "action": {
                 "type": "start_successor",
                 "remote_push": False,
@@ -7417,9 +7149,6 @@ Change only the mutable file above and write one trial intent under
                 changed_paths=candidate_record["paths"],
                 experiment_paths=experiment_paths,
             )
-            self._warn_invalid_gate_proposal(
-                agent, workspace, head, round_number,
-            )
             # Measure the work the moment it exists. Measurement used to fire
             # only when a worker performed a correctly-formed handoff, so a
             # run could hold a correct verified implementation and have the
@@ -8131,10 +7860,27 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         # resolution, or an unclassed ceremony goal can auto-bind (and
         # single-owner-capture) a production predicate the run has no
         # business measuring.
+        # The admission names the gate this run exists to close. A different
+        # predicate is not a smaller version of the mission, it is a
+        # different mission, and binding one burns the run's whole budget on
+        # work nobody asked for.
+        target_predicate = (self.admission or {}).get("target_predicate")
+        if (
+            target_predicate
+            and resolved_predicate
+            and resolved_predicate != target_predicate
+        ):
+            return None, (
+                f"this run exists to close {target_predicate}; bind that "
+                f"predicate, not {resolved_predicate}"
+            )
+        if target_predicate and not resolved_predicate:
+            resolved_predicate = target_predicate
         if (
             (self.admission or {}).get("work_class")
             in {"uncertainty_reduction", "hypothesis_test"}
             and resolved_goal_class != "production_pipeline"
+            and not target_predicate
         ):
             return None, ""
         matches: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -10906,6 +10652,33 @@ def create_run_request(
         for relative in sorted(immutable_loop_paths):
             if relative not in resolved_protected:
                 resolved_protected.append(relative)
+        # A run graded on goal progress must name the gate it exists to
+        # close, and that gate must be declared. Checking at bind time costs
+        # a lead turn plus a full baseline evaluator run before the run
+        # learns it was never winnable; checking here costs nothing.
+        if experiment_policy_definition.get(
+            "promotion_requires_goal_progress", False,
+        ):
+            declared = {
+                predicate_id
+                for evaluator in experiment_policy_definition[
+                    "evaluators"
+                ].values()
+                for predicate_id in (evaluator.get("predicates") or {})
+            }
+            target = normalized_admission.get("target_predicate")
+            if not target:
+                raise ValueError(
+                    "this project grades promotion on goal progress, so the "
+                    "admission must name target_predicate: the declared "
+                    "predicate this run will close. Declared predicates: "
+                    f"{sorted(declared)}"
+                )
+            if target not in declared:
+                raise ValueError(
+                    f"admission target_predicate {target!r} is not declared "
+                    f"by the experiment policy. Declared: {sorted(declared)}"
+                )
     topology_config = get_topology(topology)
     provider_plan = resolve_provider_plan(provider, topology_config)
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_org_{_safe_name(topology)}_{uuid.uuid4().hex[:6]}"
