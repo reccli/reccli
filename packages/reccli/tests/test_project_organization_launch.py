@@ -623,6 +623,64 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 "source and must never block a launch",
             )
 
+    def test_any_incomplete_terminal_record_is_not_a_continuation_source(self):
+        # Patching this field by field left one more hole every time: a
+        # missing conclusion after a cancellation, then a missing run.json
+        # after a startup failure, each wedging project launch permanently.
+        # One rule for the whole record.
+        from reccli.organization_project_launch import _latest_terminal_record
+
+        cases = {
+            "no-run-json": {"run-conclusion.json"},
+            "no-conclusion": {"run.json"},
+            "corrupt-conclusion": {"run.json", "corrupt"},
+            "identity-mismatch": {"run.json", "mismatched"},
+        }
+        for run_id, present in cases.items():
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                _init_project(root)
+                run_dir = (
+                    root / "devsession" / "agent-organizations" / run_id
+                )
+                run_dir.mkdir(parents=True)
+                (run_dir / "status.json").write_text(
+                    json.dumps({
+                        "run_id": run_id, "status": "round_limit",
+                    }) + "\n", encoding="utf-8",
+                )
+                if "run.json" in present:
+                    (run_dir / "run.json").write_text(
+                        json.dumps({
+                            "run_id": run_id, "project_root": str(root),
+                            "mission": "m", "topology": "flat",
+                        }) + "\n", encoding="utf-8",
+                    )
+                if "run-conclusion.json" in present:
+                    (run_dir / "run-conclusion.json").write_text(
+                        json.dumps({
+                            "schema": "reccli.organization-run-conclusion.v1",
+                            "run_id": run_id,
+                            "terminal_status": "round_limit",
+                        }) + "\n", encoding="utf-8",
+                    )
+                if "corrupt" in present:
+                    (run_dir / "run-conclusion.json").write_text(
+                        "{not json", encoding="utf-8",
+                    )
+                if "mismatched" in present:
+                    (run_dir / "run-conclusion.json").write_text(
+                        json.dumps({
+                            "schema": "reccli.organization-run-conclusion.v1",
+                            "run_id": "some-other-run",
+                            "terminal_status": "round_limit",
+                        }) + "\n", encoding="utf-8",
+                    )
+                self.assertIsNone(
+                    _latest_terminal_record(root),
+                    f"{run_id}: an incomplete record must never block",
+                )
+
     def test_terminal_continuation_carries_binding_human_rejection(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -881,19 +939,22 @@ class ProjectOrganizationLaunchTests(unittest.TestCase):
                 json.dumps(conclusion, indent=2) + "\n",
                 encoding="utf-8",
             )
+            # A conclusion that does not describe its own run is never
+            # USED, which is what safety requires; blocking on it as well
+            # only wedges the project until a human hand-edits files. The
+            # launch proceeds from the project's own mission instead.
             with patch(
                 "reccli.organization_launch.start_organization_from_arguments",
+                return_value={"status": "starting", "run_id": "fresh"},
             ) as start:
-                with self.assertRaises(ProjectOrganizationLaunchError) as raised:
-                    start_project_organization(
-                        str(root),
-                        open_console=False,
-                    )
-            self.assertEqual(
-                raised.exception.code,
-                "terminal_conclusion_invalid",
+                start_project_organization(str(root), open_console=False)
+            start.assert_called_once()
+            arguments = start.call_args.args[0]
+            self.assertNotEqual(
+                arguments.get("mission_origin"), "terminal-conclusion",
+                "a mismatched conclusion must never drive a successor",
             )
-            start.assert_not_called()
+            self.assertIsNone(arguments.get("continuation_from_run_id"))
 
     def test_large_dynamic_mission_is_not_truncated_before_launch(self):
         with tempfile.TemporaryDirectory() as td:

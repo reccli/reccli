@@ -525,30 +525,32 @@ def _latest_terminal_record(
             "latest terminal run escapes the project organization directory",
             code="terminal_conclusion_invalid",
         ) from exc
-    run, _ = _read_json_object(
-        run_dir / "run.json",
-        label="latest terminal run metadata",
-    )
-    if not (run_dir / "run-conclusion.json").is_file():
-        # A terminal run with no conclusion is not a continuation source, and
-        # must never be a launch blocker. Cancellation SIGTERMs the
-        # supervisor before it can write one, so every operator cancellation
-        # used to wedge project-mode launch permanently: three legitimate
-        # cancellations in one evening left the project unable to launch at
-        # all. Same principle as unidentifiable run directories, one layer
-        # up: unreadable debris cannot own the project's future.
-        return None
-    conclusion, conclusion_bytes = _read_json_object(
-        run_dir / "run-conclusion.json",
-        label="latest terminal run conclusion",
-    )
-    operator_decision: Optional[Dict[str, Any]] = None
-    operator_decision_path = run_dir / "operator-decision.json"
-    if operator_decision_path.is_file():
-        operator_decision, _ = _read_json_object(
-            operator_decision_path,
-            label="latest terminal operator decision",
+    # A continuation source must be a COMPLETE, readable, self-consistent
+    # record. Anything less is not a continuation source and must never be a
+    # launch blocker: patching this field by field (missing conclusion after
+    # a cancellation, then missing run.json after a startup failure) left one
+    # more field exposed every time, and each hole wedged project-mode launch
+    # permanently. One rule for the whole record: unreadable debris cannot
+    # own the project's future, and the launcher falls back to the project's
+    # own mission.
+    try:
+        run, _ = _read_json_object(
+            run_dir / "run.json",
+            label="latest terminal run metadata",
         )
+        conclusion, conclusion_bytes = _read_json_object(
+            run_dir / "run-conclusion.json",
+            label="latest terminal run conclusion",
+        )
+        operator_decision: Optional[Dict[str, Any]] = None
+        operator_decision_path = run_dir / "operator-decision.json"
+        if operator_decision_path.is_file():
+            operator_decision, _ = _read_json_object(
+                operator_decision_path,
+                label="latest terminal operator decision",
+            )
+    except ProjectOrganizationLaunchError:
+        return None
     run_id = str(latest.get("run_id") or run.get("run_id") or "")
     if (
         not run_id
@@ -556,10 +558,10 @@ def _latest_terminal_record(
         or str(conclusion.get("run_id") or "") != run_id
         or str(conclusion.get("terminal_status") or "") != status
     ):
-        raise ProjectOrganizationLaunchError(
-            "latest terminal conclusion identity does not match its run",
-            code="terminal_conclusion_invalid",
-        )
+        # An identity mismatch is the same class of debris: a record that
+        # cannot be trusted to describe its own run cannot direct the next
+        # one.
+        return None
     return {
         "run_id": run_id,
         "run_dir": run_dir,
