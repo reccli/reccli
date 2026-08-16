@@ -1534,16 +1534,19 @@ class OrganizationProjectTests(unittest.TestCase):
             runner.experiment_contract_by_work_item[
                 "experiment/second-file"
             ] = second_sha
+            # A second worker may pursue the same predicate on a DISTINCT
+            # work item (parallel angles on one gate); taking worker-a's
+            # exact work item is a race and is still refused.
             accepted, reason = runner._bind_worker_goal(
                 worker_id="worker-b",
                 manager_id="lead",
-                work_item="experiment/second-file",
-                objective="Improve the second file.",
+                work_item=work_item,
+                objective="Improve the first file too.",
                 risk="high",
                 round_number=2,
             )
             self.assertFalse(accepted)
-            self.assertIn("already has active owner worker-a", reason)
+            self.assertIn("distinct work item", reason)
             runner._ensure_experiment_baseline(
                 runner.topology.agent("worker-a"),
                 3,
