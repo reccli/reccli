@@ -2661,15 +2661,43 @@ def expand_search_result(
     return "\n".join(lines) if lines else "No context available."
 
 
+def _normalize_notes_list(value: Any, *, field: str) -> tuple[list[str], str]:
+    """Coerce a notes argument into a list of strings, losing nothing silently.
+
+    A caller that JSON-encodes its arrays is the common shape, and the naive
+    ``for item in (value or [])`` either dropped the content to schema
+    coercion or iterated the string one CHARACTER at a time. Memory is this
+    product; content must never vanish without the caller being told.
+    """
+    if value is None:
+        return [], ""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                return [text], (
+                    f"{field} looked like JSON but did not parse; kept verbatim"
+                )
+            if isinstance(decoded, list):
+                return [str(item) for item in decoded if str(item).strip()], ""
+            return [str(decoded)], ""
+        return ([text], "") if text else ([], "")
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item).strip()], ""
+    return [str(value)], f"{field} was {type(value).__name__}; coerced to text"
+
+
 @mcp.tool()
 def save_session_notes(
     working_directory: str,
     overview: str = "",
-    decisions: list[str] | None = None,
-    problems_solved: list[str] | None = None,
-    open_issues: list[str] | None = None,
-    next_steps: list[str] | None = None,
-    files_changed: list[str] | None = None,
+    decisions: Any = None,
+    problems_solved: Any = None,
+    open_issues: Any = None,
+    next_steps: Any = None,
+    files_changed: Any = None,
 ) -> str:
     """Save key outcomes from this session to project memory.
 
@@ -2707,6 +2735,25 @@ def save_session_notes(
             "content": f"Session overview: {overview}",
             "timestamp": timestamp,
         })
+
+    coercion_notes: list[str] = []
+    normalized: dict[str, list[str]] = {}
+    for field, raw in (
+        ("decisions", decisions),
+        ("problems_solved", problems_solved),
+        ("open_issues", open_issues),
+        ("next_steps", next_steps),
+        ("files_changed", files_changed),
+    ):
+        items, note = _normalize_notes_list(raw, field=field)
+        normalized[field] = items
+        if note:
+            coercion_notes.append(note)
+    decisions = normalized["decisions"]
+    problems_solved = normalized["problems_solved"]
+    open_issues = normalized["open_issues"]
+    next_steps = normalized["next_steps"]
+    files_changed = normalized["files_changed"]
 
     for decision in (decisions or []):
         conversation.append({
@@ -3020,6 +3067,16 @@ def save_session_notes(
         f"Session saved: {output_path.name}\n"
         f"Contents: {', '.join(item_counts) if item_counts else 'overview only'}"
     )
+    if coercion_notes:
+        base += "\nInput coercion: " + "; ".join(coercion_notes)
+    if not item_counts and overview:
+        # "overview only" after a caller supplied arrays is the shape that
+        # silently cost a handoff: say plainly that nothing else arrived.
+        base += (
+            "\nNo decisions, problems, issues, steps, or files were recorded. "
+            "If you passed them, they did not arrive: pass real arrays "
+            "(or a JSON array string) and check this line again."
+        )
 
     # Propose .devproject update. If the session has rich semantic content,
     # delegate grouping to the agent in-conversation (no extra API call) and

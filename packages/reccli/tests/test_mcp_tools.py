@@ -1717,6 +1717,60 @@ _MCP_ADMISSION = {
 }
 
 
+class SessionNotesCoercionTests(unittest.TestCase):
+    """Memory is this product; notes content must never vanish silently.
+
+    A caller that JSON-encodes its arrays is the common shape, and the naive
+    ``for item in (value or [])`` either lost the content to schema coercion
+    or iterated the string one character at a time. That cost a real handoff.
+    """
+
+    def _normalizer(self):
+        import json as _json
+        from pathlib import Path as _Path
+
+        source = _Path(
+            "packages/reccli/mcp_server.py"
+        ).read_text(encoding="utf-8")
+        start = source.index("def _normalize_notes_list")
+        end = source.index("@mcp.tool()\ndef save_session_notes")
+        namespace = {"Any": object, "json": _json}
+        exec(source[start:end], namespace)
+        return namespace["_normalize_notes_list"]
+
+    def test_lists_json_strings_and_bare_strings_all_survive(self):
+        normalize = self._normalizer()
+        for raw, expected in (
+            (None, []),
+            ((), []),
+            (["a", "b"], ["a", "b"]),
+            ('["a", "b"]', ["a", "b"]),
+            ("one bare note", ["one bare note"]),
+            (["", "   ", "keep"], ["keep"]),
+        ):
+            got, _ = normalize(raw, field="decisions")
+            self.assertEqual(got, expected, repr(raw))
+
+    def test_unparseable_json_is_kept_verbatim_and_reported(self):
+        normalize = self._normalizer()
+        got, note = normalize('["a", broken]', field="decisions")
+        self.assertEqual(
+            got, ['["a", broken]'],
+            "content is never discarded just because it did not parse",
+        )
+        self.assertIn("kept verbatim", note)
+        # A string that never claimed to be JSON is just a note.
+        got, note = normalize("[broken", field="decisions")
+        self.assertEqual(got, ["[broken"])
+        self.assertEqual(note, "")
+
+    def test_a_string_is_never_iterated_character_by_character(self):
+        normalize = self._normalizer()
+        got, _ = normalize("abc", field="decisions")
+        self.assertNotEqual(got, ["a", "b", "c"])
+        self.assertEqual(got, ["abc"])
+
+
 class OrganizationMcpLifecycleTests(unittest.TestCase):
     @staticmethod
     def _make_git_project(root: Path) -> Path:
