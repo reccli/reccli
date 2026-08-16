@@ -4504,6 +4504,88 @@ class AuditBlockerRegressionTests(unittest.TestCase):
         )
 
 
+class ParallelGateWorkTests(unittest.TestCase):
+    def _runner(self, root):
+        policy_path = _add_experiment_policy(root, require_goal_progress=True)
+        # Outside the worktree: real runs keep worker worktrees in $TMPDIR,
+        # so run-dir evaluator logs never appear as worktree mutations.
+        run_dir = root.parent / "par-run"
+        runner = OrganizationRunner(
+            root, "Close the gate.", "claude", "flat", "par", run_dir,
+            experiment_policy="experiment-policy.json",
+        )
+        runner.experiment_policy = (
+            organization_module._load_experiment_policy_definition(
+                root, policy_path,
+            )
+        )
+        for worker in ("worker-a", "worker-b"):
+            runner.workspaces[worker] = Workspace(
+                root, worker, "main", root, [],
+            )
+        return runner
+
+    def test_two_workers_may_pursue_one_gate_on_distinct_work_items(self):
+        # A run exists to close ONE declared gate. A run-wide single-owner
+        # rule made five of six workers unusable for the only work that
+        # mattered, and a lead spent half a run's rounds on delegations that
+        # could never land before inferring the rule.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            runner = self._runner(root)
+            first, reason = runner._bind_worker_goal(
+                worker_id="worker-a", manager_id="lead",
+                work_item="conform/refit-charts",
+                objective="Refit charts through their declared seams.",
+                risk="high", round_number=2,
+                goal_class="production_pipeline",
+                predicate_id="app-output-passes",
+                evaluator_id="app-regression",
+            )
+            self.assertTrue(first, reason)
+            second, reason = runner._bind_worker_goal(
+                worker_id="worker-b", manager_id="lead",
+                work_item="conform/joint-fit",
+                objective="Fit adjacent charts jointly instead.",
+                risk="high", round_number=2,
+                goal_class="production_pipeline",
+                predicate_id="app-output-passes",
+                evaluator_id="app-regression",
+            )
+            self.assertTrue(
+                second, f"parallel work on one gate must bind: {reason}",
+            )
+
+    def test_the_same_work_item_twice_is_still_a_race(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            _init_project(root)
+            runner = self._runner(root)
+            runner._bind_worker_goal(
+                worker_id="worker-a", manager_id="lead",
+                work_item="conform/refit-charts",
+                objective="Refit charts through their declared seams.",
+                risk="high", round_number=2,
+                goal_class="production_pipeline",
+                predicate_id="app-output-passes",
+                evaluator_id="app-regression",
+            )
+            accepted, reason = runner._bind_worker_goal(
+                worker_id="worker-b", manager_id="lead",
+                work_item="conform/refit-charts",
+                objective="Refit charts through their declared seams.",
+                risk="high", round_number=2,
+                goal_class="production_pipeline",
+                predicate_id="app-output-passes",
+                evaluator_id="app-regression",
+            )
+            self.assertFalse(accepted)
+            self.assertIn("distinct work item", reason)
+
+
 class TerminalWorkStagingTests(unittest.TestCase):
     """No run ends with unstaged work.
 

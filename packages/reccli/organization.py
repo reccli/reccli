@@ -7550,6 +7550,12 @@ Change only the mutable file above and write one trial intent under
         lead_no_op = ""
         if agent.agent_id == self.topology.leader_id:
             lead_no_op = (
+                "\n\nDelegation rule, so you never have to infer it from "
+                "bounced messages: several workers may pursue the gate "
+                "predicate in parallel, but each needs a DISTINCT workItem. "
+                "Two workers on the same workItem is a race and is refused; "
+                f"the {len(self.topology.worker_ids)} workers are yours to "
+                "use on different angles of the same gate."
                 "\n\nIf the done condition is already satisfied, or any stop "
                 "condition holds, reply with final=true, disposition=no_op, "
                 "candidate=null, and a summary naming the condition. Stopping "
@@ -8280,7 +8286,16 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
         if measurement_error:
             return False, measurement_error
         if measurement:
-            owner = next(
+            # Several workers may pursue the same predicate, provided each
+            # has a DISTINCT work item. A run exists to close one declared
+            # gate, so a run-wide single-owner rule made five of six workers
+            # structurally unusable for the only work that mattered: a lead
+            # spent half a run's rounds on delegations that could never land
+            # before it inferred the rule. Attribution stays exact because
+            # measurement binds to a candidate SHA, not to a worker; what
+            # duplicate work items would create is two workers racing on one
+            # task, and that is what this refuses.
+            duplicate = next(
                 (
                     worker
                     for worker, existing in self.worker_goals.items()
@@ -8288,13 +8303,15 @@ candidate=`{HOST_CANDIDATE}`; RecCli creates the commit."""
                     and self._goal_is_active(existing)
                     and existing.get("predicate_id")
                     == measurement["predicate_id"]
+                    and existing.get("work_item") == work_item
                 ),
                 None,
             )
-            if owner:
+            if duplicate:
                 return False, (
-                    f"predicate {measurement['predicate_id']} already has "
-                    f"active owner {owner}"
+                    f"work item {work_item!r} on predicate "
+                    f"{measurement['predicate_id']} is already active on "
+                    f"{duplicate}; give this worker a distinct work item"
                 )
 
         current = self.worker_goals.get(worker_id)
