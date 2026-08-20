@@ -44,6 +44,12 @@ def _session_rules() -> str:
                 "Carry it forward on every subsequent signal. Update it if the user redirects. "
                 "Open items must be in service of the goal — do not carry forward unrelated items "
                 "from previous sessions. "
+                "Keep it short: the goal under 80 characters, at most 3 open items, and a few "
+                "words each. Longer values are truncated on arrival, so length buys nothing. "
+                "Write each open item as an imperative for YOURSELF — the next action you would "
+                "take (\"measure X\", \"merge Y\") — never as something the user will do. An item "
+                "that is waiting on the user is not an open item; if the only thing left is the "
+                "user's decision, leave open empty. "
                 "This tracks progress per response. It will be parsed and stripped automatically."
             )
     except Exception:

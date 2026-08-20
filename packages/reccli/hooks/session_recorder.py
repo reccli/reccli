@@ -442,6 +442,19 @@ _USER_DECISION_PHRASES = (
     "user prefers", "ask user", "ask the user", "wait for user",
     "needs user", "pending user", "user input", "user feedback",
     "user direction", "user to decide", "user signal", "awaiting user",
+    # Every phrase above needs the literal token "user", so the natural way
+    # to write the same item slips through: the agent uses the operator's
+    # NAME ("Will decides ..."), or second person, or names the act without
+    # naming who performs it.  The miss is not benign -- an unrecognised item
+    # stays in the actionable list and the continuation hint then tells the
+    # agent to "proceed to execute" a decision that is not its to make, so
+    # this filter fails toward inventing work rather than dropping it.
+    "decides", "decide whether", "to decide", "your call", "you decide",
+    "your decision", "human decides", "operator decides", "owner decides",
+    "awaiting approval", "pending approval", "needs approval",
+    "awaiting sign-off", "pending sign-off", "needs a decision",
+    "confirm whether", "approve the", "approves the", "ratif",
+    "waiting on", "blocked on",
 )
 
 

@@ -250,5 +250,47 @@ class RemovedToolTests(unittest.TestCase):
         self.assertEqual(result["action"], "continue")
 
 
+class TestUserDecisionItemsNeverBecomeWork(unittest.TestCase):
+    """An item waiting on a human must never reach the continuation hint.
+
+    This filter had no coverage, and the gap was not benign. Every phrase in
+    the original list required the literal token "user", so the natural way
+    to write the same item -- the operator's NAME, or second person, or the
+    act without the actor -- slipped through, stayed in the actionable list,
+    and the hint then told the agent to "proceed to execute" a decision that
+    was not its to make. The filter fails toward INVENTING work, so the cases
+    below are the ones that matter.
+    """
+
+    def test_operator_name_is_recognised_as_a_user_decision(self):
+        # Observed live: this exact item produced a continuation hint saying
+        # "proceed to execute" on a choice that was the operator's.
+        self.assertTrue(SR._is_user_decision_item(
+            "Will decides on switching to RecCli to shorten the injected instruction"
+        ))
+
+    def test_second_person_and_actorless_forms_are_recognised(self):
+        for item in (
+            "your call on the scorer scope",
+            "you decide whether to launch",
+            "awaiting approval of the staged packet",
+            "pending sign-off before merge",
+            "blocked on the ratification click",
+            "decide whether to keep the flag off",
+        ):
+            with self.subTest(item=item):
+                self.assertTrue(SR._is_user_decision_item(item), item)
+
+    def test_genuine_agent_work_is_still_actionable(self):
+        for item in (
+            "measure the envelope with seams declared",
+            "merge the recovered patch onto main",
+            "commit the closure probes alongside the fixture",
+            "re-run the six floor metrics from a clean checkout",
+        ):
+            with self.subTest(item=item):
+                self.assertFalse(SR._is_user_decision_item(item), item)
+
+
 if __name__ == "__main__":
     unittest.main()
