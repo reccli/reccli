@@ -3041,15 +3041,30 @@ def save_session_notes(
             start_new_session=True,
         )
         register_bg_task(project_root, proc.pid, "save_session_notes.embed")
+        # The registry says "for later reaping" and nothing reaped: every call
+        # left a <defunct> child on a server that stays up for days (observed:
+        # a zombie 20 hours dead, still holding its slot). start_new_session
+        # detaches the process group but not the parent-child relationship, so
+        # this process is still the only one that can wait() for it. A daemon
+        # thread blocks in waitpid and exits with the child, which costs one
+        # idle thread and cannot interfere with the returncode of any other
+        # subprocess the way a SIGCHLD handler would.
+        import threading
+        threading.Thread(target=proc.wait, daemon=True).start()
     except Exception:
         pass
 
-    # Also update index immediately for BM25 (embeddings come later from background)
-    try:
-        from .retrieval.vector_index import update_index_with_new_session
-        update_index_with_new_session(sessions_dir, output_path, verbose=False)
-    except Exception:
-        pass  # index update is best-effort; search will auto-build later
+    # The index update used to run here too, in the foreground, on the same
+    # index.json the background job above writes. Two processes, no lock, and
+    # json.dump straight into an open handle rather than temp-then-rename: the
+    # writes could interleave, one job's session could be lost to last-writer-
+    # wins, and a reader could catch a half-written file. It was also the only
+    # unbounded work left on the return path, which is the wrong place for it
+    # when a stalled reply costs the caller its whole result.
+    #
+    # The background script already ends with the identical call, so dropping
+    # it here removes the race by leaving a single writer, and BM25 search is
+    # available as soon as that job lands (it also auto-builds on demand).
 
     item_counts = []
     if decisions:
@@ -3969,7 +3984,75 @@ def retry_summarization(
 # Entry point
 # ---------------------------------------------------------------------------
 
+_STALL_SECONDS = 90
+_STALL_LOG = "mcp-server-stall.log"
+
+
+def _install_stall_watchdog() -> None:
+    """Dump every thread's stack if the server stops making progress.
+
+    A stdio MCP server is one request loop, so a call that never returns takes
+    every later call with it -- including read-only ones. That is not
+    hypothetical: an instance ran 42 hours at 100% CPU while its agent saw
+    `save_session_notes` "fail to return" and then `load_project_context`
+    hang, and it left nothing behind to diagnose. Exception handlers cannot
+    help, because a spin is not an exception.
+
+    ``faulthandler`` writes the traceback of all threads from a C-level timer,
+    so it works while the interpreter is stuck in pure-Python code. The loop
+    still releases the GIL between bytecodes, which is why a repeating dump
+    gets scheduled at all. The file is opened for the process lifetime because
+    the dump runs from a context where opening one is not safe, and it is kept
+    off stdout, which belongs to the protocol.
+    """
+    try:
+        import faulthandler
+
+        log_dir = Path.home() / ".reccli"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stream = open(log_dir / _STALL_LOG, "a", buffering=1)
+        stream.write(
+            f"\n=== reccli mcp_server pid={os.getpid()} started "
+            f"{datetime.now().isoformat()} ===\n"
+        )
+        # repeat=True so a wedged server keeps reporting: one dump names the
+        # function, successive identical dumps prove it is spinning rather
+        # than doing slow but real work.
+        faulthandler.dump_traceback_later(
+            _STALL_SECONDS, repeat=True, file=stream, exit=False
+        )
+    except Exception:
+        pass  # diagnostics must never prevent the server from starting
+
+
+def _warn_if_stale_process() -> None:
+    """Record which build this process is actually running.
+
+    Eleven servers were live on one machine with uptimes from 16 hours to 11
+    days, so a week of fixes had landed in the source while the processes
+    serving them ran the old code. Restarting is the operator's call, but the
+    mismatch should be visible rather than inferred from behaviour.
+    """
+    try:
+        import subprocess
+
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout.strip()
+        if head:
+            print(
+                f"reccli mcp_server pid={os.getpid()} started from {head}",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
+
 def main():
+    _install_stall_watchdog()
+    _warn_if_stale_process()
     mcp.run(transport="stdio")
 
 

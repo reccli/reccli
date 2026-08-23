@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 import json
 import hashlib
+import os
 import numpy as np
 
 
@@ -151,6 +152,29 @@ def count_tokens(text: str) -> int:
     """
     words = text.split()
     return int(len(words) * 1.3)
+
+
+def _write_index_atomically(index_path: Path, index: Dict) -> None:
+    """Replace index.json in one step, never leave it half-written.
+
+    Writing straight into the open handle means any reader arriving mid-dump
+    sees truncated JSON, and this file is 33-132 MB in practice, so that
+    window is real. A temp file in the same directory plus os.replace makes
+    the swap atomic on POSIX: a reader sees either the old index or the new
+    one. It does not make concurrent WRITERS safe -- last writer still wins --
+    which is why save_session_notes now has a single writer instead.
+    """
+    tmp = index_path.with_suffix(index_path.suffix + f".tmp{os.getpid()}")
+    try:
+        with open(tmp, 'w') as f:
+            json.dump(index, f, indent=2)
+        os.replace(tmp, index_path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise
 
 
 def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
@@ -506,8 +530,7 @@ def build_unified_index(sessions_dir: Path, verbose: bool = True) -> Dict:
 
     # Save index (without embeddings - those are in .npy file)
     index_path = sessions_dir / 'index.json'
-    with open(index_path, 'w') as f:
-        json.dump(index, f, indent=2)
+    _write_index_atomically(index_path, index)
 
     if verbose:
         print(f"✅ Index built: {index['total_sessions']} sessions, {index['total_vectors']} vectors")
@@ -786,8 +809,7 @@ def update_index_with_new_session(sessions_dir: Path, session_file: Path, verbos
     index['statistics']['most_active_days'] = [day for day, _ in most_active]
 
     # Save updated index
-    with open(index_path, 'w') as f:
-        json.dump(index, f, indent=2)
+    _write_index_atomically(index_path, index)
 
     if verbose:
         print(f"✅ Index updated: {index['total_sessions']} sessions, {index['total_vectors']} vectors")
