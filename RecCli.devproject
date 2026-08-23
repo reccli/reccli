@@ -2,8 +2,8 @@
   "format": "devproject",
   "version": "2.1.0",
   "project_root": "/Users/will/coding-projects/reccli",
-  "updated_at": "2026-08-22T17:47:09Z",
-  "last_updated_session": "session_20260822_104659",
+  "updated_at": "2026-08-23T21:12:38Z",
+  "last_updated_session": "session_20260823_141238",
   "project": {
     "name": "reccli",
     "description": "reccli is a temporal memory engine for AI coding agents implementing a tri-layer memory system: .devproject (project feature map), .devsession summary (compacted working memory), and .devsession full conversation (source of truth). It runs as an MCP server and Claude Code hook integration, enabling agents to accumulate structured memory across sessions through hybrid search, LLM summarization, and temporal-semantic linking between memory layers.",
@@ -3332,6 +3332,49 @@
             "started_at": "2026-08-22T10:46:59.771672",
             "ended_at": "2026-08-22T10:47:03.148412",
             "feature_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "proposal_id": "projupd_20260823211238",
+      "status": "pending",
+      "created_at": "2026-08-23T21:12:38Z",
+      "source_session_id": "session_20260823_141238",
+      "diff": [
+        {
+          "op": "add_feature",
+          "feature": {
+            "feature_id": "feat_verified_reccli_s_intended_session_note",
+            "feature_version": 1,
+            "title": "Verified RecCli's intended session-note cadence and diagnosed the",
+            "description": "Verified RecCli's intended session-note cadence and diagnosed the local RecCli MCP hang. The wedged MCP child belonged to the current Codex terminal, and the user restarted the Codex session to restore the integration.",
+            "status": "in-progress",
+            "source": "auto",
+            "files_touched": [],
+            "file_boundaries": [],
+            "session_ids": [
+              "session_20260823_141238"
+            ],
+            "last_updated_session": "session_20260823_141238",
+            "updated_at": "2026-08-23T21:12:38Z",
+            "staleness": {
+              "status": "unknown",
+              "checked_at": "2026-08-23T21:12:38Z",
+              "signals": []
+            }
+          }
+        },
+        {
+          "op": "link_session",
+          "session": {
+            "session_id": "session_20260823_141238",
+            "path": "devsession/08232026_1412.devsession",
+            "started_at": "2026-08-23T14:12:38.124488",
+            "ended_at": "2026-08-23T14:12:38.190098",
+            "feature_ids": [
+              "feat_verified_reccli_s_intended_session_note"
+            ]
           }
         }
       ]

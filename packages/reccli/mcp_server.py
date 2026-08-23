@@ -3989,7 +3989,7 @@ _STALL_LOG = "mcp-server-stall.log"
 
 
 def _install_stall_watchdog() -> None:
-    """Dump every thread's stack if the server stops making progress.
+    """Dump every thread's stack when a single tool call overruns.
 
     A stdio MCP server is one request loop, so a call that never returns takes
     every later call with it -- including read-only ones. That is not
@@ -3998,15 +3998,22 @@ def _install_stall_watchdog() -> None:
     hang, and it left nothing behind to diagnose. Exception handlers cannot
     help, because a spin is not an exception.
 
-    ``faulthandler`` writes the traceback of all threads from a C-level timer,
-    so it works while the interpreter is stuck in pure-Python code. The loop
-    still releases the GIL between bytecodes, which is why a repeating dump
-    gets scheduled at all. The file is opened for the process lifetime because
-    the dump runs from a context where opening one is not safe, and it is kept
-    off stdout, which belongs to the protocol.
+    The timer is armed when a call starts and cancelled when it returns, so a
+    dump means one call overran -- never that the server was sitting idle
+    waiting for work. Arming it once at startup with ``repeat=True`` does NOT
+    do this: ``dump_traceback_later`` is a plain timer with no notion of
+    progress, so it dumped the idle `threading.wait` stack every 90 seconds
+    and made a wedged server indistinguishable from a healthy one.
+
+    ``faulthandler`` writes from a C-level timer, so it still fires while the
+    interpreter is stuck in pure-Python code -- verified against a CPU-bound
+    spin, which is the observed failure mode. The file is opened for the
+    process lifetime because the dump runs where opening one is unsafe, and it
+    is kept off stdout, which belongs to the protocol.
     """
     try:
         import faulthandler
+        import functools
 
         log_dir = Path.home() / ".reccli"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -4015,12 +4022,24 @@ def _install_stall_watchdog() -> None:
             f"\n=== reccli mcp_server pid={os.getpid()} started "
             f"{datetime.now().isoformat()} ===\n"
         )
-        # repeat=True so a wedged server keeps reporting: one dump names the
-        # function, successive identical dumps prove it is spinning rather
-        # than doing slow but real work.
-        faulthandler.dump_traceback_later(
-            _STALL_SECONDS, repeat=True, file=stream, exit=False
-        )
+
+        inner = mcp.call_tool
+
+        @functools.wraps(inner)
+        async def call_tool_watched(name, arguments, *args, **kwargs):
+            stream.write(
+                f"--- call {name} began {datetime.now().isoformat()} "
+                f"(dump if it exceeds {_STALL_SECONDS}s)\n"
+            )
+            faulthandler.dump_traceback_later(
+                _STALL_SECONDS, repeat=True, file=stream, exit=False
+            )
+            try:
+                return await inner(name, arguments, *args, **kwargs)
+            finally:
+                faulthandler.cancel_dump_traceback_later()
+
+        mcp.call_tool = call_tool_watched
     except Exception:
         pass  # diagnostics must never prevent the server from starting
 
