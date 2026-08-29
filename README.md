@@ -1,203 +1,254 @@
 # RecCli
 
-RecCli ("reck-lee") is a temporal memory engine for coding agents.
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Status: Developer Preview](https://img.shields.io/badge/Status-Developer%20Preview-f59e0b)
 
-Its core idea is a tri-layer memory system:
+**Persistent, inspectable memory for coding agents.**
 
-- `.devproject` — project outline for cross-session context
-- `.devsession` summary — compacted session working memory
-- `.devsession` full conversation — source of truth
+RecCli ("reck-lee") helps Claude Code and Codex resume projects across sessions, recall prior decisions, and recover the source discussion behind what they remember.
 
-with temporal-semantic links between the layers so an agent can recover exact prior reasoning instead of relying on lossy compaction or flat retrieval.
+Most agent memory ends at a summary. RecCli keeps the compact memory linked to the full chronological record, so an agent can move from “we chose this” to “here is where we discussed why.”
 
-## MCP Server
+## The problem RecCli solves
 
-RecCli runs as an MCP server, giving compatible coding agents persistent project memory.
+On Tuesday, you and an agent make an architectural decision, fix two related bugs, and leave one edge case open. On Friday, a new session starts cold. You either re-explain the project or trust an approximate summary that cannot show its work.
 
-### Codex / ChatGPT
+With RecCli, the next session can answer:
+
+```text
+You: Why did we keep the token refresh logic separate from the auth middleware?
+
+Agent: We kept them separate because their lifecycles and failure modes differ.
+       That decision came from session 0426, messages 118–126.
+       I can expand the original discussion if you want the full reasoning.
+```
+
+RecCli is built for questions such as:
+
+- What did we decide, and why?
+- What remains open from the last session?
+- Have we already investigated this failure?
+- Which sessions changed this file?
+- How did this feature reach its current state?
+- Show me the original discussion behind that memory.
+
+If verifiable memory for coding agents is useful to you, consider [starring RecCli](https://github.com/reccli/reccli). It helps other developers discover the project.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Initialize project] --> B[Project map<br/>*.devproject]
+    B --> C[Start a coding session]
+    C --> D[Durable session record<br/>*.devsession]
+    D --> E[Compact linked summary]
+    E --> F[Resume or search later]
+    F --> G[Expand the exact source span]
+    G --> D
+```
+
+The workflow follows the life of the project:
+
+1. **Initialize once.** RecCli scans the repository and builds a compact feature map linking features, files, documentation, and session history.
+2. **Start oriented.** The agent loads the project map, folder tree, pinned memory, and the previous session’s open issues and next steps.
+3. **Work normally.** Claude Code hooks can record prompts, responses, and tool activity automatically. Codex uses the same MCP memory tools but does not currently expose equivalent lifecycle hooks.
+4. **Close the loop.** RecCli saves decisions, code changes, solved problems, open issues, and next steps as structured memory.
+5. **Recall across sessions.** Hybrid search combines dense retrieval and BM25 across the project’s session history.
+6. **Verify the memory.** A result can be expanded through its linked span and message range into the original chronological discussion.
+
+The result is bounded working context without treating compaction as irreversible deletion.
+
+## Install
+
+RecCli currently installs from source and requires Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/reccli/reccli.git
 cd reccli
-pip install -r requirements.txt
-python3 -m reccli.runtime.cli setup --codex
+python3 -m pip install -r requirements.txt
+reccli --help
 ```
-
-This configures the RecCli MCP server in `~/.codex/config.toml` and installs Codex-visible startup instructions in `~/AGENTS.md` so new Codex sessions can ask which registered project to load.
 
 ### Claude Code
 
 ```bash
-git clone https://github.com/reccli/reccli.git
-cd reccli
-pip install -r requirements.txt
-python3 -m reccli.runtime.cli setup
+reccli setup
 ```
 
-Claude Code setup configures both the MCP server and lifecycle hooks for session start, prompt recording, tool recording, compaction, and session end.
+This registers the RecCli MCP server and configures Claude Code lifecycle hooks for session start, prompt and tool recording, compaction, and session end.
 
-**Tools exposed:**
+### Codex
 
-| Tool | What it does |
-|------|-------------|
-| `load_project_context` | Load project features, folder tree, and last session summary at conversation start |
-| `project_init` | Scan codebase with Tree-sitter + LLM to generate `.devproject` feature map |
-| `search_history` | Hybrid search (dense + BM25 + RRF) across past `.devsession` files |
-| `expand_search_result` | Drill into a search result to see full conversation context |
-| `save_session_notes` | Persist decisions, problems solved, and next steps from current session |
-| `start_organization` | Launch a durable Claude Code/Codex multi-agent delivery run on isolated Git worktrees, with optional immutable evidence snapshots |
-| `start_project_organization` | Atomically run a tracked project launch contract, verify its dynamic mission against HEAD, optionally continue from the latest eligible lead conclusion, refuse duplicates/pending approvals, and open the console |
-| `organization_status` | Poll an organization run and inspect recent events/messages |
-| `list_organizations` | List durable organization runs for a project |
-| `steer_organization` | Queue a human message for an agent or role group at the next safe boundary |
-| `pause_organization` / `resume_organization` | Stop or continue between synchronized rounds |
-| `open_organization_console` | Launch the localhost Next.js viewer and steering console |
-| `approve_organization` | Approve one exact staged decision packet; starts a fresh successor or applies a verified candidate locally without remote push |
-| `cancel_organization` | Cancel the supervisor and its active native-agent subprocesses |
+```bash
+reccli setup --codex
+```
 
-### Multi-agent organization runs
+This registers the MCP server in `~/.codex/config.toml` and installs a managed RecCli block in `~/AGENTS.md`. The instructions tell Codex to load project memory at startup and save structured notes when a session wraps up.
 
-Projects with a tracked `reccli.organization-launch.json` should call
-`start_project_organization` with only their project path. The contract owns
-preflights and the emitter; dynamic selectors bind a reviewed mission file,
-mission SHA-256, state fingerprint, and current Git HEAD. RecCli forwards the
-exact emitted request and refuses duplicate live or pending-approval runs.
+Start a new Claude Code or Codex session after setup so the integration is loaded.
 
-Projects without that contract can still call `start_organization` with a
-project path and a concrete mission. The call returns immediately with a
-`run_id`; use
-`organization_status` to follow it and `cancel_organization` to stop it.
-Runs default to eight synchronized work rounds. Each round may schedule several
-agents in parallel, so status distinguishes the round countdown from cumulative
-agent turns. A candidate already in flight at the cap may use up to four
-review-only closeout boundaries; workers and new experiments cannot run there.
+## Initialize your first project
 
-Every launch passes a host-enforced admission gate: a named downstream
-consumer, one of six meaningful-work classes, a falsifiable done condition, and
-stop conditions. The lead may end a run as `completed_no_op` when the done
-condition is already satisfied or a stop condition holds; stopping is a
-successful outcome. Every terminal run, approval, and rejection appends to a
-project-level outcome ledger, and `organization list` reports the waste rate:
-runs whose candidates were never merged or consumed, and what they cost.
+From the repository you want RecCli to remember, ask your agent:
 
-The organization is a `flat` fleet, the only structure: one coordinator, six
-workers and two independent auditors, with no management layer. The coordinator
-assigns each worker a falsifiable question it can answer by executing
-something, consumes the result, and re-tasks immediately. RecCli binds one
-visible problem-solving goal to each worker; only the coordinator or an
-explicit human `plan` may replace it. Unrelated issues and contradictory
-context are flagged without becoming worker scope; the coordinator adjudicates
-each flag directly. Auditors attempt to refute an exact candidate and may veto
-but never promote; the release auditor must clear the exact candidate, and a
-fresh read-only agent independently verifies the exact final commit. The
-hierarchical topologies were deleted after recorded runs measured the
-management layer consuming 78% of turns while producing prose instead of work;
-their names alias to `flat` so existing launch contracts keep working.
+```text
+Initialize RecCli memory for this project.
+```
 
-For evidence-heavy work, workers have broad
-agency to choose and run reversible experiments in disposable branches. Pass
-`evidence_paths` for a shared read-only hashed view, `protected_paths` for
-tracked deny-write authority, and `max_experiments` for a hard generated-output
-budget. A tracked `context_manifest` can route one shared documentation core
-plus distinct worker lanes into hash-bound, read-only run context boxes.
-Required `paths` are read before substantive work; larger `library_paths` are
-boxed and verified but consulted only when relevant. Designated managers and
-auditors can receive the union, while canonical files remain authoritative and
-readable. Projects with large lane curricula can set
-`lane_paths_mode: "on_demand"` so only `common.paths` remain required and each
-worker's lane paths become a just-in-time indexed library. A fully-sighted
-auditor can veto but cannot promote. Worker turns do
-not consume experiment slots merely by running; the hard experiment budget is
-charged only when RecCli seals an explicitly reported generated-output bundle.
-Native agents edit and test while RecCli owns staging, commits, and reviewed
-integration, avoiding provider-specific `.git` sandbox behavior. A
-worktree-local `.venv/bin/python` bridge reuses the canonical environment with
-candidate source first on `PYTHONPATH`. Generated outputs are sealed outside
-Git and bound to exact candidates;
-completion emits a human-authorized promotion request rather than changing the
-caller's canonical branch or archive.
+The agent calls `project_init`, scans the codebase with Tree-sitter, and clusters the result into stable project features. If no configured LLM API is available for clustering, the MCP workflow can hand the scan back to the active agent to finish in conversation.
 
-When human authority is the only remaining dependency, the release manager can
-finish with `pending_human`. RecCli terminates the run as
-`completed_pending_human` and stages a hash-bound approval packet instead of
-burning rounds while waiting. The console shows the dossier, exact Git
-identity, evidence, limits, and button effect on one page. Approval never wakes
-the terminal supervisor: a checkpoint decision starts a fresh successor with
-the signed decision in its immutable evidence, while an approved verified
-promotion fast-forwards only the clean local branch. Neither action pushes a
-remote.
+You can also initialize from the CLI when a provider is configured:
 
-Run-scoped reports and generated deliverables use a temporary tracked staging
-prefix for immutable review, then RecCli exports the verified blobs to the
-ignored run directory's `deliverables/` folder with a hash manifest. Completed
-runs expose a clean `promotion_branch` that omits the temporary staging tree, so
-it can be merged into either a local-only or remote-backed repository without
-polluting the product's permanent `docs/` tree. Organization agents can inspect
-local Git, while the trusted RecCli supervisor owns Git mutation; remote pushes
-and hosting credentials are not part of the harness.
+```bash
+cd /path/to/your/project
+reccli project init --description "A short description of this project"
+```
 
-Run `reccli organization console --project-root /path/to/project` for the local
-two-pane console: select a team member in the top rail, steer them from the left
-operator chat, and watch all eight team work streams on the right. See
-[`docs/integrations/organization-console.md`](docs/integrations/organization-console.md).
-The approval staging area can enable browser notifications so a completed run
-can call attention to a waiting decision while the console is open.
+RecCli’s current project-oriented layout is:
 
-The runner calls the installed `claude` or `codex` executable and reuses that
-CLI's subscription authentication. It does not require Anthropic/OpenAI API
-keys. With `provider="auto"`, RecCli checks both native CLI logins and mixes
-providers when both are usable: alternating worker/manager lanes use Claude and
-Codex, reviews prefer the other provider, the release manager stays on the host
-provider, and the fresh verifier uses the opposite provider. If only one CLI is
-usable, auto falls back to that provider. Pass `claude` or `codex` explicitly
-for a homogeneous team, or `mixed` to require both. Organization runs can
-consume substantial subscription quota; start them for explicit missions
-rather than as an always-on issue poller.
+```text
+your-project/
+├── your-project.devproject    # Compact project and feature map
+└── devsession/                # Session records, indexes, and sidecars
+```
 
-## What it does
+The exact project-map filename follows the repository name; this README uses `*.devproject` when referring to the format generally.
 
-1. **First session**: `project_init` scans your codebase, clusters files into features, and creates a `.devproject` file
-2. **Every session**: `load_project_context` loads the project map + folder tree + last session summary — the agent starts with full understanding
-3. **During work**: `search_history` finds past decisions, problems, and code changes across sessions
-4. **End of session**: `save_session_notes` persists what happened so the next session picks up where you left off
+## Everyday use
 
-The result: session #10 on a project is dramatically better than session #1, because the agent accumulates structured memory instead of starting cold every time.
+Most interaction happens through the coding agent rather than by invoking tools manually.
+
+At the start of a session:
+
+```text
+Load this project’s RecCli context before we begin.
+```
+
+While working:
+
+```text
+What did we decide about authentication retries?
+Find our previous work on src/api/webhooks.py.
+Did we already investigate this timeout?
+Expand the source discussion behind that result.
+```
+
+Before finishing a Codex session:
+
+```text
+Save this session’s decisions, solved problems, open issues, and next steps to RecCli.
+```
+
+Claude Code’s lifecycle integration captures the session automatically; structured close-out notes are still valuable because they become the next session’s resume brief.
+
+## Claude Code and Codex support
+
+| Capability | Claude Code | Codex |
+| --- | --- | --- |
+| MCP memory tools | Yes | Yes |
+| Project context at session start | Lifecycle hook | Managed `AGENTS.md` instruction |
+| Automatic prompt and tool recording | Yes | No equivalent lifecycle hooks currently |
+| Cross-session search and expansion | Yes | Yes |
+| Structured session close-out | Hook-assisted and agent-callable | Agent calls `save_session_notes` |
+| Full `.devsession` source record | Automatic through hooks | Depends on explicitly captured session data |
+
+## Core memory tools
+
+| Tool | Purpose |
+| --- | --- |
+| `project_init` | Scan a codebase and create its project feature map |
+| `load_project_context` | Load the feature map, folder tree, pinned memory, and resume brief |
+| `save_session_notes` | Persist decisions, changes, solved problems, open issues, and next steps |
+| `search_history` | Run hybrid search across prior sessions |
+| `search_by_file` | Find session history connected to a file |
+| `search_by_time` | Recall work from a particular time range |
+| `expand_search_result` | Recover the source conversation behind a search hit |
+| `list_sessions` | Inspect the recorded session catalog |
+| `recover_file` | Recover historical file content from captured tool artifacts |
+| `pin_memory` | Keep an important memory visible at every session start |
+| `doctor` | Detect missing summaries, stale indexes, and broken memory links |
+
+## The memory model
+
+RecCli uses two required session-memory layers plus an optional project layer.
+
+### Full conversation: source of truth
+
+Each `.devsession` preserves the chronological record with stable message identifiers. Claude Code recording also retains terminal and tool activity, including full tool responses when needed for reconstruction.
+
+### Session summary: bounded working memory
+
+The compact summary organizes what matters into five categories:
+
+- decisions
+- code changes
+- problems solved
+- open issues
+- next steps
+
+Each item can carry semantic span IDs, key evidence references, and an exact message range. The summary is an index into the record, not a replacement for it.
+
+### Project map: cross-session orientation
+
+The `*.devproject` file connects features to files, documents, and sessions. It gives an agent a compact view of the repository before it retrieves deeper session history. The `.devsession` format remains useful independently, while RecCli’s project-context MCP workflow expects a project map created by `project_init`.
+
+### Retrieval: an accelerator, not the memory
+
+Dense embeddings and BM25 help locate likely evidence across many sessions. Vectors are approximate and replaceable; the conversation, spans, and summaries remain the inspectable canonical data.
 
 ## Standalone CLI
 
-RecCli also works as a standalone CLI for direct session management:
+RecCli also exposes direct commands for inspecting and managing memory:
 
 ```bash
-PYTHONPATH=packages python3 -m reccli.runtime.cli --help
-PYTHONPATH=packages python3 -m reccli.runtime.cli project init
-PYTHONPATH=packages python3 -m reccli.runtime.cli project show
-PYTHONPATH=packages python3 -m reccli.runtime.cli search "auth middleware decision"
+reccli project show
+reccli list
+reccli search "auth middleware decision"
+reccli expand <result-id>
+reccli browse
+reccli doctor
 ```
 
-## Repo layout
+Run `reccli --help` for the complete command surface.
 
-```
-packages/reccli/
-  session/          .devsession file format manager
-  recording/        PTY terminal recording, WAL safety
-  summarization/    LLM summarization, delta ops, compaction
-  retrieval/        hybrid search, embeddings, memory middleware
-  project/          .devproject manager, Tree-sitter init
-  runtime/          CLI, LLM chat, config
-  tests/            58 tests
-  backend/          JSON-RPC bridge for TypeScript UI
-  ui/               TypeScript + Ink terminal UI
-  mcp_server.py     MCP server entry point
-docs/
-  specs/            .devsession and .devproject format specs
-  architecture/     system architecture docs
+## Local data and privacy
+
+RecCli is local-first: project memory is stored in `*.devproject`, `devsession/`, and local configuration rather than a hosted RecCli account.
+
+Session records can contain source code, conversation text, tool responses, file snapshots, and other sensitive material. Keep them out of Git unless you deliberately want to share them:
+
+```gitignore
+*.devproject
+devsession/
 ```
 
-## Format specs
+The standalone provider configuration reads `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from the environment first. Keys saved through `reccli config` are currently stored as plaintext JSON under `~/reccli/config.json`; system-keychain storage is not implemented yet.
 
-- [`.devsession` format](docs/specs/DEVSESSION_FORMAT.md) — open session format (CC0 license)
-- [`.devproject` format](docs/specs/DEVPROJECT_FORMAT.md) — project-level memory spec
+Configured model and embedding providers may receive the text required for summarization, clustering, or retrieval. Local-first storage should not be interpreted as “no external model calls.”
+
+## Project status
+
+RecCli is a **developer preview** at version `0.9.0`.
+
+The session format, recording, summarization, hybrid retrieval, linked expansion, project mapping, and MCP integrations are implemented and actively dogfooded. Packaging and end-to-end onboarding are still being polished, so the supported installation path is currently a source checkout.
+
+The coding-continuity benchmark is still a design draft. Claims in this README describe the implemented memory model and intended workflow, not published comparative performance results.
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [`.devsession` format specification](docs/specs/DEVSESSION_FORMAT.md)
+- [`*.devproject` format specification](docs/specs/DEVPROJECT_FORMAT.md)
+- [Context loading architecture](docs/architecture/CONTEXT_LOADING.md)
+- [Retrieval implementation](docs/implementation/retrieval/README.md)
+- [Settings and authentication](docs/reference/SETTINGS_AND_AUTH.md)
+- [API-key security](docs/reference/API_KEY_SECURITY.md)
+
+## Contributing
+
+Issues and pull requests are welcome. When proposing memory-format changes, preserve the core authority model: full conversation records what happened, summaries provide bounded recall, and the project map organizes work across sessions.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+RecCli is released under the [MIT License](LICENSE). The `.devsession` format specification is released under CC0 so other tools can implement it freely.
